@@ -38,7 +38,7 @@ def test_cli_returns_nonzero_when_command_fails(tmp_path):
     result = run_cli(["read_concept", "__missing__"], tmp_path)
 
     assert result.returncode != 0
-    assert "Error:" in result.stdout
+    assert "Fail." in result.stdout
 
 
 def test_cli_batch_returns_nonzero_on_invalid_line(tmp_path):

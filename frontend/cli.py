@@ -7,18 +7,23 @@ Usage:
 
 import argparse
 import json
+import os
 import shlex
+import sqlite3
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
 from backend.db import HoronDB
 from backend.models import ReadResult
 from backend.text_patch import (
     normalize_literal_newlines,
     try_normalized_patch,
 )
+
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 
 def _format_route(edges: list[dict], label: str) -> list[str]:
@@ -180,17 +185,17 @@ def _format_read_concept(result: ReadResult) -> str:
         lines.append("=" * 60)
 
     lines.append(f"VARIATIONS ({len(result.variations)})")
+    multi = len(result.variations) > 1
     for v in result.variations:
         lines.append("")
-        lines.append(f"--- [{v.short_code}] ---")
+        if multi:
+            lines.append(f"--- [{v.short_code}] ---")
         if v.expression:
             lines.append(f"Expression: {v.expression} (status: {v.status or 'not set'})")
         else:
             lines.append("Expression: (Atomic / Not yet decomposed)")
-        if v.evidence:
-            lines.append(f"Evidence:\n{v.evidence}")
-        if v.unless:
-            lines.append(f"Unless:\n{v.unless}")
+        lines.append(f"Evidence:\n{v.evidence}" if v.evidence else "Evidence: (empty)")
+        lines.append(f"Unless:\n{v.unless}" if v.unless else "Unless: (empty)")
     lines.append("")
     lines.append("=" * 60)
 
@@ -234,6 +239,11 @@ def _format_read_concept(result: ReadResult) -> str:
     return "\n".join(lines)
 
 
+class RawOutput:
+    def __init__(self, content: str):
+        self.content = content
+
+
 def _print(obj):
     if isinstance(obj, ReadResult):
         print(_format_read_concept(obj))
@@ -246,6 +256,8 @@ def _print(obj):
             print(item.model_dump_json(indent=2))
     elif obj is None:
         print("done")
+    elif isinstance(obj, RawOutput):
+        sys.stdout.write(obj.content)
     elif isinstance(obj, str):
         print(obj)
     else:
@@ -342,6 +354,59 @@ def _resolve_text(old, old_file, new, new_file,
     return None
 
 
+def _read_nocturne_memory(uri: str) -> str:
+    """Read content from nocturne_memory.db by URI.
+
+    Resolves a nocturne memory URI (e.g. "core://nocturne/bluesky")
+    to its content text by querying the paths and memories tables
+    in nocturne_memory.db directly via sqlite3.
+
+    Returns the memory content string.
+    Raises ValueError if the URI is not found or DB path is not configured.
+    """
+    nm_db_path = os.environ.get("NOCTURNE_MEMORY_DB")
+    if not nm_db_path:
+        raise ValueError(
+            "NOCTURNE_MEMORY_DB not set in .env. "
+            "Point it to nocturne_memory.db.")
+
+    if not Path(nm_db_path).exists():
+        raise ValueError(f"Nocturne memory DB not found: {nm_db_path}")
+
+    # Parse URI: "core://nocturne/bluesky" → domain="core", path="nocturne/bluesky"
+    if "://" not in uri:
+        raise ValueError(
+            f"Invalid URI format: '{uri}'. Expected 'domain://path'.")
+    domain, path = uri.split("://", 1)
+    path = path.strip("/")
+
+    conn = sqlite3.connect(nm_db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # paths → node_uuid → memories (latest non-deprecated)
+        row = conn.execute(
+            "SELECT node_uuid FROM paths "
+            "WHERE domain = ? AND path = ? AND namespace = ''",
+            (domain, path),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"URI not found in nocturne memory: {uri}")
+
+        node_uuid = row["node_uuid"]
+        mem = conn.execute(
+            "SELECT content FROM memories "
+            "WHERE node_uuid = ? AND deprecated = 0 "
+            "ORDER BY id DESC LIMIT 1",
+            (node_uuid,),
+        ).fetchone()
+        if not mem:
+            raise ValueError(
+                f"No active memory content for URI: {uri}")
+        return mem["content"]
+    finally:
+        conn.close()
+
+
 def _build_parser():
     parser = argparse.ArgumentParser(prog="horon", description="Horon CLI",
                                      allow_abbrev=False)
@@ -401,6 +466,15 @@ def _build_parser():
     p.add_argument("steps", nargs="+")
     p.add_argument("goal")
 
+    # read_memory — read from nocturne_memory.db
+    p = sub.add_parser("read_memory", allow_abbrev=False,
+        help="Read content from nocturne memory by URI. "
+             "Prints to stdout or writes to --out file.")
+    p.add_argument("uri",
+        help="Nocturne memory URI (e.g. core://nocturne/bluesky)")
+    p.add_argument("--out", default=None,
+        help="Write content to file instead of stdout")
+
     # batch
     p = sub.add_parser("batch", allow_abbrev=False,
         help="Run multiple commands. Reads from stdin or --file. "
@@ -452,6 +526,13 @@ def _dispatch(args, db):
     elif args.command == "read_concept":
         return db.read_concept(args.concept)
 
+    elif args.command == "read_memory":
+        content = _read_nocturne_memory(args.uri)
+        if args.out:
+            Path(args.out).write_text(content, encoding="utf-8")
+            return f"Success. Wrote {len(content)} chars to {args.out}"
+        return RawOutput(content)
+
     elif args.command == "compile":
         return db.compile(args.steps, args.goal)
 
@@ -488,10 +569,10 @@ def main():
                         _print(result)
                     last_result = result
                 except SystemExit:
-                    print(f"Line {i}: invalid command: {line}")
+                    print(f"Fail. Line {i}: invalid command: {line}")
                     sys.exit(1)
                 except Exception as e:
-                    print(f"Line {i}: {e}")
+                    print(f"Fail. Line {i}: {e}")
                     sys.exit(1)
 
             if not args.all and last_result is not None:
@@ -502,7 +583,7 @@ def main():
             _print(result)
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Fail. {e}")
         sys.exit(1)
     finally:
         db.close()
