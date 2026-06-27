@@ -52,66 +52,48 @@ def get_graph():
             "SELECT id, name, disclosure FROM concepts ORDER BY id"
         ).fetchall()
 
-        members = db.conn.execute("""
-            SELECT cm.concept_id, cm.short_code, cm.member_concept_id, cm.position,
-                   v.status
-            FROM compose_members cm
-            JOIN variations v ON v.concept_id = cm.concept_id
-                             AND v.short_code = cm.short_code
-        """).fetchall()
+        db._load_graph()
 
-    degree: Counter[int] = Counter()
-    links: list[dict] = []
-    var_members: dict[tuple[int, str], list[dict]] = {}
+        degree: Counter[int] = Counter()
+        links: list[dict] = []
 
-    for m in members:
-        key = (m["concept_id"], m["short_code"])
-        var_members.setdefault(key, []).append(dict(m))
+        for src, edges in getattr(db, "_adjacency", {}).items():
+            for tgt, edge_cid, edge_sc, status in edges:
+                links.append({
+                    "source": src,
+                    "target": tgt,
+                    "relation_id": edge_cid,
+                    "status": status,
+                    "kind": "directed",
+                })
+                degree[src] += 1
+                degree[tgt] += 1
+                degree[edge_cid] += 1
 
-    for key, mems in var_members.items():
-        concept_id, short_code = key
-        status = mems[0]["status"] if mems else None
-
-        pos1 = [m for m in mems if m["position"] == 1]
-        pos2 = [m for m in mems if m["position"] == 2]
-
-        if len(pos1) == 1 and len(pos2) == 1:
-            src = pos1[0]["member_concept_id"]
-            tgt = pos2[0]["member_concept_id"]
-            links.append({
-                "source": src,
-                "target": tgt,
-                "relation_id": concept_id,
-                "status": status,
-                "kind": "directed",
-            })
-            degree[src] += 1
-            degree[tgt] += 1
-            degree[concept_id] += 1
-        elif len(pos1) > 1 and len(pos2) == 0:
-            member_ids = [m["member_concept_id"] for m in pos1]
-            for i, a in enumerate(member_ids):
-                for b in member_ids[i + 1:]:
+        for members, edge_cid, edge_sc, status in getattr(db, "_and_groups", []):
+            mems = list(members)
+            for i, a in enumerate(mems):
+                for b in mems[i + 1:]:
                     links.append({
                         "source": a,
                         "target": b,
-                        "relation_id": concept_id,
+                        "relation_id": edge_cid,
                         "status": status,
                         "kind": "undirected",
                     })
                     degree[a] += 1
                     degree[b] += 1
-            degree[concept_id] += len(member_ids)
+            degree[edge_cid] += len(mems)
 
-    nodes = []
-    for c in concepts:
-        cid = c["id"]
-        nodes.append({
-            "id": cid,
-            "name": c["name"],
-            "disclosure": c["disclosure"],
-            "degree": degree.get(cid, 0),
-        })
+        nodes = []
+        for c in concepts:
+            cid = c["id"]
+            nodes.append({
+                "id": cid,
+                "name": c["name"],
+                "disclosure": c["disclosure"],
+                "degree": degree.get(cid, 0),
+            })
 
     return {"nodes": nodes, "links": links}
 

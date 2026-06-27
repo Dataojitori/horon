@@ -1040,7 +1040,7 @@ class HoronDB:
           _and_index:  从成员 cid 快速查到它所属的 & 组。
             member_cid -> [_and_groups 里的下标]
 
-        negated 在 SQL 端排除。名字不存——下游按需查 concepts 表。
+        包含 negated 状态的边（供外部获取全量图谱使用），算法逻辑在遍历时自行跳过。名字不存——下游按需查 concepts 表。
         """
         # ── → 边 ──
         # compose_members 自连接：pos-1 是起点，pos-2 是终点，
@@ -1056,8 +1056,7 @@ class HoronDB:
             "FROM compose_members cm1 "
             "JOIN compose_members cm2 USING (concept_id, short_code) "
             "JOIN variations v USING (concept_id, short_code) "
-            "WHERE cm1.position = 1 AND cm2.position = 2 "
-            "AND (v.status IS NULL OR v.status != 'negated')"
+            "WHERE cm1.position = 1 AND cm2.position = 2"
         ).fetchall()
         for r in rows:
             status = r["status"] or "hypothesis"
@@ -1074,7 +1073,6 @@ class HoronDB:
             "FROM compose_members cm "
             "JOIN variations v USING (concept_id, short_code) "
             "WHERE cm.position = 1 "
-            "AND (v.status IS NULL OR v.status != 'negated') "
             "AND NOT EXISTS ("
             "  SELECT 1 FROM compose_members cm2 "
             "  WHERE cm2.concept_id = cm.concept_id "
@@ -1129,6 +1127,8 @@ class HoronDB:
 
         def get_neighbors(current_cid: int, current_cost: _PathCost, current_used_req: bool):
             for to_cid, edge_cid, edge_sc, status in self._adjacency.get(current_cid, []):
+                if status == "negated":
+                    continue
                 next_cost = _PathCost(
                     current_cost.hypothesis_count + (0 if status == "confirmed" else 1),
                     current_cost.total_jumps + 1
@@ -1140,6 +1140,8 @@ class HoronDB:
 
             for group_index in self._and_index.get(current_cid, []):
                 members, edge_cid, edge_sc, status = self._and_groups[group_index]
+                if status == "negated":
+                    continue
                 if edge_cid in members:
                     continue
 
