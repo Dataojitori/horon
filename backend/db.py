@@ -20,7 +20,7 @@ from typing import NamedTuple
 
 from dotenv import load_dotenv
 from .models import (
-    Concept, VariationDetail,
+    Concept, VariationDetail, ComposeMemberDetail,
     RelationRow, OutboundRelation, ReadResult,
 )
 
@@ -36,7 +36,7 @@ class _RouteStep(NamedTuple):
     注意：在影分身机制中，作为字典键的当前到达节点（如被激活的关系本身），
     和这一步在图物理结构上的落脚点（destination_id）可能并不相同。
     """
-    from_concept_ids: tuple[int, ...] # 这一步是从哪些节点出发的（若是 & 组则有多源）
+    from_states: tuple[tuple[int, bool], ...] # 这一步是从哪些 (concept_id, used_req) 状态出发的
     destination_id: int               # 这一步在图结构上实际走到的目标节点
     edge_concept_id: int              # 促成这一步跳转的关系（边）的 concept_id
     edge_short_code: str              # 该关系对应的 variation short_code
@@ -103,9 +103,10 @@ def transactional(method):
     return wrapper
 
 class HoronDB:
-    def __init__(self):
+    def __init__(self, *, check_same_thread: bool = True):
         is_new = not _DB_PATH.exists() or _DB_PATH.stat().st_size == 0
-        self.conn = sqlite3.connect(str(_DB_PATH))
+        self.conn = sqlite3.connect(
+            str(_DB_PATH), check_same_thread=check_same_thread)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         if is_new:
@@ -822,6 +823,7 @@ class HoronDB:
         rows = self.conn.execute(
             "SELECT DISTINCT "
             "  c_rel.id AS concept_id, c_rel.name AS concept_name, v.status, "
+            "  c_src.id AS from_concept_id, "
             "  c_src.name AS from_concept_name, "
             "  c_src.disclosure AS from_concept_disclosure, "
             "  c_tgt.name AS to_concept_name "
@@ -850,6 +852,7 @@ class HoronDB:
                     expression=f"{row['from_concept_name']} → {row['to_concept_name']}",
                     concept_id=row["concept_id"],
                     concept_name=row["concept_name"],
+                    from_concept_id=row["from_concept_id"],
                     from_concept_disclosure=row["from_concept_disclosure"],
                 ))
         return grouped
@@ -861,6 +864,7 @@ class HoronDB:
         rows = self.conn.execute(
             "SELECT DISTINCT "
             "  c_src.name AS from_concept_name, "
+            "  c_tgt.id AS target_concept_id, "
             "  c_tgt.name AS target_concept_name, "
             "  c_tgt.disclosure AS target_concept_disclosure, "
             "  c_rel.id AS concept_id, c_rel.name AS concept_name, "
@@ -890,6 +894,7 @@ class HoronDB:
                     expression=f"{row['from_concept_name']} → {row['target_concept_name']}",
                     concept_id=row["concept_id"],
                     concept_name=row["concept_name"],
+                    target_concept_id=row["target_concept_id"],
                     target_concept_disclosure=row["target_concept_disclosure"],
                 ))
         return grouped
@@ -959,10 +964,27 @@ class HoronDB:
             "ORDER BY short_code",
             (cid,),
         ).fetchall()
+        # 一次性查出该 concept 所有变体的成员，按 short_code 分组（避免逐变体 N+1 查询）。
+        member_rows = self.conn.execute(
+            "SELECT cm.short_code, cm.member_concept_id AS concept_id, c.name, "
+            "       cm.position, c.disclosure "
+            "FROM compose_members cm "
+            "JOIN concepts c ON cm.member_concept_id = c.id "
+            "WHERE cm.concept_id = ? "
+            "ORDER BY cm.position, cm.member_concept_id",
+            (cid,),
+        ).fetchall()
+        members_by_sc: dict[str, list[ComposeMemberDetail]] = {}
+        for mr in member_rows:
+            d = dict(mr)
+            sc = d.pop("short_code")
+            members_by_sc.setdefault(sc, []).append(ComposeMemberDetail(**d))
+
         variations: list[VariationDetail] = []
         for vr in var_rows:
             expr = self._get_expression(cid, vr["short_code"])
-            variations.append(VariationDetail(**dict(vr), expression=expr))
+            members = members_by_sc.get(vr["short_code"], [])
+            variations.append(VariationDetail(**dict(vr), expression=expr, members=members))
 
         # aliases
         aliases = [
@@ -1084,100 +1106,119 @@ class HoronDB:
 
     def _cheapest_route(
         self,
-        start_concept_ids: set[int],
+        active_concept_ids: set[int],
+        required_concept_ids: set[int],
         goal_concept_id: int,
     ) -> list[dict] | None:
-        """从多个起点到单一终点的最短路搜索（Dijkstra）。
-
+        """从多个起点到单一终点的最短路搜索（Dijkstra），并强制依赖 required_concept_ids。
         代价结构: _PathCost(hypothesis_count, total_jumps) 按字典序比较。
-        优先走全 confirmed 的路；同等条件下跳数少的优先。
         """
-        if goal_concept_id in start_concept_ids:
-            return []
+        if goal_concept_id in active_concept_ids:
+            if not required_concept_ids or goal_concept_id in required_concept_ids:
+                return []
 
         inf_cost = _PathCost(float("inf"), float("inf"))
-        costs: dict[int, _PathCost] = {
-            start_id: _PathCost(0, 0) for start_id in start_concept_ids
-        }
+        costs: dict[tuple[int, bool], _PathCost] = {}
+        step_to_reach: dict[tuple[int, bool], _RouteStep] = {}
+        frontier: list[tuple[_PathCost, int, bool]] = []
 
-        # step_to_reach[cid] 记录了“为了以最优代价抵达 cid，最后跨过的是哪一步”。
-        # 作用：Dijkstra 是一种只管往前走填代价的算法，不自带记忆。
-        # 抵达终点后，必须靠这个字典，从终点反向追踪每一步是怎么来的，才能把整条路串接（重建）出来。
-        step_to_reach: dict[int, _RouteStep] = {}
+        for start_id in active_concept_ids:
+            used_req = True if (not required_concept_ids or start_id in required_concept_ids) else False
+            costs[(start_id, used_req)] = _PathCost(0, 0)
+            heapq.heappush(frontier, (_PathCost(0, 0), start_id, used_req))
 
-        frontier: list[tuple[_PathCost, int]] = [
-            (_PathCost(0, 0), start_id) for start_id in start_concept_ids
-        ]
-        heapq.heapify(frontier)
-
-        def get_neighbors(current_cid: int, current_cost: _PathCost):
-            """生成当前节点所有可达的邻居、到达代价以及跳跃步骤信息。"""
-            # 1. 沿有序边（→）跳转
+        def get_neighbors(current_cid: int, current_cost: _PathCost, current_used_req: bool):
             for to_cid, edge_cid, edge_sc, status in self._adjacency.get(current_cid, []):
                 next_cost = _PathCost(
                     current_cost.hypothesis_count + (0 if status == "confirmed" else 1),
                     current_cost.total_jumps + 1
                 )
-                yield to_cid, next_cost, _RouteStep((current_cid,), to_cid, edge_cid, edge_sc, status)
+                yield to_cid, next_cost, current_used_req, _RouteStep(((current_cid, current_used_req),), to_cid, edge_cid, edge_sc, status)
 
-                # 有向影分身：关系概念自身也被激活
                 if edge_cid != current_cid and edge_cid != to_cid:
-                    yield edge_cid, next_cost, _RouteStep((current_cid,), to_cid, edge_cid, edge_sc, status)
+                    yield edge_cid, next_cost, current_used_req, _RouteStep(((current_cid, current_used_req),), to_cid, edge_cid, edge_sc, status)
 
-            # 2. 沿无序组（&）跳转与激活
             for group_index in self._and_index.get(current_cid, []):
                 members, edge_cid, edge_sc, status = self._and_groups[group_index]
+                if edge_cid in members:
+                    continue
 
-                # 无序影分身：只有当全部成员都已被探索（在 costs 中）时，该组关系概念才被激活。
-                # 这一步相当于逻辑 AND 门，由于 Dijkstra 按代价升序弹出，
-                # 当最后一个成员（代价最高）被弹出时，这里必然满足条件，从而正确地以瓶颈代价激活组合体。
-                if edge_cid not in members and all(m in costs for m in members):
-                    bottleneck = max(costs[m] for m in members)
+                if not all((m, False) in costs or (m, True) in costs for m in members):
+                    continue
+
+                edge_cost_add = (0 if status == "confirmed" else 1)
+
+                if all((m, False) in costs for m in members):
+                    bottleneck_false = max(costs[(m, False)] for m in members)
                     next_cost = _PathCost(
-                        bottleneck.hypothesis_count + (0 if status == "confirmed" else 1),
-                        bottleneck.total_jumps + 1
+                        bottleneck_false.hypothesis_count + edge_cost_add,
+                        bottleneck_false.total_jumps + 1
                     )
-                    yield edge_cid, next_cost, _RouteStep(tuple(members), edge_cid, edge_cid, edge_sc, status)
+                    combo = tuple((m, False) for m in members)
+                    yield edge_cid, next_cost, False, _RouteStep(combo, edge_cid, edge_cid, edge_sc, status)
 
-        # 核心 Dijkstra 松弛循环
+                best_true_cost = None
+                best_true_combination = None
+                for force_true_m in members:
+                    if (force_true_m, True) not in costs:
+                        continue
+                    cur_bottleneck = costs[(force_true_m, True)]
+                    combo = [(force_true_m, True)]
+                    for other_m in members:
+                        if other_m == force_true_m: continue
+                        opts = [(costs[(other_m, u)], u) for u in (True, False) if (other_m, u) in costs]
+                        best_other_cost, best_other_u = min(opts)
+                        cur_bottleneck = max(cur_bottleneck, best_other_cost)
+                        combo.append((other_m, best_other_u))
+                    
+                    if best_true_cost is None or cur_bottleneck < best_true_cost:
+                        best_true_cost = cur_bottleneck
+                        best_true_combination = tuple(combo)
+                        
+                if best_true_cost is not None:
+                    next_cost = _PathCost(
+                        best_true_cost.hypothesis_count + edge_cost_add,
+                        best_true_cost.total_jumps + 1
+                    )
+                    yield edge_cid, next_cost, True, _RouteStep(best_true_combination, edge_cid, edge_cid, edge_sc, status)
+
         while frontier:
-            cost_here, current_cid = heapq.heappop(frontier)
-            if cost_here > costs.get(current_cid, inf_cost):
+            cost_here, current_cid, current_used_req = heapq.heappop(frontier)
+            if cost_here > costs.get((current_cid, current_used_req), inf_cost):
                 continue
-            if current_cid == goal_concept_id:
+            if current_cid == goal_concept_id and current_used_req == True:
                 break
 
-            for next_cid, next_cost, step_info in get_neighbors(current_cid, cost_here):
-                if next_cost < costs.get(next_cid, inf_cost):
-                    costs[next_cid] = next_cost
-                    step_to_reach[next_cid] = step_info
-                    heapq.heappush(frontier, (next_cost, next_cid))
+            for next_cid, next_cost, next_used_req, step_info in get_neighbors(current_cid, cost_here, current_used_req):
+                if next_cost < costs.get((next_cid, next_used_req), inf_cost):
+                    costs[(next_cid, next_used_req)] = next_cost
+                    step_to_reach[(next_cid, next_used_req)] = step_info
+                    heapq.heappush(frontier, (next_cost, next_cid, next_used_req))
 
-        if goal_concept_id not in costs:
+        if (goal_concept_id, True) not in costs:
             return None
 
-        # 路径重建：改为树状回溯（DFS）以支持 & 组多分支
         edges: list[dict] = []
         edges_set = set()
-        visited_cids = set()
+        visited_states = set()
 
-        def trace(cid: int):
-            if cid in start_concept_ids or cid in visited_cids:
+        def trace(state: tuple[int, bool]):
+            if state in visited_states:
                 return
-            visited_cids.add(cid)
+            visited_states.add(state)
 
-            step = step_to_reach.get(cid)
+            step = step_to_reach.get(state)
             if not step:
                 return
 
-            for from_cid in step.from_concept_ids:
-                trace(from_cid)
+            for from_state in step.from_states:
+                trace(from_state)
 
-            # 统一去重 Key：直接使用 from_concept_ids tuple
+            from_cids = tuple(s[0] for s in step.from_states)
             edge_tuple = (
                 step.edge_concept_id,
                 step.edge_short_code,
-                step.from_concept_ids,
+                from_cids,
                 step.destination_id,
                 step.status
             )
@@ -1188,8 +1229,8 @@ class HoronDB:
             edges_set.add(edge_tuple)
 
             from_data = {
-                "concept_ids": list(step.from_concept_ids),
-                "name": " & ".join(self._resolve_concept_name(c) for c in step.from_concept_ids)
+                "concept_ids": sorted(from_cids),
+                "name": " & ".join(self._resolve_concept_name(c) for c in sorted(from_cids))
             }
 
             edges.append({
@@ -1204,7 +1245,7 @@ class HoronDB:
                 },
             })
 
-        trace(goal_concept_id)
+        trace((goal_concept_id, True))
         return edges
 
 
@@ -1252,8 +1293,10 @@ class HoronDB:
         # 从左往右逐段验证，累积影分身 concept 作为下一段的起点集
         compiled_edges: list[dict] = []
         activated: set[int] = {waypoints[0]}
+        newly_activated: set[int] = {waypoints[0]}
+
         for i in range(len(waypoints) - 1):
-            edges = self._cheapest_route(activated, waypoints[i + 1])
+            edges = self._cheapest_route(activated, newly_activated, waypoints[i + 1])
             if edges is None:
                 result["break"] = {
                     "from": {"concept_id": waypoints[i],
@@ -1263,10 +1306,13 @@ class HoronDB:
                 }
                 break
             compiled_edges.extend(edges)
-            # 收割：路径上每条边的关系 concept（影分身）+ 目的地，加入池子
+            
+            newly_activated = set()
             for edge in edges:
-                activated.add(edge["concept_id"])
-            activated.add(waypoints[i + 1])
+                newly_activated.add(edge["concept_id"])
+            newly_activated.add(waypoints[i + 1])
+            
+            activated.update(newly_activated)
 
         result["compiled_route"] = compiled_edges
 
@@ -1276,7 +1322,7 @@ class HoronDB:
         else:
             # ── 断路 ──
             detour_edges = self._cheapest_route(
-                activated, waypoints[-1])
+                activated, set(), waypoints[-1])
             if detour_edges is not None:
                 result["detour"] = detour_edges
 

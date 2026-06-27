@@ -275,9 +275,40 @@ horon/
 │   ├── models.py        # Pydantic数据模型
 │   ├── schema.sql       # 建表SQL
 │   ├── db.py            # DB操作
+│   ├── server.py        # FastAPI REST API（可视化前端用）
 │   └── text_patch.py    # 文本模糊匹配（patch用）
 ├── frontend/
 │   ├── cli.py           # Nocturne操作接口
 │   └── prompt.md        # 系统提示词
+├── web/                 # 可视化前端（Vite + React + TypeScript）
+│   ├── src/
+│   │   ├── components/
+│   │   │   ├── GalaxyView.tsx       # 宏观星系图（Canvas力导向）
+│   │   │   ├── DissectionView.tsx   # 微观解剖台（d3-force + DOM）
+│   │   │   ├── InspectorSidebar.tsx # 右侧深度检查面板
+│   │   │   └── SearchBar.tsx        # 概念搜索
+│   │   ├── api.ts       # API客户端
+│   │   ├── types.ts     # TypeScript类型定义
+│   │   ├── App.tsx      # 主应用（双模切换）
+│   │   └── main.tsx     # 入口
+│   ├── index.html
+│   ├── vite.config.ts
+│   └── package.json
 └── README.md
 ```
+
+## 可视化前端
+
+双模无缝切换系统：Galaxy View（宏观力导向热力图）与 Dissection View（微观焦点容器）。
+
+### 启动
+
+```bash
+# 终端1：API服务器
+python -m uvicorn backend.server:app --port 8710 --reload
+
+# 终端2：前端开发服务器
+cd web && npm run dev
+```
+
+打开 http://localhost:5173 查看。Vite 会自动将 `/api` 请求代理到后端。

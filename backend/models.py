@@ -34,9 +34,18 @@ class Variation(BaseModel):
     updated_at: str
 
 
+class ComposeMemberDetail(BaseModel):
+    concept_id: int
+    name: str
+    position: int
+    disclosure: str | None = None
+
+
 class VariationDetail(Variation):
     """Variation + 其组合表达式。"""
     expression: str | None = None
+    members: list[ComposeMemberDetail] = []
+
 
 
 # ── 关系查询 ─────────────────────────────────────────────────
@@ -46,6 +55,7 @@ class RelationRow(BaseModel):
     expression: str               # "A → B"
     concept_id: int               # 关系概念的 ID
     concept_name: str             # 关系概念的名字
+    from_concept_id: int          # 起点概念的 ID
     from_concept_disclosure: str | None = None
 
 
@@ -54,6 +64,7 @@ class OutboundRelation(BaseModel):
     expression: str               # "A → B"
     concept_id: int               # 关系概念的 ID
     concept_name: str             # 关系概念的名字
+    target_concept_id: int        # 终点概念的 ID
     target_concept_disclosure: str | None = None
 
 
