@@ -48,9 +48,7 @@ def get_graph():
     assert db is not None
 
     with _db_lock:
-        concepts = db.conn.execute(
-            "SELECT id, name, disclosure FROM concepts ORDER BY id"
-        ).fetchall()
+        concepts = db.get_all_concepts()
 
         db._load_graph()
 
@@ -87,11 +85,11 @@ def get_graph():
 
         nodes = []
         for c in concepts:
-            cid = c["id"]
+            cid = c.id
             nodes.append({
                 "id": cid,
-                "name": c["name"],
-                "disclosure": c["disclosure"],
+                "name": c.name,
+                "disclosure": c.disclosure,
                 "degree": degree.get(cid, 0),
             })
 

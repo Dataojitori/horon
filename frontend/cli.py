@@ -421,6 +421,10 @@ def _build_parser():
     p = sub.add_parser("search_concepts", allow_abbrev=False)
     p.add_argument("query")
 
+    # list_concepts
+    p = sub.add_parser("list_concepts", allow_abbrev=False)
+    p.add_argument("--with-disclosure", action="store_true", default=False)
+
     # add (name or variation)
     p = sub.add_parser("add", allow_abbrev=False)
     p.add_argument("target")
@@ -494,6 +498,28 @@ def _dispatch(args, db):
 
     elif args.command == "search_concepts":
         return db.search_concepts(args.query)
+
+    elif args.command == "list_concepts":
+        overviews = db.get_all_concepts_overview()
+        lines = []
+        for c in overviews:
+            lines.append(f"[{c['id']}] {c['name']}")
+            
+            variations = c["variations"]
+            for v in variations:
+                expr = v["expression"]
+                status = v["status"]
+                prefix = f"[{v['short_code']}] " if len(variations) > 1 else ""
+                
+                if expr:
+                    lines.append(f"      = {prefix}{expr} ({status})")
+                elif status != "hypothesis" or len(variations) > 1:
+                    lines.append(f"      = {prefix}[Atomic] ({status})")
+                    
+            if args.with_disclosure and c["disclosure"]:
+                lines.append(f"      Disclosure: {c['disclosure']}")
+                
+        return RawOutput("\n".join(lines))
 
     elif args.command == "add":
         return db.add(args.target, args.kind, args.value)

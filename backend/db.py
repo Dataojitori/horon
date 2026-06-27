@@ -266,6 +266,64 @@ class HoronDB:
         ).fetchall()
         return [Concept(**dict(row)) for row in rows]
 
+    def get_all_concepts(self) -> list[Concept]:
+        """获取所有 concept。"""
+        rows = self.conn.execute("SELECT * FROM concepts ORDER BY id").fetchall()
+        return [Concept(**dict(row)) for row in rows]
+
+    def get_all_concepts_overview(self) -> list[dict]:
+        """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。"""
+        concepts = self.get_all_concepts()
+        
+        var_rows = self.conn.execute(
+            "SELECT concept_id, short_code, status FROM variations "
+            "ORDER BY concept_id, short_code"
+        ).fetchall()
+        vars_by_cid = {}
+        for r in var_rows:
+            vars_by_cid.setdefault(r["concept_id"], []).append(r)
+            
+        mem_rows = self.conn.execute(
+            "SELECT cm.concept_id, cm.short_code, cm.position, c.name "
+            "FROM compose_members cm "
+            "JOIN concepts c ON cm.member_concept_id = c.id "
+            "ORDER BY cm.position, cm.member_concept_id"
+        ).fetchall()
+        
+        mems_by_var = {}
+        for r in mem_rows:
+            key = (r["concept_id"], r["short_code"])
+            if key not in mems_by_var:
+                mems_by_var[key] = {1: [], 2: []}
+            mems_by_var[key][r["position"]].append(r["name"])
+            
+        result = []
+        for c in concepts:
+            c_dict = {
+                "id": c.id,
+                "name": c.name,
+                "disclosure": c.disclosure,
+                "variations": []
+            }
+            for v in vars_by_cid.get(c.id, []):
+                key = (c.id, v["short_code"])
+                expr = None
+                if key in mems_by_var:
+                    m = mems_by_var[key]
+                    if m[2]:
+                        expr = f"{m[1][0]} → {m[2][0]}"
+                    else:
+                        expr = " & ".join(m[1])
+                        
+                c_dict["variations"].append({
+                    "short_code": v["short_code"],
+                    "status": v["status"] or "hypothesis",
+                    "expression": expr
+                })
+            result.append(c_dict)
+            
+        return result
+
     def _concept_label(self, input_query, cid: int) -> str:
         """统一的概念标识格式：'input' ('display_name', id=N)。"""
         name = self._resolve_concept_name(cid)
