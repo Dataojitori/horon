@@ -34,6 +34,18 @@ def run_cli(args, tmp_path, input_text=None, db_path=None):
     )
 
 
+def read_audit_log(db_path):
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT command, concept_id, concept_name, short_code, "
+            "sub_action, success FROM cli_audit_log ORDER BY id"
+        ).fetchall()
+    finally:
+        conn.close()
+
+
 def test_cli_returns_nonzero_when_command_fails(tmp_path):
     result = run_cli(["read_concept", "__missing__"], tmp_path)
 
@@ -169,3 +181,134 @@ def test_cli_batch_handles_windows_paths_and_quotes(tmp_path):
     assert result.returncode == 0
     assert "evidence from windows path" in result.stdout
     assert 'hello "world"' in result.stdout
+
+
+def test_cli_successful_write_records_target_in_audit_log(tmp_path):
+    db_path = init_cli_db(tmp_path)
+
+    created = run_cli(["create_concept", "Topic"], tmp_path, db_path=db_path)
+    updated = run_cli(
+        ["update", "Topic", "evidence", "--append", "proof"],
+        tmp_path,
+        db_path=db_path,
+    )
+
+    assert created.returncode == 0
+    assert updated.returncode == 0
+    rows = read_audit_log(db_path)
+    assert len(rows) == 2
+    assert rows[0]["command"] == "create_concept"
+    assert rows[0]["concept_id"] is not None
+    assert rows[0]["concept_name"] == "Topic"
+    assert rows[0]["short_code"]
+    assert rows[0]["sub_action"] is None
+    assert rows[0]["success"] == 1
+    assert dict(rows[1]) == {
+        "command": "update",
+        "concept_id": rows[0]["concept_id"],
+        "concept_name": "Topic",
+        "short_code": rows[0]["short_code"],
+        "sub_action": "evidence",
+        "success": 1,
+    }
+
+
+def test_cli_failed_write_records_failure_and_rolls_back(tmp_path):
+    db_path = init_cli_db(tmp_path)
+    assert run_cli(
+        ["create_concept", "Topic"], tmp_path, db_path=db_path
+    ).returncode == 0
+
+    duplicate = run_cli(
+        ["create_concept", "Topic"], tmp_path, db_path=db_path
+    )
+
+    assert duplicate.returncode != 0
+    conn = sqlite3.connect(db_path)
+    try:
+        concept_count = conn.execute(
+            "SELECT COUNT(*) FROM concepts WHERE name='Topic'"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert concept_count == 1
+    rows = read_audit_log(db_path)
+    assert len(rows) == 2
+    assert rows[-1]["command"] == "create_concept"
+    assert rows[-1]["success"] == 0
+
+
+def test_cli_delete_final_variation_keeps_deleted_target_in_audit_log(tmp_path):
+    db_path = init_cli_db(tmp_path)
+    assert run_cli(
+        ["create_concept", "Disposable"], tmp_path, db_path=db_path
+    ).returncode == 0
+    created = read_audit_log(db_path)[0]
+
+    deleted = run_cli(["delete", "Disposable"], tmp_path, db_path=db_path)
+
+    assert deleted.returncode == 0
+    conn = sqlite3.connect(db_path)
+    try:
+        concept_count = conn.execute(
+            "SELECT COUNT(*) FROM concepts WHERE id=?",
+            (created["concept_id"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert concept_count == 0
+    row = read_audit_log(db_path)[-1]
+    assert dict(row) == {
+        "command": "delete",
+        "concept_id": created["concept_id"],
+        "concept_name": "Disposable",
+        "short_code": created["short_code"],
+        "sub_action": None,
+        "success": 1,
+    }
+
+
+def test_cli_batch_records_each_executed_subcommand(tmp_path):
+    db_path = init_cli_db(tmp_path)
+
+    result = run_cli(
+        ["batch"],
+        tmp_path,
+        input_text=(
+            "create_concept Topic\n"
+            'update Topic evidence --append "batch evidence"\n'
+            "read_concept Topic\n"
+        ),
+        db_path=db_path,
+    )
+
+    assert result.returncode == 0
+    rows = read_audit_log(db_path)
+    assert [row["command"] for row in rows] == [
+        "create_concept",
+        "update",
+        "read_concept",
+    ]
+    assert [row["success"] for row in rows] == [1, 1, 1]
+    assert len({row["concept_id"] for row in rows}) == 1
+
+
+def test_cli_rename_audit_uses_new_name_and_same_concept_id(tmp_path):
+    db_path = init_cli_db(tmp_path)
+    assert run_cli(
+        ["create_concept", "OldName"], tmp_path, db_path=db_path
+    ).returncode == 0
+    created = read_audit_log(db_path)[0]
+
+    renamed = run_cli(
+        ["set", "OldName", "name", "NewName"], tmp_path, db_path=db_path
+    )
+
+    assert renamed.returncode == 0
+    row = read_audit_log(db_path)[-1]
+    assert row["command"] == "set"
+    assert row["concept_id"] == created["concept_id"]
+    assert row["concept_name"] == "NewName"
+    assert row["short_code"] is None
+    assert row["sub_action"] == "name"
+    assert row["success"] == 1

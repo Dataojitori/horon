@@ -44,9 +44,24 @@ CREATE TABLE IF NOT EXISTS aliases (
 -- 不同 concept 之间不能有任何名字重复（无论主名还是别名）。
 -- 同一 concept 的主名可以同时出现在自己的 alias 中。
 
+-- CLI 操作审计日志：谁在什么时候对哪个概念做了什么。
+-- 不设 FK —— 概念删除后审计记录仍须保留。
+CREATE TABLE IF NOT EXISTS cli_audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp    TEXT    NOT NULL,
+    command      TEXT    NOT NULL,
+    concept_id   INTEGER,
+    concept_name TEXT,
+    short_code   TEXT,
+    sub_action   TEXT,
+    success      INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE INDEX IF NOT EXISTS idx_variations_concept ON variations(concept_id);
 CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
+CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
+CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS

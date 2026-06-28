@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import NamedTuple
@@ -22,6 +23,7 @@ from dotenv import load_dotenv
 from .models import (
     Concept, VariationDetail, ComposeMemberDetail,
     RelationRow, OutboundRelation, ReadResult,
+    MutationResult,
 )
 
 
@@ -210,6 +212,27 @@ class HoronDB:
             return row["name"]
         raise ValueError(f"No concept with id {concept_id}")
 
+    def log_action(self, *, command: str,
+                   concept_id: int | None = None,
+                   concept_name: str | None = None,
+                   short_code: str | None = None,
+                   sub_action: str | None = None,
+                   success: bool = True) -> None:
+        """INSERT into cli_audit_log. 审计写失败不打断真正的操作，
+        但会在 stderr 报一行，避免静默吞掉表缺失/SQL 错等真正的 bug。"""
+        try:
+            self.conn.execute(
+                "INSERT INTO cli_audit_log"
+                " (timestamp, command, concept_id, concept_name,"
+                "  short_code, sub_action, success)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (_now(), command, concept_id, concept_name,
+                 short_code, sub_action, int(success)),
+            )
+            self.conn.commit()
+        except Exception as e:
+            print(f"[audit] log_action failed: {e}", file=sys.stderr)
+
     def _check_name_available(self, name: str,
                               exclude_concept_id: int | None = None) -> None:
         """跨 concept 名字唯一性校验。不同 concept 之间不允许重名（主名或别名）。
@@ -227,7 +250,7 @@ class HoronDB:
 
     @transactional
     def create_concept(self, name: str,
-                       disclosure: str | None = None) -> str:
+                       disclosure: str | None = None) -> MutationResult:
         """创建概念 concept + 默认 variation + 同名 alias。"""
         name = _validate_name(name)
         self._check_name_available(name)
@@ -249,7 +272,12 @@ class HoronDB:
             "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
             (name, concept_id),
         )
-        return f"Success. Created concept '{name}' ('{name}', id={concept_id})."
+        return MutationResult(
+            message=f"Success. Created concept '{name}' ('{name}', id={concept_id}).",
+            concept_id=concept_id,
+            concept_name=name,
+            short_code=sc,
+        )
 
     def search_concepts(self, query) -> list[Concept]:
         """按 alias、disclosure 或 evidence 模糊搜索 concept。"""
@@ -324,11 +352,6 @@ class HoronDB:
             
         return result
 
-    def _concept_label(self, input_query, cid: int) -> str:
-        """统一的概念标识格式：'input' ('display_name', id=N)。"""
-        name = self._resolve_concept_name(cid)
-        return f"'{input_query}' ('{name}', id={cid})"
-
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _parse_expression(self, expression: str) -> tuple[list[int], list[int]]:
@@ -396,7 +419,7 @@ class HoronDB:
 
     # ── Add ──────────────────────────────────────────────────────────────────
 
-    def add(self, concept, kind: str, value: str) -> str:
+    def add(self, concept, kind: str, value: str) -> MutationResult:
         """给概念添加 name（别名）或 variation（变种）。"""
         if kind == "name":
             return self._add_name(concept, value)
@@ -406,17 +429,21 @@ class HoronDB:
             f"Unknown type: '{kind}'. Use 'name' or 'variation'.")
 
     @transactional
-    def _add_name(self, concept, name: str) -> str:
+    def _add_name(self, concept, name: str) -> MutationResult:
         """给 concept 加一个 alias。"""
         name = _validate_name(name)
         cid, _ = self._resolve_id(concept)
-        label = self._concept_label(concept, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
         existing = self.conn.execute(
             "SELECT concept_id FROM aliases WHERE alias=?", (name,)
         ).fetchone()
         if existing:
             if existing["concept_id"] == cid:
-                return f"Success. '{name}' is already an alias for {label}."
+                return MutationResult(
+                    message=f"Success. '{name}' is already an alias for {label}.",
+                    concept_id=cid, concept_name=cname,
+                )
             raise ValueError(
                 f"Name '{name}' already resolves to concept "
                 f"{existing['concept_id']}.")
@@ -424,15 +451,19 @@ class HoronDB:
             "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
             (name, cid),
         )
-        return f"Success. Added alias '{name}' to {label}."
+        return MutationResult(
+            message=f"Success. Added alias '{name}' to {label}.",
+            concept_id=cid, concept_name=cname,
+        )
 
     @transactional
-    def _add_variation(self, concept, expression: str) -> str:
+    def _add_variation(self, concept, expression: str) -> MutationResult:
         """给 concept 新增变种，必须带 expression。"""
         if not expression or not expression.strip():
             raise ValueError("Expression cannot be empty.")
         cid, _ = self._resolve_id(concept)
-        label = self._concept_label(concept, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
 
         ids_at_1, ids_at_2 = self._parse_expression(expression)
 
@@ -473,12 +504,15 @@ class HoronDB:
                 "VALUES (?,?,?,2)",
                 (cid, sc, member_cid),
             )
-        return f"Success. Added variation {sc} to {label}."
+        return MutationResult(
+            message=f"Success. Added variation {sc} to {label}.",
+            concept_id=cid, concept_name=cname, short_code=sc,
+        )
 
     # ── Delete ───────────────────────────────────────────────────────────────
 
     def delete(self, target, kind: str | None = None,
-               value: str | None = None) -> str:
+               value: str | None = None) -> MutationResult:
         """删除操作。
 
         kind 省略:   删除 variation（target 为概念名或 概念:sc）。
@@ -502,11 +536,11 @@ class HoronDB:
             f"Use 'name' or 'expression'.")
 
     @transactional
-    def _delete_name(self, concept, name: str) -> str:
+    def _delete_name(self, concept, name: str) -> MutationResult:
         """删一个 alias。拒删当前显示名。"""
         cid, _ = self._resolve_id(concept)
-        label = self._concept_label(concept, cid)
-        concept_name = self._resolve_concept_name(cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
         row = self.conn.execute(
             "SELECT concept_id FROM aliases WHERE alias=?", (name,)
         ).fetchone()
@@ -516,16 +550,19 @@ class HoronDB:
             raise ValueError(
                 f"Alias '{name}' belongs to concept "
                 f"{row['concept_id']}, not {label}.")
-        if concept_name == name:
+        if cname == name:
             raise ValueError(
                 f"'{name}' is the display name. "
                 f"Use 'set name' to change it first.")
         self.conn.execute(
             "DELETE FROM aliases WHERE alias=?", (name,))
-        return f"Success. Removed alias '{name}' from {label}."
+        return MutationResult(
+            message=f"Success. Removed alias '{name}' from {label}.",
+            concept_id=cid, concept_name=cname,
+        )
 
     @transactional
-    def _delete_variation(self, node) -> str:
+    def _delete_variation(self, node) -> MutationResult:
         """删除 variation。最后一个 → concept 也删。
 
         删除最后一个 variation 会连带删除 concept 本体。
@@ -533,7 +570,8 @@ class HoronDB:
         作为 compose_member；有则拒绝，防止产生残缺的死组合。
         """
         cid, sc = self._resolve_single_variation(node)
-        label = self._concept_label(node, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{node}' ('{cname}', id={cid})"
 
         # 如果这是最后一个 variation，删它 = 删 concept 本体。
         # 先检查外部引用：别的 concept 的 variation 是否把该 concept
@@ -585,17 +623,24 @@ class HoronDB:
         if remaining["cnt"] == 0:
             self.conn.execute(
                 "DELETE FROM concepts WHERE id=?", (cid,))
-            return (f"Success. Deleted variation {sc} from {label}. "
-                    f"No variations remaining; concept deleted.")
+            return MutationResult(
+                message=(f"Success. Deleted variation {sc} from {label}. "
+                         f"No variations remaining; concept deleted."),
+                concept_id=cid, concept_name=cname, short_code=sc,
+            )
 
-        return (f"Success. Deleted variation {sc} from {label}. "
-                f"{remaining['cnt']} variation(s) remaining.")
+        return MutationResult(
+            message=(f"Success. Deleted variation {sc} from {label}. "
+                     f"{remaining['cnt']} variation(s) remaining."),
+            concept_id=cid, concept_name=cname, short_code=sc,
+        )
 
     @transactional
-    def _delete_expression(self, node) -> str:
+    def _delete_expression(self, node) -> MutationResult:
         """清除 variation 的组合，回到原子态。status 一并清除。"""
         cid, sc = self._resolve_single_variation(node)
-        label = self._concept_label(node, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{node}' ('{cname}', id={cid})"
 
         if not self._get_expression(cid, sc):
             raise ValueError(
@@ -631,12 +676,15 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
-        return (f"Success. Cleared expression and status for "
-                f"variation {sc} of {label}.")
+        return MutationResult(
+            message=(f"Success. Cleared expression and status for "
+                     f"variation {sc} of {label}."),
+            concept_id=cid, concept_name=cname, short_code=sc,
+        )
 
     # ── Set ──────────────────────────────────────────────────────────────────
 
-    def set(self, target, prop: str, value: str) -> str:
+    def set(self, target, prop: str, value: str) -> MutationResult:
         """设置属性：disclosure、status、name（rename）、expression。"""
         if prop == "disclosure":
             return self._set_disclosure(target, value)
@@ -651,9 +699,10 @@ class HoronDB:
             f"Use 'disclosure', 'status', 'name', or 'expression'.")
 
     @transactional
-    def _set_disclosure(self, concept, text: str) -> str:
+    def _set_disclosure(self, concept, text: str) -> MutationResult:
         cid, _ = self._resolve_id(concept)
-        label = self._concept_label(concept, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
         text = text.strip()
         if not text:
             raise ValueError("Disclosure cannot be empty.")
@@ -661,30 +710,38 @@ class HoronDB:
             "UPDATE concepts SET disclosure=?, updated_at=? WHERE id=?",
             (text, _now(), cid),
         )
-        return f"Success. Disclosure for {label} set to: {text}"
+        return MutationResult(
+            message=f"Success. Disclosure for {label} set to: {text}",
+            concept_id=cid, concept_name=cname,
+        )
 
     @transactional
-    def _set_status(self, node, value: str) -> str:
+    def _set_status(self, node, value: str) -> MutationResult:
         valid = ("hypothesis", "confirmed", "negated")
         if value not in valid:
             raise ValueError(
                 f"Invalid status: '{value}'. "
                 f"Must be one of: {', '.join(valid)}.")
         cid, sc = self._resolve_single_variation(node)
-        label = self._concept_label(node, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{node}' ('{cname}', id={cid})"
         self.conn.execute(
             "UPDATE variations SET status=?, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
             (value, _now(), cid, sc),
         )
-        return f"Success. Status of {label} variation {sc} set to: {value}"
+        return MutationResult(
+            message=f"Success. Status of {label} variation {sc} set to: {value}",
+            concept_id=cid, concept_name=cname, short_code=sc,
+        )
 
     @transactional
-    def _set_name(self, concept, new_name: str) -> str:
+    def _set_name(self, concept, new_name: str) -> MutationResult:
         """改显示名。旧显示名降级为 alias，保留在名字集合里。"""
         new_name = _validate_name(new_name)
         cid, _ = self._resolve_id(concept)
-        label = self._concept_label(concept, cid)
+        old_name = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{old_name}', id={cid})"
         self._check_name_available(new_name, exclude_concept_id=cid)
         self.conn.execute(
             "UPDATE concepts SET name=?, updated_at=? WHERE id=?",
@@ -698,15 +755,19 @@ class HoronDB:
                 "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
                 (new_name, cid),
             )
-        return f"Success. Renamed {label} to '{new_name}'."
+        return MutationResult(
+            message=f"Success. Renamed {label} to '{new_name}'.",
+            concept_id=cid, concept_name=new_name,
+        )
 
     @transactional
-    def _set_expression(self, node, expression: str) -> str:
+    def _set_expression(self, node, expression: str) -> MutationResult:
         """覆盖 variation 的组合。"""
         if not expression or not expression.strip():
             raise ValueError("Expression cannot be empty.")
         cid, sc = self._resolve_single_variation(node)
-        label = self._concept_label(node, cid)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{node}' ('{cname}', id={cid})"
 
         ids_at_1, ids_at_2 = self._parse_expression(expression)
 
@@ -751,9 +812,12 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
-        return (f"Success. Expression of {label} variation {sc} "
-                f"set to: {expression}. "
-                f"Status was also reset to null.")
+        return MutationResult(
+            message=(f"Success. Expression of {label} variation {sc} "
+                     f"set to: {expression}. "
+                     f"Status was also reset to null."),
+            concept_id=cid, concept_name=cname, short_code=sc,
+        )
 
     # ── Update ───────────────────────────────────────────────────────────────
 
@@ -772,7 +836,7 @@ class HoronDB:
         return concept_id, sc, row[field]
 
     @transactional
-    def update(self, node, field: str, value: str) -> str:
+    def update(self, node, field: str, value: str) -> MutationResult:
         """给 variation 写 evidence 或 unless（patch/append 由 CLI 层处理）。
 
         node: concept 名/ID，或 "concept:short_code"。
@@ -784,13 +848,17 @@ class HoronDB:
                 f"Unknown field: '{field}'. "
                 f"Use one of: {', '.join(valid_fields)}.")
         concept_id, sc = self._resolve_single_variation(node)
-        label = self._concept_label(node, concept_id)
+        cname = self._resolve_concept_name(concept_id)
+        label = f"'{node}' ('{cname}', id={concept_id})"
         self.conn.execute(
             f"UPDATE variations SET {field}=?, updated_at=? "
             f"WHERE concept_id=? AND short_code=?",
             (value, _now(), concept_id, sc),
         )
-        return f"Success. Updated {field} of variation {sc} of {label}."
+        return MutationResult(
+            message=f"Success. Updated {field} of variation {sc} of {label}.",
+            concept_id=concept_id, concept_name=cname, short_code=sc,
+        )
 
     # ── Query ────────────────────────────────────────────────────────────────
 

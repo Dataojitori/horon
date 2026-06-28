@@ -70,6 +70,14 @@ class OutboundRelation(BaseModel):
 
 # ── read_concept 返回 ───────────────────────────────────────
 
+class MutationResult(BaseModel):
+    """DB write operation result with audit-relevant metadata."""
+    message: str
+    concept_id: int | None = None
+    concept_name: str | None = None
+    short_code: str | None = None
+
+
 class ReadResult(BaseModel):
     """read_concept 的完整返回。"""
     id: int

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 from backend.db import HoronDB
-from backend.models import ReadResult
+from backend.models import MutationResult, ReadResult
 from backend.text_patch import (
     normalize_literal_newlines,
     try_normalized_patch,
@@ -245,7 +245,9 @@ class RawOutput:
 
 
 def _print(obj):
-    if isinstance(obj, ReadResult):
+    if isinstance(obj, MutationResult):
+        print(obj.message)
+    elif isinstance(obj, ReadResult):
         print(_format_read_concept(obj))
     elif isinstance(obj, dict) and "compiled_route" in obj:
         print(_format_compile(obj))
@@ -563,6 +565,52 @@ def _dispatch(args, db):
         return db.compile(args.steps, args.goal)
 
 
+def _audited_dispatch(args, db):
+    """Wrap _dispatch with audit logging.
+
+    Audit info comes from two sources:
+      - sub_action: CLI routing (which sub-command was used)
+      - concept_id/name/short_code: DB return value (MutationResult or ReadResult)
+    """
+    cmd = args.command
+    sub_action = None
+    if cmd == "add":
+        sub_action = args.kind
+    elif cmd == "delete":
+        sub_action = getattr(args, "kind", None)
+    elif cmd == "set":
+        sub_action = args.prop
+    elif cmd == "update":
+        sub_action = args.field
+
+    try:
+        result = _dispatch(args, db)
+    except Exception:
+        db.log_action(command=cmd, sub_action=sub_action, success=False)
+        raise
+
+    concept_id = None
+    concept_name = None
+    short_code = None
+
+    if isinstance(result, MutationResult):
+        concept_id = result.concept_id
+        concept_name = result.concept_name
+        short_code = result.short_code
+    elif isinstance(result, ReadResult):
+        concept_id = result.id
+        concept_name = result.name
+
+    db.log_action(
+        command=cmd,
+        concept_id=concept_id,
+        concept_name=concept_name,
+        short_code=short_code,
+        sub_action=sub_action,
+        success=True,
+    )
+    return result
+
 
 def main():
     parser = _build_parser()
@@ -590,7 +638,7 @@ def main():
                     if cmd_args.command == "batch":
                         print(f"Line {i}: batch inside batch is not allowed")
                         sys.exit(1)
-                    result = _dispatch(cmd_args, db)
+                    result = _audited_dispatch(cmd_args, db)
                     if args.all:
                         _print(result)
                     last_result = result
@@ -605,7 +653,7 @@ def main():
                 _print(last_result)
 
         else:
-            result = _dispatch(args, db)
+            result = _audited_dispatch(args, db)
             _print(result)
 
     except Exception as e:
