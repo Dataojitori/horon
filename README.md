@@ -90,20 +90,26 @@ Nocturne发帖                            ← 手动赋予的独立身份（名�
 **为什么要有这两层？**
 为了实现语境的动态消歧。当把“苹果”作为条件去连接下一个节点时，我们连的是“苹果”这个整体（Concept）。至于在这个推导链条中，到底哪一个释义被激活了，不需要人工指定，而是完全由**上下文**（当前网络中其他已经被激活的节点，比如是否出现了“手机”或“果园”）来自动收敛决定。
 
-### 关系的生命周期
+### 状态与验证标准 (Status)
+
+`status` 评估的是一个变体（variation）是否成立。无论是原子概念本身，还是概念间的组合关系，其生命周期均为：
 
 ```
 假设(hypothesis)  ──→  确认(confirmed)
                   └──→  否定(negated)
 ```
 
-status 仅属于 variation（具体的组合解释）。尚未拆解的概念的 variation 没有 status——它不表达关系，只是一个定义空间的存在。
+**审批标准：名副其实**
+变体的“实质内容”包含了它的一切构件：**表达式（如果有）、evidence，以及 unless**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
+例如，你建了一个组合概念，名字叫“我的史诗级重构”，表达式是“修改文档拼写 → Linux内核开发者”。
+哪怕“改拼写属于开发者工作”这个逻辑推导本身没毛病，但这丁点儿内容和它宏大的名字完全不匹配。所以这个组合概念的 status 无法被设为 confirmed。
+同样，原子概念如果没有表达式，那就拿它的 evidence 和 unless 去和名字对账。
 
-- **假设**：试探性的关系。"也许A参与定义了B。"尚未验证。
-- **确认**：验证通过。
-- **否定**：验证失败。否定是信息，不是删除——它让边界更清晰。
+- **假设**：尚未经过严格验证的试探性节点或关系。
+- **确认**：证据表明该概念确实成立。
+- **否定**：证据表明该概念确实不成立。
 
-evidence 和 unless 可以写在任何 variation 上。对组合概念的 variation，它们支撑 status：evidence 记录为什么确认或否定，unless 指定什么条件下需要重新审视。对尚未拆解的概念的 variation，evidence 是对概念本身的文本描述。所有确认的关系都保持可证伪性。
+evidence 和 unless 可以写在任何 variation 上。evidence 记录为什么打上该状态，unless 指定什么条件下需要重新审视。所有确认的状态都保持可证伪性。
 
 ### unless 条件声明
 
@@ -205,7 +211,7 @@ compile(steps, goal)        # steps[0] 是起点，goal 是终点，行走顺序
 |----|------|------|
 | concept_id | INTEGER FK | 所属 concept |
 | short_code | TEXT | 随机 4 位 hex（不复用已删除的码） |
-| status | TEXT? | hypothesis / confirmed / negated（仅组合概念） |
+| status | TEXT? | hypothesis / confirmed / negated；适用于所有 variation，NULL 等同于 hypothesis |
 | evidence | TEXT? | 支撑当前状态的理由 |
 | unless | TEXT? | 崩溃边界：什么条件下需要重新审视 |
 | created_at | TEXT | ISO时间戳 |

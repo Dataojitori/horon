@@ -672,9 +672,6 @@ class HoronDB:
                 f"Must be one of: {', '.join(valid)}.")
         cid, sc = self._resolve_single_variation(node)
         label = self._concept_label(node, cid)
-        if not self._get_expression(cid, sc):
-            raise ValueError(
-                "Cannot set status: variation has no expression.")
         self.conn.execute(
             "UPDATE variations SET status=?, updated_at=? "
             "WHERE concept_id=? AND short_code=?",

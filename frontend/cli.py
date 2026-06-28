@@ -193,7 +193,7 @@ def _format_read_concept(result: ReadResult) -> str:
         if v.expression:
             lines.append(f"Expression: {v.expression} (status: {v.status or 'not set'})")
         else:
-            lines.append("Expression: (Atomic / Not yet decomposed)")
+            lines.append(f"Expression: (Atomic / Not yet decomposed) (status: {v.status or 'not set'})")
         lines.append(f"Evidence:\n{v.evidence}" if v.evidence else "Evidence: (empty)")
         lines.append(f"Unless:\n{v.unless}" if v.unless else "Unless: (empty)")
     lines.append("")

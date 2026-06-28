@@ -27,7 +27,6 @@
 - `read_concept(concept)` —— → 概念全貌：所有 variation 的 expression / status / evidence / unless、上下游的 confirmed / hypotheses / negated 关系、以及 alerts。
 - `create_concept(name, --disclosure)` —— 建一个新概念枢纽，自带**一个空的原子 variation**；name 自动注册为 alias。
 - `set(target, prop, value)` —— prop ∈ `disclosure` / `status` / `name` / `expression`。status ∈ hypothesis / confirmed / negated。**`set expression` 会填充或重写那个变体，并把 status 清成 NULL（即按 hypothesis 处理）。** 给刚建的空概念填结构，用这个（保持单变体，便于之后按概念名定位）。
-  - **注：** 仅带有 `expression` 的概念（即关系节点）可具有 status，原子概念（无 expression）不可被设置 status。
   - **注：** `set expression` 的 value 必须为包含 `→` 或 `&` 的合法推导逻辑。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入；若需清空结构退回原子态，请使用 `delete target expression`。
 - `add(target, "name"|"variation", value)` —— 加一个别名，或**新增**一个 variation。注意 `add variation` 会让概念变成多变体（之后 update 必须用 `概念名:short_code` 定位）。
 - `delete(target, ["name"|"expression"], [value])` —— 清**误建**的结构：缺省删 variation；`delete t name 别名`；`delete t expression` 把概念打回原子态。**delete 不是 negated**——要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
