@@ -515,7 +515,7 @@ def _dispatch(args, db):
                 
                 if expr:
                     lines.append(f"      = {prefix}{expr} ({status})")
-                elif status != "hypothesis" or len(variations) > 1:
+                else:
                     lines.append(f"      = {prefix}[Atomic] ({status})")
                     
             if args.with_disclosure and c["disclosure"]:

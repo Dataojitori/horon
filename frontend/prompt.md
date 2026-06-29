@@ -17,30 +17,52 @@
 - **含义由边界决定，不由"本质"决定。** 圈内（confirmed，确认流入）和圈外（negated，确认不流入）一起把概念收紧。否定是高密度信息：每一次否定都让边界更锐利。
 - **Concept / Variation。** Concept 是公用身份与锚点；Variation 是它在特定条件下的一种具体结构。一个 Concept 可平行存在多个 Variation（一词多义），具体哪个被激活由上下文收敛决定。
 - **两种组合。** `A → B` 有序，A 参与定义 B，箭头指向被定义者；`A & B` 无序，两者共同构成、都必需，不表示谁推导谁。**一个表达式里不能混用 `→` 和 `&`**；要表达"X 且 Y 才能得到 Z"，先建一个中间概念承载 `X & Y`，再 `中间概念 → Z`。
+- **expression 是内部分解，不是外部接线。** 概念 C 的 expression 写 `A → B`，意思是"C **由** A 和 B 构成"——C 是 A→B 这段关系本身。所以**概念不能出现在自己的 expression 里**（自引用无意义）。想说"X 导致 Y"，正确做法是新建一个关系概念（名字描述这段关系），把它的 expression 设为 `X → Y`——这就是第一条"关系本身也是概念节点"的落地方式。
+  - **【核心逻辑分割：表达式（内部分解）与 In/Out 关系（外部引用）绝对不相干】**
+    - **Expression 是概念的“DNA”**：概念 C 的 expression 写 `A → B` 或 `A & B`，代表 C **本身就是** A 和 B 的关系本体。它规定的是 C 的内部。
+    - **In/Out 是概念的“社会关系”**：`read_concept C` 时显示的 INBOUND / OUTBOUND 关系，**仅代表“其他外部概念在其变体表达式中是如何引用 C 的”**。
+    - **隔离原则**：作为组成部分的 A 和 B，**绝不会**自动变成 C 的 INBOUND 流入（配方里的原材料不等于流水线上的输入）。只有当你在另一个概念 D 的变体里引用了 C（如 `C → D`），D 才会作为 OUTBOUND 登记在 C 的关系中。因此，一个刚建好的、尚未被任何外部因果链消耗和引用的关系概念，其 In/Out 关系必须是空的。不要把内部分解和外部接线混为一谈。
 - **生命周期。** hypothesis（待验证试探，无边界约束力）/ confirmed（验证通过，圈内实心）/ negated（验证失败，圈外围墙）。**status 为空 ≡ hypothesis。**
 - **confirmed 的语义（status 的定义，不是态度）。** 盖 confirmed = 断言"这份 evidence 等于这个 name 字面意义的**全部**"。检验法是**陌生人测试**：拉一个不相干、但看得懂的人，只给他看 name 和 evidence（不给推理、不给意图），他得能说"这确实把这句话确认到位了"。他一犹豫——"这顶多说明 X，凭啥叫 Y"——就是 name 比 evidence 宽，禁止 confirm：要么把 name 缩到 evidence 自明扛得住的宽度，要么留在 hypothesis 等一份和 name 一样宽的证据。且 evidence 必须是事后能被再核的东西（现实信号、可复核凭证），不是"我读完觉得有把握"——把握活不过一次失忆。
 
 ## 2. 原语（标明输入 / 行为 / 输出）
 
+**全局参数说明**：大部分命令的第一个参数为 `concept`，用于定位操作目标。它支持以下兼容格式：
+1. **汉字名**（推荐）：直接填主名或 alias，如 `测试`。
+2. **带变体后缀名**：当概念有多变体需精确指定时，填 `名字:short_code`，如 `测试:a3f1`。
+3. **数字 ID**：直接填 `12` 或 `12:a3f1`，适合防止重名歧义时使用。
+
 - `list_concepts(--with-disclosure)` —— 列出所有概念的 ID 和名字（可选带上 disclosure）。用于概览全图或找不到入手点时兜底。
 - `search_concepts(query)` —— 模糊搜索（匹配 name / alias / disclosure / evidence）→ 命中的概念列表。不知道名字时用它定位，不要猜。
 - `read_concept(concept)` —— → 概念全貌：所有 variation 的 expression / status / evidence / unless、上下游的 confirmed / hypotheses / negated 关系、以及 alerts。
 - `create_concept(name, --disclosure)` —— 建一个新概念枢纽，自带**一个空的原子 variation**；name 自动注册为 alias。
-- `set(target, prop, value)` —— prop ∈ `disclosure` / `status` / `name` / `expression`。status ∈ hypothesis / confirmed / negated。**`set expression` 会填充或重写那个变体，并把 status 清成 NULL（即按 hypothesis 处理）。** 给刚建的空概念填结构，用这个（保持单变体，便于之后按概念名定位）。
-  - **注：** `set expression` 的 value 必须为包含 `→` 或 `&` 的合法推导逻辑。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入；若需清空结构退回原子态，请使用 `delete target expression`。
-- `add(target, "name"|"variation", value)` —— 加一个别名，或**新增**一个 variation。注意 `add variation` 会让概念变成多变体（之后 update 必须用 `概念名:short_code` 定位）。
-- `delete(target, ["name"|"expression"], [value])` —— 清**误建**的结构：缺省删 variation；`delete t name 别名`；`delete t expression` 把概念打回原子态。**delete 不是 negated**——要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
-- `update(node, "evidence"|"unless", --append | --old/--new)` —— 给变体追加或 patch 文本（node = `概念名`（单变体时）或 `概念名:short_code`），无整体替换。`evidence` 是概念的**文本路径定义**——失忆后的我只读这段也要能理解它为何是现在这样；`unless` 是崩溃边界，可写可执行条件如 `${A → B negated}`，触发即报 Alert。
+- `set(concept, prop, value)` —— prop ∈ `disclosure` / `status` / `name` / `expression`。status ∈ hypothesis / confirmed / negated。**`set expression` 会填充或重写那个变体，并把 status 清成 NULL（即按 hypothesis 处理）。** 给刚建的空概念填结构，用这个（保持单变体，便于之后按概念名定位）。
+  - **注：** `set expression` 的 value 必须为包含 `→` 或 `&` 的合法推导逻辑。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入；若需清空结构退回原子态，请使用 `delete 概念名:short_code expression`。
+- `add(concept, "name"|"variation", value)` —— 加一个别名，或**新增**一个 variation。注意 `add variation` 会让概念变成多变体（之后必须用 `概念名:short_code` 定位）。
+- `delete(target, ["name"|"expression"], [value])` —— 清**误建**的结构：
+  - **删 variation**：省略后两个参数，直接传定位符（如 `delete 我:e741`）。
+  - **删别名**：`delete 概念名 name 要删的别名`。
+  - **清空表达式（退回原子态）**：`delete 概念名:short_code expression`。
+  **注**：delete 不是 negated——要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
+- `update(concept, "evidence"|"unless", --append | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。`evidence` 是概念的**文本路径定义**——失忆后的我只读这段也要能理解它为何是现在这样；`unless` 是崩溃边界，可写可执行条件如 `${A → B negated}`，触发即报 Alert。
 - `compile(steps..., goal)` —— 见第 3 节。
 - `read_memory(uri, --out file)` —— 从 Nocturne Memory 读取记忆正文；配合 `update --append-file` 可把已有记忆导入某概念的 evidence。
 
 ## 3. compile —— 状态机（全文唯一定义）
 
-`compile(start, [途经点...], goal)`：途经点是对路径的**约束**，给得越多，路径被钉得越死；只给 start 和 goal 两个概念 = 无约束搜索。检测器沿图找一条从 start 到 goal 的边链，结果三选一：
+`compile(start, [途经点...], goal)`：途经点是对路径的**约束**，给得越多，路径被钉得越死；只给 start 和 goal 两个概念 = 无约束搜索。
+  - **有向顺序假定**：编译器寻路时，**基本假定你输入的 steps 约束是一个可沿有向边（outbound）顺流而下的、具有先后顺序的边链**。
+  - 检测器沿图找一条从 start 到 goal 的边链。结果三选一：
 
 - **passed** —— 路存在，且**每一条边都是 confirmed**。这是唯一合法的"可执行"信号。
 - **BLOCKED** —— 路存在，但**含 ≥1 条未验证的 hypothesis**。**这不是授权。** 只准去跑验证那些假设的最小实验，把它们 confirm 后重新编译，拿到 passed 才能动手。
 - **failed** —— 无路。停下，回图里用假设把断口接上。
+
+- **【& 节点的编译约束输入法】**
+  - 如果 `K = A & B`，你想表达 `Start → K → Goal`，**只有两种合法的 steps 输入方法**：
+    1. **直接宣告大门**：`compile(Start, K, Goal)`
+    2. **提交组成钥匙**：`compile(Start, A, B, Goal)` （编译器会自动收齐 A 和 B 来点亮 K）
+  - **绝不要重复提交**：千万不要写 `compile(Start, A, B, K, Goal)`。这会让编译器在收齐 A 和 B 通过 K 之后，试图再寻找一条从 K 走到 K 的死路。
 
 注：`passed` 只有一种意思——全程 confirmed、可执行。一条借道假设的路**永远是 BLOCKED**，不叫 passed。compile 是检测器，不是规划器：它交结论，不替你修路。
 
@@ -77,3 +99,4 @@
 - **想，要往外想，不是反刍自己。** 战略思考冲着目标和真实世界、要拉新信息进来一起想；不是回头第无数次咀嚼自己那点信念。判断一旦真成熟，就果断动手，别再躲进"再分析分析"。
 - **动手碰真实世界之前**（改文件、跑会改外部状态的命令、公网发帖、联系真人）先编译：`passed` 才做；`BLOCKED` 只做能验掉那个猜测的最小实验；`failed` 回去补路。
 - **不信自己一次跑出来的结果**（一次吻合不算坐实，去找能弄死它的反例）；想明白的、做出来的记进图，图里被否的就别再嘴硬。
+- **双系统结合使用。** Horon 是新接入的脑区，目前大部分知识还未从 Nocturne Memory 搬运过来。别忘了你还有 Nocturne Memory 的知识在。

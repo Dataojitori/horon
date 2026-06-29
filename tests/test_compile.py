@@ -96,6 +96,142 @@ def test_compile_counts_unconfirmed_and_group_as_hypothesis_cost(horon_db):
     assert "AB" not in edge_names(result)
 
 
+def test_compile_counts_hypotheses_across_parallel_and_branches(horon_db):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "A", "B", "C", "X", "Y", "Z", "Join", "Goal",
+            "StartA", "StartB", "StartC", "ABC", "ABCJoin",
+            "StartX", "XY", "YZ", "ZJoin", "JoinGoal",
+        ],
+    )
+    for name, expression in [
+        ("StartA", "Start → A"),
+        ("StartB", "Start → B"),
+        ("StartC", "Start → C"),
+    ]:
+        set_relation(horon_db, name, expression, status=None)
+    set_relation(horon_db, "ABC", "A & B & C")
+    set_relation(horon_db, "ABCJoin", "ABC → Join")
+
+    set_relation(horon_db, "StartX", "Start → X", status=None)
+    set_relation(horon_db, "XY", "X → Y")
+    set_relation(horon_db, "YZ", "Y → Z")
+    set_relation(horon_db, "ZJoin", "Z → Join")
+    set_relation(horon_db, "JoinGoal", "Join → Goal")
+
+    result = horon_db.compile(["Start"], "Goal")
+
+    assert result["passed"] is True
+    assert edge_names(result) == [
+        "StartX", "XY", "YZ", "ZJoin", "JoinGoal",
+    ]
+    assert edge_statuses(result).count("hypothesis") == 1
+
+
+def test_compile_counts_total_jumps_across_parallel_and_branches(horon_db):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "A", "B", "C", "X", "Y", "Z", "Join", "Goal",
+            "StartA", "StartB", "StartC", "ABC", "ABCJoin",
+            "StartX", "XY", "YZ", "ZJoin", "JoinGoal",
+        ],
+    )
+    for name, expression in [
+        ("StartA", "Start → A"),
+        ("StartB", "Start → B"),
+        ("StartC", "Start → C"),
+        ("ABC", "A & B & C"),
+        ("ABCJoin", "ABC → Join"),
+        ("StartX", "Start → X"),
+        ("XY", "X → Y"),
+        ("YZ", "Y → Z"),
+        ("ZJoin", "Z → Join"),
+        ("JoinGoal", "Join → Goal"),
+    ]:
+        set_relation(horon_db, name, expression)
+
+    result = horon_db.compile(["Start"], "Goal")
+
+    assert result["passed"] is True
+    assert edge_names(result) == [
+        "StartX", "XY", "YZ", "ZJoin", "JoinGoal",
+    ]
+
+
+def test_compile_deduplicates_shared_prefix_when_costing_and_branches(
+    horon_db,
+):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "Shared", "A", "B", "X", "Y", "Z", "V", "W",
+            "Join",
+            "Goal", "StartShared", "SharedA", "SharedB", "AB", "ABJoin",
+            "StartX", "XY", "YZ", "ZV", "VW", "WJoin", "JoinGoal",
+        ],
+    )
+    set_relation(horon_db, "StartShared", "Start → Shared", status=None)
+    for name, expression in [
+        ("SharedA", "Shared → A"),
+        ("SharedB", "Shared → B"),
+        ("AB", "A & B"),
+        ("ABJoin", "AB → Join"),
+        ("XY", "X → Y"),
+        ("YZ", "Y → Z"),
+        ("ZV", "Z → V"),
+        ("VW", "V → W"),
+        ("WJoin", "W → Join"),
+        ("JoinGoal", "Join → Goal"),
+    ]:
+        set_relation(horon_db, name, expression)
+    set_relation(horon_db, "StartX", "Start → X", status=None)
+
+    result = horon_db.compile(["Start"], "Goal")
+
+    assert result["passed"] is True
+    assert edge_names(result) == [
+        "StartShared", "SharedA", "SharedB", "AB", "ABJoin", "JoinGoal",
+    ]
+    assert edge_statuses(result).count("hypothesis") == 1
+
+
+def test_compile_keeps_locally_longer_routes_that_share_a_hypothesis(
+    horon_db,
+):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "Shared", "A", "B", "Join", "Goal",
+            "DirectA", "DirectB", "StartShared", "SharedA", "SharedB",
+            "AB", "ABJoin", "JoinGoal",
+        ],
+    )
+    for name, expression in [
+        ("DirectA", "Start → A"),
+        ("DirectB", "Start → B"),
+        ("StartShared", "Start → Shared"),
+    ]:
+        set_relation(horon_db, name, expression, status=None)
+    for name, expression in [
+        ("SharedA", "Shared → A"),
+        ("SharedB", "Shared → B"),
+        ("AB", "A & B"),
+        ("ABJoin", "AB → Join"),
+        ("JoinGoal", "Join → Goal"),
+    ]:
+        set_relation(horon_db, name, expression)
+
+    result = horon_db.compile(["Start"], "Goal")
+
+    assert result["passed"] is True
+    assert edge_names(result) == [
+        "StartShared", "SharedA", "SharedB", "AB", "ABJoin", "JoinGoal",
+    ]
+    assert edge_statuses(result).count("hypothesis") == 1
+
+
 def test_compile_requires_all_group_members_before_activating_and_group(horon_db):
     create_concepts(
         horon_db,

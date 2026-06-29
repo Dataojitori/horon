@@ -46,7 +46,7 @@ def test_add_variation_requires_explicit_short_code_after_ambiguity(horon_db):
     create_concepts(horon_db, ["A", "B", "C", "Poly"])
     horon_db.add("Poly", "variation", "A → B")
 
-    with pytest.raises(ValueError, match="Multiple variations"):
+    with pytest.raises(ValueError, match="multiple variations"):
         horon_db.update("Poly", "evidence", "ambiguous write")
 
     first = horon_db.read_concept("Poly").variations[0].short_code

@@ -50,12 +50,12 @@ def get_graph():
     with _db_lock:
         concepts = db.get_all_concepts()
 
-        db._load_graph()
+        graph = db._load_relation_graph()
 
         degree: Counter[int] = Counter()
         links: list[dict] = []
 
-        for src, edges in getattr(db, "_adjacency", {}).items():
+        for src, edges in graph.adjacency.items():
             for tgt, edge_cid, edge_sc, status in edges:
                 links.append({
                     "source": src,
@@ -68,7 +68,7 @@ def get_graph():
                 degree[tgt] += 1
                 degree[edge_cid] += 1
 
-        for members, edge_cid, edge_sc, status in getattr(db, "_and_groups", []):
+        for members, edge_cid, edge_sc, status in graph.and_groups:
             mems = list(members)
             for i, a in enumerate(mems):
                 for b in mems[i + 1:]:
