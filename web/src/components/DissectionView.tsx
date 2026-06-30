@@ -225,33 +225,47 @@ export default function DissectionView({
 
     // Add internal links (composition relations)
     focalConcept.variations.forEach((v) => {
-      if (v.members) {
-        const pos1Members = v.members.filter((m) => m.position === 1);
-        const pos2Members = v.members.filter((m) => m.position === 2);
+      const members = v.members;
+      if (!members) return;
 
-        if (pos1Members.length > 0 && pos2Members.length > 0) {
-          // Directed relation: pos1 -> pos2
-          links.push({
-            source: pos1Members[0].concept_id,
-            target: pos2Members[0].concept_id,
-            status: v.status ?? "hypothesis",
-            kind: "internal-directed",
-            short_code: v.short_code,
-          });
-        } else if (pos1Members.length > 1) {
-          // 无序并起：成员两两相连（完全图），不画箭头，靠这些连线的引力聚在
-          // 一起。与 galaxy 视图 get_graph 的处理一致；不要画成链，否则会缺边
-          // （A、B、C 串成 A-B-C 会丢掉 A-C）。
-          for (let i = 0; i < pos1Members.length; i++) {
-            for (let j = i + 1; j < pos1Members.length; j++) {
+      const positions = Array.from(new Set(members.map((m) => m.position))).sort((a, b) => a - b);
+
+      // 1. 同位置成员之间的并列连线 (无向，无箭头，靠引力聚拢)
+      positions.forEach((pos) => {
+        const posMembers = members.filter((m) => m.position === pos);
+        if (posMembers.length > 1) {
+          for (let i = 0; i < posMembers.length; i++) {
+            for (let j = i + 1; j < posMembers.length; j++) {
               links.push({
-                source: pos1Members[i].concept_id,
-                target: pos1Members[j].concept_id,
+                source: posMembers[i].concept_id,
+                target: posMembers[j].concept_id,
                 status: v.status ?? "hypothesis",
                 kind: "internal-joint",
                 short_code: v.short_code,
               });
             }
+          }
+        }
+      });
+
+      // 2. 不同位置之间的递进连线 (有向箭头 pos1 -> pos2)
+      if (positions.length > 1) {
+        for (let i = 0; i < positions.length - 1; i++) {
+          const currentPosMembers = members.filter((m) => m.position === positions[i]);
+          const nextPosMembers = members.filter((m) => m.position === positions[i + 1]);
+          
+          if (currentPosMembers.length > 0 && nextPosMembers.length > 0) {
+            currentPosMembers.forEach((sourceMember) => {
+              nextPosMembers.forEach((targetMember) => {
+                links.push({
+                  source: sourceMember.concept_id,
+                  target: targetMember.concept_id,
+                  status: v.status ?? "hypothesis",
+                  kind: "internal-directed",
+                  short_code: v.short_code,
+                });
+              });
+            });
           }
         }
       }

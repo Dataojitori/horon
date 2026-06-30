@@ -18,10 +18,10 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from .compiler import Compiler, RelationGraph
+from .compiler import Compiler, ExpressionRule, RelationGraph
 from .models import (
     Concept, VariationDetail, ComposeMemberDetail,
-    RelationRow, OutboundRelation, ReadResult,
+    DirectedRelation, RelationMember, ReadResult,
     MutationResult,
 )
 
@@ -72,7 +72,6 @@ def init_db():
 
 def _now():
     return time.strftime("%Y-%m-%dT%H:%M:%S")
-
 
 
 from functools import wraps
@@ -293,83 +292,75 @@ class HoronDB:
     def get_all_concepts_overview(self) -> list[dict]:
         """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。"""
         concepts = self.get_all_concepts()
-        
+
         var_rows = self.conn.execute(
             "SELECT concept_id, short_code, status FROM variations "
             "ORDER BY concept_id, short_code"
         ).fetchall()
-        vars_by_cid = {}
+        vars_by_cid: dict[int, list] = {}
         for r in var_rows:
             vars_by_cid.setdefault(r["concept_id"], []).append(r)
-            
+
         mem_rows = self.conn.execute(
             "SELECT cm.concept_id, cm.short_code, cm.position, c.name "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "ORDER BY cm.position, cm.member_concept_id"
         ).fetchall()
-        
-        mems_by_var = {}
+
+        mems_by_var: dict[tuple, dict[int, list[str]]] = {}
         for r in mem_rows:
             key = (r["concept_id"], r["short_code"])
-            if key not in mems_by_var:
-                mems_by_var[key] = {1: [], 2: []}
-            mems_by_var[key][r["position"]].append(r["name"])
-            
+            mems_by_var.setdefault(key, {}).setdefault(
+                r["position"], []).append(r["name"])
+
         result = []
         for c in concepts:
             c_dict = {
                 "id": c.id,
                 "name": c.name,
                 "disclosure": c.disclosure,
-                "variations": []
+                "variations": [],
             }
             for v in vars_by_cid.get(c.id, []):
                 key = (c.id, v["short_code"])
                 expr = None
                 if key in mems_by_var:
-                    m = mems_by_var[key]
-                    if m[2]:
-                        expr = f"{m[1][0]} → {m[2][0]}"
+                    by_pos = mems_by_var[key]
+                    max_pos = max(by_pos)
+                    if max_pos >= 2:
+                        expr = " → ".join(
+                            " & ".join(by_pos[p])
+                            for p in sorted(by_pos)
+                        )
                     else:
-                        expr = " & ".join(m[1])
-                        
+                        expr = " & ".join(by_pos[1])
+
                 c_dict["variations"].append({
                     "short_code": v["short_code"],
                     "status": v["status"] or "hypothesis",
-                    "expression": expr
+                    "expression": expr,
                 })
             result.append(c_dict)
-            
+
         return result
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _parse_expression(self, expression: str) -> tuple[list[int], list[int]]:
+    def _parse_expression(self, expression: str) -> dict[int, list[int]]:
         """拆分表达式，解析为 concept_id，并校验合法性。
 
-        有序 (A → B): 返回 ([id_A], [id_B])
-        无序 (A & B & C): 返回 ([id_A, id_B, id_C], [])
+        返回 {position: [concept_ids]} 的映射。
+
+        有序 (A → B):           {1: [id_A], 2: [id_B]}
+        有序多段 (A → B → C):   {1: [id_A], 2: [id_B], 3: [id_C]}
+        有序段内并列 (A → B → C & D): {1: [id_A], 2: [id_B], 3: [id_C, id_D]}
+        无序 (A & B & C):       {1: [id_A, id_B, id_C]}
         """
-        arrow_count = expression.count("→")
-        amp_count = expression.count("&")
+        segments = expression.split("→")
 
-        if arrow_count > 1:
-            raise ValueError("Expression can contain at most one →.")
-        if arrow_count and amp_count:
-            raise ValueError(
-                "Cannot mix → and & in one expression. "
-                "Create intermediate concepts for complex compositions."
-            )
-
-        if arrow_count:
-            left, right = expression.split("→", 1)
-            left, right = left.strip(), right.strip()
-            if not left or not right:
-                raise ValueError("→ requires a concept on each side.")
-            names_at_1 = [left]
-            names_at_2 = [right]
-        else:
+        if len(segments) == 1:
+            # 纯 & 表达式（无箭头）
             parts = [s.strip() for s in expression.split("&")]
             if any(not p for p in parts):
                 raise ValueError(
@@ -378,21 +369,26 @@ class HoronDB:
                 )
             if len(parts) < 2:
                 raise ValueError("& requires at least 2 concepts.")
-            names_at_1 = parts
-            names_at_2 = []
+            ids = [self._resolve_id(n)[0] for n in parts]
+            if len(set(ids)) != len(ids):
+                raise ValueError("A concept cannot appear more than once in the same position (i.e. A & A is invalid).")
+            return {1: ids}
 
-        ids_at_1 = [self._resolve_id(n)[0] for n in names_at_1]
-        ids_at_2 = [self._resolve_id(n)[0] for n in names_at_2]
+        # 多段有序表达式：每段按 & 拆分段内成员
+        pos_map: dict[int, list[int]] = {}
+        all_ids: list[int] = []
+        for pos_idx, segment in enumerate(segments, start=1):
+            parts = [s.strip() for s in segment.split("&")]
+            if any(not p for p in parts):
+                raise ValueError(
+                    f"Empty concept at position {pos_idx}. "
+                    f"Each position requires at least one concept."
+                )
+            ids = [self._resolve_id(n)[0] for n in parts]
+            pos_map[pos_idx] = ids
+            all_ids.extend(ids)
 
-        members = ids_at_1 + ids_at_2
-
-        # 成员去重：同一概念在一个表达式里出现多次没有语义，且
-        # compose_members 主键 (concept_id, short_code, member_concept_id)
-        # 不含 position，重复（含 A → A 这类自环）会直接撞主键。
-        if len(set(members)) != len(members):
-            raise ValueError("A concept cannot appear more than once in an expression.")
-
-        return ids_at_1, ids_at_2
+        return pos_map
 
     def _next_short_code(self, concept_id: int) -> str:
         """为 concept 生成随机 short_code（4 位 hex，不复用已删除的码）。"""
@@ -456,15 +452,13 @@ class HoronDB:
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
 
-        ids_at_1, ids_at_2 = self._parse_expression(expression)
+        pos_map = self._parse_expression(expression)
 
-        members = ids_at_1 + ids_at_2
-        # 自引用 → 不允许（成员不能包含自己）
-        if cid in members:
+        all_members = [mid for ids in pos_map.values() for mid in ids]
+        if cid in all_members:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
 
-        # 重复组合检测
         existing = self._find_composition_variation(expression)
         if existing is not None:
             exist_cid, exist_sc, _ = existing
@@ -481,20 +475,14 @@ class HoronDB:
             "VALUES (?,?,?,?)",
             (cid, sc, now, now),
         )
-        for member_cid in ids_at_1:
-            self.conn.execute(
-                "INSERT INTO compose_members "
-                "(concept_id, short_code, member_concept_id, position) "
-                "VALUES (?,?,?,1)",
-                (cid, sc, member_cid),
-            )
-        for member_cid in ids_at_2:
-            self.conn.execute(
-                "INSERT INTO compose_members "
-                "(concept_id, short_code, member_concept_id, position) "
-                "VALUES (?,?,?,2)",
-                (cid, sc, member_cid),
-            )
+        for pos, member_ids in pos_map.items():
+            for member_cid in member_ids:
+                self.conn.execute(
+                    "INSERT INTO compose_members "
+                    "(concept_id, short_code, member_concept_id, position) "
+                    "VALUES (?,?,?,?)",
+                    (cid, sc, member_cid, pos),
+                )
         return MutationResult(
             message=f"Success. Added variation {sc} to {label}.",
             concept_id=cid, concept_name=cname, short_code=sc,
@@ -845,15 +833,13 @@ class HoronDB:
         cname = self._resolve_concept_name(cid)
         label = f"'{node}' ('{cname}', id={cid})"
 
-        ids_at_1, ids_at_2 = self._parse_expression(expression)
+        pos_map = self._parse_expression(expression)
 
-        members = ids_at_1 + ids_at_2
-        # 自引用 → 不允许
-        if cid in members:
+        all_members = [mid for ids in pos_map.values() for mid in ids]
+        if cid in all_members:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
 
-        # 重复组合检测（排除自身）
         existing = self._find_composition_variation(expression)
         if existing is not None:
             exist_cid, exist_sc, _ = existing
@@ -863,26 +849,19 @@ class HoronDB:
                     f"Variation '{exist_name}:{exist_sc}' already "
                     f"has the same composition: {expression}")
 
-        # 清除旧组合，写入新组合
         self.conn.execute(
             "DELETE FROM compose_members "
             "WHERE concept_id=? AND short_code=?",
             (cid, sc),
         )
-        for member_cid in ids_at_1:
-            self.conn.execute(
-                "INSERT INTO compose_members "
-                "(concept_id, short_code, member_concept_id, position) "
-                "VALUES (?,?,?,1)",
-                (cid, sc, member_cid),
-            )
-        for member_cid in ids_at_2:
-            self.conn.execute(
-                "INSERT INTO compose_members "
-                "(concept_id, short_code, member_concept_id, position) "
-                "VALUES (?,?,?,2)",
-                (cid, sc, member_cid),
-            )
+        for pos, member_ids in pos_map.items():
+            for member_cid in member_ids:
+                self.conn.execute(
+                    "INSERT INTO compose_members "
+                    "(concept_id, short_code, member_concept_id, position) "
+                    "VALUES (?,?,?,?)",
+                    (cid, sc, member_cid, pos),
+                )
         self.conn.execute(
             "UPDATE variations SET status=NULL, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
@@ -957,152 +936,158 @@ class HoronDB:
         ).fetchall()
         if not rows:
             return None
-        pos1 = [r["name"] for r in rows if r["position"] == 1]
-        pos2 = [r["name"] for r in rows if r["position"] == 2]
-        if pos2:
-            return f"{pos1[0]} → {pos2[0]}"
-        return " & ".join(pos1)
+        by_pos: dict[int, list[str]] = {}
+        for r in rows:
+            by_pos.setdefault(r["position"], []).append(r["name"])
+        max_pos = max(by_pos)
+        if max_pos >= 2:
+            return " → ".join(
+                " & ".join(by_pos[p]) for p in sorted(by_pos)
+            )
+        return " & ".join(by_pos[1])
 
     def _find_composition_variation(
         self, expression: str,
     ) -> tuple[int, str, str | None] | None:
-        """找到持有某个组合的 variation → (concept_id, short_code, status)。"""
+        """找到持有某个组合的 variation → (concept_id, short_code, status)。
+
+        通过构建目标组合的规范签名（position→sorted member_ids），
+        在所有候选 variation 中精确匹配。
+        """
         try:
-            ids_at_1, ids_at_2 = self._parse_expression(expression)
+            pos_map = self._parse_expression(expression)
         except ValueError:
             return None
 
-        if ids_at_2:
-            # →: position 1 和 position 2 各一个
-            row = self.conn.execute(
-                "SELECT cm1.concept_id, cm1.short_code, v.status "
-                "FROM compose_members cm1 "
-                "JOIN compose_members cm2 "
-                "  ON cm1.concept_id = cm2.concept_id "
-                "  AND cm1.short_code = cm2.short_code "
-                "JOIN variations v "
-                "  ON v.concept_id = cm1.concept_id "
-                "  AND v.short_code = cm1.short_code "
-                "WHERE cm1.member_concept_id=? AND cm1.position=1 "
-                "AND cm2.member_concept_id=? AND cm2.position=2",
-                (ids_at_1[0], ids_at_2[0]),
-            ).fetchone()
-        else:
-            # &: 全在 position 1，精确匹配成员集合
-            # 排除带 position 2 的有序关系
-            n = len(ids_at_1)
-            placeholders = ",".join("?" * n)
-            row = self.conn.execute(
-                f"SELECT cm.concept_id, cm.short_code, v.status "
-                f"FROM compose_members cm "
-                f"JOIN variations v "
-                f"  ON v.concept_id = cm.concept_id "
-                f"  AND v.short_code = cm.short_code "
-                f"WHERE cm.position=1 "
-                f"AND cm.member_concept_id IN ({placeholders}) "
-                f"AND NOT EXISTS ("
-                f"  SELECT 1 FROM compose_members cm_chk "
-                f"  WHERE cm_chk.concept_id = cm.concept_id "
-                f"  AND cm_chk.short_code = cm.short_code "
-                f"  AND cm_chk.position = 2"
-                f") "
-                f"GROUP BY cm.concept_id, cm.short_code "
-                f"HAVING COUNT(DISTINCT cm.member_concept_id) = ? "
-                f"AND ? = ("
-                f"  SELECT COUNT(*) FROM compose_members cm2 "
-                f"  WHERE cm2.concept_id = cm.concept_id "
-                f"  AND cm2.short_code = cm.short_code "
-                f"  AND cm2.position = 1"
-                f")",
-                (*ids_at_1, n, n),
-            ).fetchone()
+        target_sig = tuple(
+            (pos, tuple(sorted(ids)))
+            for pos, ids in sorted(pos_map.items())
+        )
+        total_members = sum(len(ids) for ids in pos_map.values())
+        all_member_ids = [mid for ids in pos_map.values() for mid in ids]
 
-        if row:
-            return (row["concept_id"], row["short_code"], row["status"])
+        # 先用成员数量快速过滤候选
+        placeholders = ",".join("?" * len(all_member_ids))
+        candidates = self.conn.execute(
+            f"SELECT cm.concept_id, cm.short_code "
+            f"FROM compose_members cm "
+            f"WHERE cm.member_concept_id IN ({placeholders}) "
+            f"GROUP BY cm.concept_id, cm.short_code "
+            f"HAVING COUNT(*) = ?",
+            (*all_member_ids, total_members),
+        ).fetchall()
+
+        for cand in candidates:
+            rows = self.conn.execute(
+                "SELECT member_concept_id, position FROM compose_members "
+                "WHERE concept_id = ? AND short_code = ?",
+                (cand["concept_id"], cand["short_code"]),
+            ).fetchall()
+            if len(rows) != total_members:
+                continue
+            cand_map: dict[int, list[int]] = {}
+            for r in rows:
+                cand_map.setdefault(r["position"], []).append(
+                    r["member_concept_id"])
+            cand_sig = tuple(
+                (pos, tuple(sorted(ids)))
+                for pos, ids in sorted(cand_map.items())
+            )
+            if cand_sig == target_sig:
+                status = self.conn.execute(
+                    "SELECT status FROM variations "
+                    "WHERE concept_id = ? AND short_code = ?",
+                    (cand["concept_id"], cand["short_code"]),
+                ).fetchone()
+                return (
+                    cand["concept_id"],
+                    cand["short_code"],
+                    status["status"],
+                )
         return None
+
+    def _query_directed_relations(
+        self, concept_id: int, *, inbound: bool,
+    ) -> dict[str, list[DirectedRelation]]:
+        """查 concept_id 的有向关系，按 status 分组。
+
+        inbound=True：concept_id 作为被指向方（出现在 position >= 2），
+            关系另一端是相邻上一个 position (pos - 1) 的成员。
+        inbound=False：concept_id 作为指向方（其 position + 1 存在），
+            关系另一端是相邻下一个 position (pos + 1) 的成员。
+
+        单条 JOIN 一次取出 (variation, status, 另一端成员名/disclosure)，
+        避免逐行回查；表达式字符串按 variation 缓存，不重复构建。
+        """
+        # self_pos 是 concept_id 所在 position，other_pos 是关系另一端的相邻 position。
+        offset = -1 if inbound else 1
+        rows = self.conn.execute(
+            "SELECT "
+            "  self_cm.concept_id AS v_cid, "
+            "  self_cm.short_code AS v_sc, "
+            "  self_cm.position   AS self_pos, "
+            "  v.status           AS status, "
+            "  rel.name           AS concept_name, "
+            "  other_cm.member_concept_id AS member_id, "
+            "  m.name             AS member_name, "
+            "  m.disclosure       AS member_disclosure "
+            "FROM compose_members self_cm "
+            "JOIN variations v "
+            "  ON v.concept_id = self_cm.concept_id "
+            "  AND v.short_code = self_cm.short_code "
+            "JOIN concepts rel ON rel.id = self_cm.concept_id "
+            "JOIN compose_members other_cm "
+            "  ON other_cm.concept_id = self_cm.concept_id "
+            "  AND other_cm.short_code = self_cm.short_code "
+            "  AND other_cm.position = self_cm.position + ? "
+            "JOIN concepts m ON m.id = other_cm.member_concept_id "
+            "WHERE self_cm.member_concept_id = ? "
+            "ORDER BY self_cm.concept_id, self_cm.short_code, "
+            "self_cm.position, other_cm.member_concept_id",
+            (offset, concept_id),
+        ).fetchall()
+
+        grouped: dict[str, list[DirectedRelation]] = {
+            "confirmed": [], "negated": [], "hypothesis": [],
+        }
+        # 同一 (variation, position) 的多个并列成员聚成一条关系。
+        relations: dict[tuple[int, str, int], DirectedRelation] = {}
+        expr_cache: dict[tuple[int, str], str | None] = {}
+        for row in rows:
+            v_cid, v_sc, self_pos = row["v_cid"], row["v_sc"], row["self_pos"]
+            s = row["status"] or "hypothesis"
+            if s not in grouped:
+                continue
+            key = (v_cid, v_sc, self_pos)
+            relation = relations.get(key)
+            if relation is None:
+                var_key = (v_cid, v_sc)
+                if var_key not in expr_cache:
+                    expr_cache[var_key] = self._get_expression(v_cid, v_sc)
+                relation = DirectedRelation(
+                    expression=expr_cache[var_key] or "",
+                    concept_id=v_cid,
+                    concept_name=row["concept_name"],
+                    members=[],
+                )
+                relations[key] = relation
+                grouped[s].append(relation)
+            relation.members.append(RelationMember(
+                concept_id=row["member_id"],
+                concept_name=row["member_name"],
+                disclosure=row["member_disclosure"],
+            ))
+        return grouped
 
     def _query_inbound_relations(
         self, concept_id: int,
-    ) -> dict[str, list[RelationRow]]:
-        """查所有以 concept_id 为 target（position 2）的有向关系，按 status 分组。"""
-        rows = self.conn.execute(
-            "SELECT DISTINCT "
-            "  c_rel.id AS concept_id, c_rel.name AS concept_name, v.status, "
-            "  c_src.id AS from_concept_id, "
-            "  c_src.name AS from_concept_name, "
-            "  c_src.disclosure AS from_concept_disclosure, "
-            "  c_tgt.name AS to_concept_name "
-            "FROM compose_members cm2 "
-            "JOIN compose_members cm1 "
-            "  ON cm1.concept_id = cm2.concept_id "
-            "  AND cm1.short_code = cm2.short_code "
-            "  AND cm1.position = 1 "
-            "JOIN variations v "
-            "  ON v.concept_id = cm2.concept_id "
-            "  AND v.short_code = cm2.short_code "
-            "JOIN concepts c_rel ON v.concept_id = c_rel.id "
-            "JOIN concepts c_src ON cm1.member_concept_id = c_src.id "
-            "JOIN concepts c_tgt ON cm2.member_concept_id = c_tgt.id "
-            "WHERE cm2.member_concept_id = ? AND cm2.position = 2",
-            (concept_id,),
-        ).fetchall()
-        grouped: dict[str, list[RelationRow]] = {
-            "confirmed": [], "negated": [], "hypothesis": [],
-        }
-        for row in rows:
-            # 未设状态(NULL)等同于 hypothesis，与编译图的语义保持一致。
-            s = row["status"] or "hypothesis"
-            if s in grouped:
-                grouped[s].append(RelationRow(
-                    expression=f"{row['from_concept_name']} → {row['to_concept_name']}",
-                    concept_id=row["concept_id"],
-                    concept_name=row["concept_name"],
-                    from_concept_id=row["from_concept_id"],
-                    from_concept_disclosure=row["from_concept_disclosure"],
-                ))
-        return grouped
+    ) -> dict[str, list[DirectedRelation]]:
+        return self._query_directed_relations(concept_id, inbound=True)
 
     def _query_outbound_relations(
         self, concept_id: int,
-    ) -> dict[str, list[OutboundRelation]]:
-        """查所有以 concept_id 为 source（position 1）的有向关系，按 status 分组。"""
-        rows = self.conn.execute(
-            "SELECT DISTINCT "
-            "  c_src.name AS from_concept_name, "
-            "  c_tgt.id AS target_concept_id, "
-            "  c_tgt.name AS target_concept_name, "
-            "  c_tgt.disclosure AS target_concept_disclosure, "
-            "  c_rel.id AS concept_id, c_rel.name AS concept_name, "
-            "  v.status "
-            "FROM compose_members cm1 "
-            "JOIN compose_members cm2 "
-            "  ON cm1.concept_id = cm2.concept_id "
-            "  AND cm1.short_code = cm2.short_code "
-            "  AND cm2.position = 2 "
-            "JOIN variations v "
-            "  ON v.concept_id = cm1.concept_id "
-            "  AND v.short_code = cm1.short_code "
-            "JOIN concepts c_rel ON v.concept_id = c_rel.id "
-            "JOIN concepts c_src ON cm1.member_concept_id = c_src.id "
-            "JOIN concepts c_tgt ON cm2.member_concept_id = c_tgt.id "
-            "WHERE cm1.member_concept_id = ? AND cm1.position = 1",
-            (concept_id,),
-        ).fetchall()
-        grouped: dict[str, list[OutboundRelation]] = {
-            "confirmed": [], "negated": [], "hypothesis": [],
-        }
-        for row in rows:
-            # 未设状态(NULL)等同于 hypothesis，与编译图的语义保持一致。
-            s = row["status"] or "hypothesis"
-            if s in grouped:
-                grouped[s].append(OutboundRelation(
-                    expression=f"{row['from_concept_name']} → {row['target_concept_name']}",
-                    concept_id=row["concept_id"],
-                    concept_name=row["concept_name"],
-                    target_concept_id=row["target_concept_id"],
-                    target_concept_disclosure=row["target_concept_disclosure"],
-                ))
-        return grouped
+    ) -> dict[str, list[DirectedRelation]]:
+        return self._query_directed_relations(concept_id, inbound=False)
 
     def _scan_alerts(self, concept_ids: set[int]) -> list[str]:
         """检查给定 concept 集的 unless 条件，返回已触发的警报。"""
@@ -1230,78 +1215,35 @@ class HoronDB:
     # ── Compile (path verification) ─────────────────────────────────────────
 
     def _load_relation_graph(self) -> RelationGraph:
-        """从 DB 加载编译器和可视化共用的只读图索引。
-
-        → 和 & 分开存储（语义不同）：
-        - → 是点对点的有向边，直接用于 Dijkstra 寻路 + 影分身。
-        - & 是多成员共现组。成员之间不互通（& 不提供推导关系）。
-          全部成员到齐时，组合概念本身被激活。
-
-        只返回编译和可视化都会使用的基础结构：
-          adjacency:  → 边的邻接表。
-            from_cid -> [(to_cid, edge_cid, edge_sc, status)]
-          and_groups: & 组的列表。
-            [(member_set, edge_cid, edge_sc, status)]
-
-        入边、成员反向索引和 step container 索引只有编译器需要，
-        由 Compiler 在自己的边界内构建，避免 /api/graph 支付这些计算。
-
-        包含 negated 状态的边（供外部获取全量图谱使用），算法逻辑在遍历时自行跳过。名字不存——下游按需查 concepts 表。
-        """
-        # ── → 边 ──
-        # compose_members 自连接：pos-1 是起点，pos-2 是终点，
-        # 同 (concept_id, short_code) 的一对即一条有向边。
-        adjacency: dict[int, list[tuple[int, int, str, str]]] = {}
+        """Load each variation as one indivisible ordered expression rule."""
         rows = self.conn.execute(
-            "SELECT "
-            "  cm1.member_concept_id AS from_cid, "
-            "  cm2.member_concept_id AS to_cid, "
-            "  cm1.concept_id AS edge_cid, "
-            "  cm1.short_code AS edge_sc, "
-            "  v.status "
-            "FROM compose_members cm1 "
-            "JOIN compose_members cm2 USING (concept_id, short_code) "
-            "JOIN variations v USING (concept_id, short_code) "
-            "WHERE cm1.position = 1 AND cm2.position = 2"
-        ).fetchall()
-        for r in rows:
-            status = r["status"] or "hypothesis"
-            adjacency.setdefault(r["from_cid"], []).append(
-                (r["to_cid"], r["edge_cid"], r["edge_sc"], status))
-        # ── & 组 ──
-        # 全部成员都在 pos-1、没有 pos-2 的 variation 就是 & 关系。
-        # 逐行取出后按 (concept_id, short_code) 分组，拼成成员集合。
-        rows = self.conn.execute(
-            "SELECT cm.concept_id AS edge_cid, cm.short_code AS edge_sc, "
-            "  cm.member_concept_id AS member_cid, v.status "
+            "SELECT cm.concept_id, cm.short_code, cm.position, "
+            "cm.member_concept_id, v.status "
             "FROM compose_members cm "
             "JOIN variations v USING (concept_id, short_code) "
-            "WHERE cm.position = 1 "
-            "AND NOT EXISTS ("
-            "  SELECT 1 FROM compose_members cm2 "
-            "  WHERE cm2.concept_id = cm.concept_id "
-            "  AND cm2.short_code = cm.short_code "
-            "  AND cm2.position = 2)"
+            "ORDER BY cm.concept_id, cm.short_code, cm.position, "
+            "cm.member_concept_id"
         ).fetchall()
-        # 按 variation 分组，收集成员集合
-        raw: dict[tuple[int, str], tuple[set[int], str]] = {}
-        for r in rows:
-            key = (r["edge_cid"], r["edge_sc"])
-            if key not in raw:
-                raw[key] = (set(), r["status"] or "hypothesis")
-            raw[key][0].add(r["member_cid"])
+        grouped: dict[tuple[int, str], tuple[dict[int, set[int]], str]] = {}
+        for row in rows:
+            key = (row["concept_id"], row["short_code"])
+            if key not in grouped:
+                grouped[key] = ({}, row["status"] or "hypothesis")
+            grouped[key][0].setdefault(row["position"], set()).add(
+                row["member_concept_id"])
 
-        # 构建 & 组列表
-        and_groups: list[tuple[frozenset[int], int, str, str]] = []
-        for (edge_cid, edge_sc), (members, status) in raw.items():
-            frozen_members = frozenset(members)
-            and_groups.append(
-                (frozen_members, edge_cid, edge_sc, status))
-
-        return RelationGraph(
-            adjacency=adjacency,
-            and_groups=and_groups,
-        )
+        expressions = []
+        for (concept_id, short_code), (by_position, status) in grouped.items():
+            expressions.append(ExpressionRule(
+                concept_id=concept_id,
+                short_code=short_code,
+                status=status,
+                positions=tuple(
+                    frozenset(by_position[position])
+                    for position in sorted(by_position)
+                ),
+            ))
+        return RelationGraph(tuple(expressions))
 
 
 
@@ -1321,11 +1263,6 @@ class HoronDB:
             waypoints = [self._resolve_id(s)[0] for s in waypoint_inputs]
         except ValueError as e:
             result["errors"].append(str(e))
-            return result
-
-        if len(waypoints) != len(set(waypoints)):
-            result["errors"].append(
-                "Duplicate waypoints are not allowed.")
             return result
 
         input_names = {
