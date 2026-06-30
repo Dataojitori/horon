@@ -86,7 +86,7 @@ def test_compile_counts_unconfirmed_and_group_as_hypothesis_cost(horon_db):
     set_relation(horon_db, "AB", "A & B", status=None)
     set_relation(horon_db, "BX", "B → X")
     set_relation(horon_db, "XG", "X → Goal")
-    set_relation(horon_db, "ABG", "AB → Goal")
+    set_relation(horon_db, "ABG", "AB → Goal", status=None)
 
     result = horon_db.compile(["A", "B"], "Goal")
 
@@ -270,7 +270,7 @@ def test_compile_can_activate_multi_member_group_after_all_waypoints(horon_db):
 def test_compile_ignores_negated_group_activation(horon_db):
     create_concepts(horon_db, ["A", "B", "Goal", "AB", "ABToGoal"])
     set_relation(horon_db, "AB", "A & B", status="negated")
-    set_relation(horon_db, "ABToGoal", "AB → Goal")
+    set_relation(horon_db, "ABToGoal", "AB → Goal", status=None)
 
     result = horon_db.compile(["A", "B"], "Goal")
 

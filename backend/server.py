@@ -216,3 +216,14 @@ def get_neighborhood(concept_id: int):
         "neighbors": neighbors,
         "internal_links": internal_links,
     }
+
+@app.post("/api/audit")
+def audit_database():
+    """触发全库状态审查。"""
+    assert db is not None
+    try:
+        with _db_lock:
+            logs = db.audit_status_integrity()
+        return {"downgraded_logs": logs}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))

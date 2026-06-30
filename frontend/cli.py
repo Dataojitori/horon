@@ -220,21 +220,24 @@ def _format_read_concept(result: ReadResult) -> str:
     outbound_lines.extend(format_rel_group("Hypotheses", result.outbound_hypotheses))
     outbound_lines.extend(format_rel_group("Negated", result.outbound_negated))
 
-    if inbound_lines or outbound_lines:
-        lines.append("RELATIONS (Connections to this Concept)")
+    lines.append("RELATIONS (Connections to this Concept)")
 
-        if inbound_lines:
-            lines.append("")
-            lines.append(f"[ INBOUND ] (Paths leading TO '{result.name}')")
-            lines.extend(inbound_lines)
+    lines.append("")
+    lines.append(f"[ INBOUND ] (Paths leading TO '{result.name}')")
+    if inbound_lines:
+        lines.extend(inbound_lines)
+    else:
+        lines.append("  (empty)")
 
-        if outbound_lines:
-            lines.append("")
-            lines.append(f"[ OUTBOUND ] (Paths leading FROM '{result.name}')")
-            lines.extend(outbound_lines)
+    lines.append("")
+    lines.append(f"[ OUTBOUND ] (Paths leading FROM '{result.name}')")
+    if outbound_lines:
+        lines.extend(outbound_lines)
+    else:
+        lines.append("  (empty)")
 
-        lines.append("")
-        lines.append("=" * 60)
+    lines.append("")
+    lines.append("=" * 60)
 
     return "\n".join(lines)
 

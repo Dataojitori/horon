@@ -42,6 +42,52 @@ def test_set_expression_resets_status_and_prevents_duplicate_composition(horon_d
         horon_db.set("RelTwo", "expression", "A → C")
 
 
+def test_losing_last_confirmed_variation_cascades_without_deleting_content(
+    horon_db,
+):
+    create_concepts(horon_db, ["A", "B", "C", "AtoB", "AtoBToC"])
+    set_relation(horon_db, "AtoB", "A → B")
+    set_relation(horon_db, "AtoBToC", "AtoB → C")
+    horon_db.update("AtoB", "evidence", "evidence for A to B")
+    horon_db.update("AtoBToC", "evidence", "evidence for the parent")
+
+    result = horon_db.set("A", "status", "hypothesis")
+
+    child = horon_db.read_concept("AtoB").variations[0]
+    parent = horon_db.read_concept("AtoBToC").variations[0]
+    assert child.status == "hypothesis"
+    assert parent.status == "hypothesis"
+    assert child.expression == "A → B"
+    assert parent.expression == "AtoB → C"
+    assert child.evidence == "evidence for A to B"
+    assert parent.evidence == "evidence for the parent"
+    assert "Cascaded downgrades:" in result.message
+    assert "Downgraded 'AtoB'" in result.message
+    assert "Downgraded 'AtoBToC'" in result.message
+
+
+def test_parent_stays_confirmed_while_member_has_another_confirmed_variation(
+    horon_db,
+):
+    create_concepts(horon_db, ["X", "Y", "A", "B", "AtoB"])
+    for name in ("X", "Y", "A", "B"):
+        horon_db.set(name, "status", "confirmed")
+
+    horon_db.add("A", "variation", "X → Y")
+    variations = horon_db.read_concept("A").variations
+    atomic = next(v for v in variations if v.expression is None)
+    composed = next(v for v in variations if v.expression == "X → Y")
+    horon_db.set(f"A:{composed.short_code}", "status", "confirmed")
+    set_relation(horon_db, "AtoB", "A → B")
+
+    result = horon_db.set(
+        f"A:{atomic.short_code}", "status", "hypothesis"
+    )
+
+    assert horon_db.read_concept("AtoB").variations[0].status == "confirmed"
+    assert "Cascaded downgrades:" not in result.message
+
+
 def test_add_variation_requires_explicit_short_code_after_ambiguity(horon_db):
     create_concepts(horon_db, ["A", "B", "C", "Poly"])
     horon_db.add("Poly", "variation", "A → B")

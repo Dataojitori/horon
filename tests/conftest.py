@@ -29,5 +29,29 @@ def create_concepts(db, names):
 
 def set_relation(db, name, expression, status="confirmed"):
     db.set(name, "expression", expression)
+    if status == "confirmed":
+        # 确认关系前，先确认其所有未确认的原子成员概念。
+        # 组合概念（已有 expression 的）不动——它们的状态由测试显式控制。
+        cid, sc = db._resolve_single_variation(name)
+        members = db.conn.execute(
+            "SELECT member_concept_id FROM compose_members "
+            "WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchall()
+        for row in members:
+            mid = row["member_concept_id"]
+            is_atom = not db.conn.execute(
+                "SELECT 1 FROM compose_members WHERE concept_id=?", (mid,)
+            ).fetchone()
+            if not is_atom:
+                continue
+            already_confirmed = db.conn.execute(
+                "SELECT 1 FROM variations "
+                "WHERE concept_id=? AND status='confirmed'", (mid,)
+            ).fetchone()
+            if already_confirmed:
+                continue
+            member_name = db._resolve_concept_name(mid)
+            db.set(member_name, "status", "confirmed")
     if status is not None:
         db.set(name, "status", status)

@@ -78,11 +78,18 @@ def _now():
 from functools import wraps
 
 def transactional(method):
-    '''确保方法执行在显式事务边界内。失败自动回滚，成功自动提交。'''
+    '''确保方法执行在显式事务边界内。失败自动回滚，成功自动提交。
+    支持重入：已在事务内的嵌套调用直接穿透，不会提前 commit。'''
     @wraps(method)
     def wrapper(self, *args, **kwargs):
-        with self.conn:
+        if getattr(self, '_in_transaction', False):
             return method(self, *args, **kwargs)
+        self._in_transaction = True
+        try:
+            with self.conn:
+                return method(self, *args, **kwargs)
+        finally:
+            self._in_transaction = False
     return wrapper
 
 class HoronDB:
@@ -599,6 +606,9 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (cid, sc),
         )
+
+        downgraded = self.audit_status_integrity()
+
         remaining = self.conn.execute(
             "SELECT COUNT(*) AS cnt FROM variations WHERE concept_id=?",
             (cid,),
@@ -607,15 +617,17 @@ class HoronDB:
         if remaining["cnt"] == 0:
             self.conn.execute(
                 "DELETE FROM concepts WHERE id=?", (cid,))
-            return MutationResult(
-                message=(f"Success. Deleted variation {sc} from {label}. "
-                         f"No variations remaining; concept deleted."),
-                concept_id=cid, concept_name=cname, short_code=sc,
-            )
+            msg = (f"Success. Deleted variation {sc} from {label}. "
+                   f"No variations remaining; concept deleted.")
+        else:
+            msg = (f"Success. Deleted variation {sc} from {label}. "
+                   f"{remaining['cnt']} variation(s) remaining.")
+
+        if downgraded:
+            msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
 
         return MutationResult(
-            message=(f"Success. Deleted variation {sc} from {label}. "
-                     f"{remaining['cnt']} variation(s) remaining."),
+            message=msg,
             concept_id=cid, concept_name=cname, short_code=sc,
         )
 
@@ -660,9 +672,15 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
+
+        downgraded = self.audit_status_integrity()
+        msg = (f"Success. Cleared expression and status for "
+               f"variation {sc} of {label}.")
+        if downgraded:
+            msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
+
         return MutationResult(
-            message=(f"Success. Cleared expression and status for "
-                     f"variation {sc} of {label}."),
+            message=msg,
             concept_id=cid, concept_name=cname, short_code=sc,
         )
 
@@ -709,15 +727,89 @@ class HoronDB:
         cid, sc = self._resolve_single_variation(node)
         cname = self._resolve_concept_name(cid)
         label = f"'{node}' ('{cname}', id={cid})"
+
+        if value == "confirmed":
+            members = self.conn.execute(
+                "SELECT member_concept_id FROM compose_members "
+                "WHERE concept_id=? AND short_code=?",
+                (cid, sc)
+            ).fetchall()
+            for row in members:
+                member_cid = row["member_concept_id"]
+                has_confirmed = self.conn.execute(
+                    "SELECT 1 FROM variations WHERE concept_id=? AND status='confirmed'",
+                    (member_cid,)
+                ).fetchone()
+                if not has_confirmed:
+                    member_name = self._resolve_concept_name(member_cid)
+                    raise ValueError(
+                        f"Cannot confirm variation. Member concept '{member_name}' "
+                        f"(id={member_cid}) has no confirmed variations."
+                    )
+
         self.conn.execute(
             "UPDATE variations SET status=?, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
             (value, _now(), cid, sc),
         )
+
+        downgraded = self.audit_status_integrity()
+        msg = f"Success. Status of {label} variation {sc} set to: {value}"
+        if downgraded:
+            msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
+
         return MutationResult(
-            message=f"Success. Status of {label} variation {sc} set to: {value}",
+            message=msg,
             concept_id=cid, concept_name=cname, short_code=sc,
         )
+
+    @transactional
+    def audit_status_integrity(self) -> list[str]:
+        """
+        审计数据库，降级违规的 confirmed 组合变种（即当其子元素没有任何 confirmed 变种时）。
+        由于子元素的降级可能导致父元素违规，本方法会循环执行级联降级，直到全库合规。
+        返回所有被降级的变种记录信息。
+        """
+        downgraded_logs = []
+        max_iterations = 100
+        for _ in range(max_iterations):
+            violating_variations = self.conn.execute("""
+                SELECT DISTINCT v.concept_id, v.short_code, c.name
+                FROM variations v
+                JOIN concepts c ON v.concept_id = c.id
+                JOIN compose_members cm ON v.concept_id = cm.concept_id AND v.short_code = cm.short_code
+                WHERE v.status = 'confirmed'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM variations child_v
+                      WHERE child_v.concept_id = cm.member_concept_id
+                        AND child_v.status = 'confirmed'
+                  )
+            """).fetchall()
+
+            if not violating_variations:
+                break
+
+            for row in violating_variations:
+                cid = row["concept_id"]
+                sc = row["short_code"]
+                cname = row["name"]
+                
+                self.conn.execute(
+                    "UPDATE variations SET status = 'hypothesis', updated_at = ? "
+                    "WHERE concept_id = ? AND short_code = ?",
+                    (_now(), cid, sc)
+                )
+                downgraded_logs.append(
+                    f"Downgraded '{cname}' (id={cid}, sc={sc}) to 'hypothesis' "
+                    f"due to unconfirmed child members."
+                )
+        else:
+            raise RuntimeError(
+                f"audit_status_integrity exceeded max_iterations ({max_iterations}). "
+                "Possible circular dependency or loop bug detected."
+            )
+
+        return downgraded_logs
 
     @transactional
     def _set_name(self, concept, new_name: str) -> MutationResult:
@@ -796,10 +888,16 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
+
+        downgraded = self.audit_status_integrity()
+        msg = (f"Success. Expression of {label} variation {sc} "
+               f"set to: {expression}. "
+               f"Status was also reset to null.")
+        if downgraded:
+            msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
+
         return MutationResult(
-            message=(f"Success. Expression of {label} variation {sc} "
-                     f"set to: {expression}. "
-                     f"Status was also reset to null."),
+            message=msg,
             concept_id=cid, concept_name=cname, short_code=sc,
         )
 
