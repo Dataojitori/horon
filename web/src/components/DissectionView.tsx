@@ -150,11 +150,11 @@ export default function DissectionView({
 
     const areaRadius = Math.sqrt((totalArea * 4.5) / Math.PI);
 
-    const minRadiusByNodeSize = maxHalfDiagonal + 110;
+    const minRadiusByNodeSize = maxHalfDiagonal + 50;
 
-    const countRadius = 160 + internalMembersList.length * 60;
+    const countRadius = 100 + internalMembersList.length * 30;
 
-    return Math.max(220, Math.min(500, Math.max(areaRadius, minRadiusByNodeSize, countRadius)));
+    return Math.max(140, Math.min(400, Math.max(areaRadius, minRadiusByNodeSize, countRadius)));
   };
 
   const CONTAINER_RADIUS = getDynamicContainerRadius();
@@ -960,7 +960,7 @@ export default function DissectionView({
             background: "radial-gradient(circle, rgba(74, 158, 255, 0.03) 0%, rgba(0, 0, 0, 0.2) 100%)",
             boxShadow: "inset 0 0 40px rgba(74, 158, 255, 0.05), 0 0 30px rgba(74, 158, 255, 0.02)",
             pointerEvents: "none",
-            zIndex: 2,
+            zIndex: 1,
           }}
         >
           <div

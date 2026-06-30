@@ -50,22 +50,18 @@ class VariationDetail(Variation):
 
 # ── 关系查询 ─────────────────────────────────────────────────
 
-class RelationRow(BaseModel):
-    """某个 concept 的入边关系（inbound）。"""
+class RelationMember(BaseModel):
+    concept_id: int
+    concept_name: str
+    disclosure: str | None = None
+
+
+class DirectedRelation(BaseModel):
+    """有向关系（inbound 或 outbound）。方向由其所在的列表上下文决定。"""
     expression: str               # "A → B"
     concept_id: int               # 关系概念的 ID
     concept_name: str             # 关系概念的名字
-    from_concept_id: int          # 起点概念的 ID
-    from_concept_disclosure: str | None = None
-
-
-class OutboundRelation(BaseModel):
-    """某个 concept 的出边关系（outbound）。"""
-    expression: str               # "A → B"
-    concept_id: int               # 关系概念的 ID
-    concept_name: str             # 关系概念的名字
-    target_concept_id: int        # 终点概念的 ID
-    target_concept_disclosure: str | None = None
+    members: list[RelationMember] # 关系另一端的概念列表（同一 position 并列的成员）
 
 
 # ── read_concept 返回 ───────────────────────────────────────
@@ -85,12 +81,12 @@ class ReadResult(BaseModel):
     disclosure: str | None = None
     aliases: list[str] = []
     variations: list[VariationDetail] = []
-    inbound_confirmed: list[RelationRow] = []
-    inbound_negated: list[RelationRow] = []
-    inbound_hypotheses: list[RelationRow] = []
-    outbound_confirmed: list[OutboundRelation] = []
-    outbound_negated: list[OutboundRelation] = []
-    outbound_hypotheses: list[OutboundRelation] = []
+    inbound_confirmed: list[DirectedRelation] = []
+    inbound_negated: list[DirectedRelation] = []
+    inbound_hypotheses: list[DirectedRelation] = []
+    outbound_confirmed: list[DirectedRelation] = []
+    outbound_negated: list[DirectedRelation] = []
+    outbound_hypotheses: list[DirectedRelation] = []
     alerts: list[str] = []
 
 

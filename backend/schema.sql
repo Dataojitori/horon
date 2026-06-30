@@ -30,9 +30,9 @@ CREATE TABLE IF NOT EXISTS compose_members (
     concept_id        INTEGER NOT NULL,
     short_code        TEXT    NOT NULL,
     member_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    position          INTEGER NOT NULL CHECK(position IN (1, 2)),
+    position          INTEGER NOT NULL CHECK(position >= 1),
     FOREIGN KEY (concept_id, short_code) REFERENCES variations(concept_id, short_code) ON DELETE CASCADE,
-    PRIMARY KEY (concept_id, short_code, member_concept_id)
+    PRIMARY KEY (concept_id, short_code, position, member_concept_id)
 );
 
 CREATE TABLE IF NOT EXISTS aliases (

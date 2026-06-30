@@ -9,7 +9,7 @@ def test_shared_relation_graph_does_not_build_compile_only_indexes(horon_db):
 
     graph = horon_db._load_relation_graph()
 
-    assert set(vars(graph)) == {"adjacency", "and_groups"}
+    assert set(vars(graph)) == {"expressions"}
 
 
 def test_graph_endpoint_uses_loaded_relation_graph(horon_db, monkeypatch):

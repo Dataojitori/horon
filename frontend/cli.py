@@ -204,10 +204,13 @@ def _format_read_concept(result: ReadResult) -> str:
             return []
         out = [f"  * {group_name}:"]
         for item in items:
-            disc = getattr(item, "from_concept_disclosure", None) or getattr(item, "target_concept_disclosure", None)
             out.append(f"    - {item.expression} (Concept ID: {item.concept_id}, Name: '{item.concept_name}')")
-            if disc:
-                out.append(f"      Disclosure: {disc}")
+            # 关系另一端可能是同一 position 的多个并列成员，逐个展示有 disclosure 的。
+            for member in item.members:
+                if member.disclosure:
+                    out.append(
+                        f"      Disclosure ({member.concept_name}): "
+                        f"{member.disclosure}")
         return out
 
     inbound_lines = []

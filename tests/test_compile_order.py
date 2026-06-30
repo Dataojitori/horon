@@ -1,10 +1,125 @@
 import time
 
 from conftest import create_concepts, set_relation
+from frontend.cli import _format_compile
 
 
 def edge_names(result):
     return [edge["name"] for edge in result["compiled_route"]]
+
+
+def edge_statuses(result):
+    return [edge["status"] for edge in result["compiled_route"]]
+
+
+def concept_names(result):
+    return [concept["name"] for concept in result["concept_order"]]
+
+
+def test_compile_large_unordered_position_avoids_parent_factorial(horon_db):
+    members = [f"M{i}" for i in range(8)]
+    relations = [f"StartM{i}" for i in range(8)]
+    create_concepts(horon_db, ["Start", "Group", *members, *relations])
+    for member, relation in zip(members, relations):
+        set_relation(horon_db, relation, f"Start → {member}")
+    set_relation(horon_db, "Group", " & ".join(members))
+
+    requested = ["Start", *reversed(members)]
+    started = time.perf_counter()
+    result = horon_db.compile(requested, "Group")
+    elapsed = time.perf_counter() - started
+
+    assert result["passed"] is True
+    order = concept_names(result)
+    indexes = [order.index(name) for name in [*requested, "Group"]]
+    assert indexes == sorted(indexes)
+    # The old n! enumeration takes tens of seconds for eight independent
+    # parents; leave generous headroom for slower CI machines.
+    assert elapsed < 5
+
+
+def test_compile_emits_multi_position_members_then_expression_concept(horon_db):
+    create_concepts(
+        horon_db,
+        ["Start", "A", "B", "Chain", "Goal", "StartA", "ChainGoal"],
+    )
+    set_relation(horon_db, "StartA", "Start → A")
+    set_relation(horon_db, "Chain", "A → B → A")
+    set_relation(horon_db, "ChainGoal", "Chain → Goal")
+
+    result = horon_db.compile(["Start", "A", "B", "A", "Chain"], "Goal")
+
+    assert result["passed"] is True
+    assert edge_names(result) == ["StartA", "Chain", "ChainGoal"]
+    assert concept_names(result) == [
+        "Start", "A", "StartA", "B", "A", "Chain", "Goal", "ChainGoal",
+    ]
+
+
+def test_compile_orders_members_inside_each_position_to_match_steps(horon_db):
+    create_concepts(
+        horon_db,
+        ["Start", "M", "N", "Q", "Goal", "StartM", "StartN", "QGoal"],
+    )
+    set_relation(horon_db, "StartM", "Start → M")
+    set_relation(horon_db, "StartN", "Start → N")
+    set_relation(horon_db, "Q", "M & N")
+    set_relation(horon_db, "QGoal", "Q → Goal")
+
+    mn = horon_db.compile(["Start", "M", "N", "Q"], "Goal")
+    nm = horon_db.compile(["Start", "N", "M", "Q"], "Goal")
+
+    assert mn["passed"] is True
+    assert nm["passed"] is True
+    assert concept_names(mn).index("M") < concept_names(mn).index("N")
+    assert concept_names(nm).index("N") < concept_names(nm).index("M")
+
+
+def test_compile_keeps_all_pure_group_variations_for_arrival(horon_db):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "A", "B", "C", "D", "N", "Goal",
+            "StartN", "NGoal",
+        ],
+    )
+    set_relation(horon_db, "N", "A & B")
+    horon_db.add("N", "variation", "C & D")
+    set_relation(horon_db, "StartN", "Start → N")
+    set_relation(horon_db, "NGoal", "N → Goal")
+
+    ab = horon_db.compile(["Start", "A", "B", "N"], "Goal")
+    cd = horon_db.compile(["Start", "C", "D", "N"], "Goal")
+
+    assert ab["passed"] is True
+    assert cd["passed"] is True
+    assert edge_statuses(ab) == ["confirmed", "confirmed"]
+    assert edge_statuses(cd) == ["confirmed", "confirmed", "hypothesis"]
+    assert edge_names(cd)[-1] == "N"
+    assert _format_compile(cd).startswith("BLOCKED.")
+    assert concept_names(ab) == ["Start", "A", "B", "N", "StartN", "Goal", "NGoal"]
+    assert concept_names(cd) == ["Start", "C", "D", "N", "StartN", "Goal", "NGoal"]
+
+
+def test_compile_prefers_confirmed_pure_group_when_matches_are_equal(horon_db):
+    create_concepts(
+        horon_db,
+        [
+            "Start", "A", "B", "C", "N", "Goal",
+            "StartB", "BToC", "CToN", "NGoal",
+        ],
+    )
+    set_relation(horon_db, "N", "A & B")
+    horon_db.add("N", "variation", "A & C")
+    set_relation(horon_db, "StartB", "Start → B")
+    set_relation(horon_db, "BToC", "B → C")
+    set_relation(horon_db, "CToN", "C → N")
+    set_relation(horon_db, "NGoal", "N → Goal")
+
+    result = horon_db.compile(["Start", "B", "C", "A", "N"], "Goal")
+
+    assert result["passed"] is True
+    assert all(status == "confirmed" for status in edge_statuses(result))
 
 
 def test_compile_reaches_each_waypoint_in_input_order(horon_db):
@@ -185,8 +300,10 @@ def test_compile_does_not_merge_untraveled_parallel_relation_names(horon_db):
     forward = horon_db.compile(["Start", "StartB", "StartC"], "Goal")
     reverse = horon_db.compile(["Start", "StartC", "StartB"], "Goal")
 
-    assert forward["passed"] is False
-    assert reverse["passed"] is False
+    # Relation concepts are now real ordered occurrences: StartB appears
+    # after B, and StartC appears after C.
+    assert forward["passed"] is True
+    assert reverse["passed"] is True
 
 
 def test_compile_can_skip_early_waypoint_occurrence(horon_db):
@@ -217,9 +334,9 @@ def test_compile_rejects_waypoint_branch_that_never_rejoins_goal(horon_db):
     result = horon_db.compile(["A", "B", "C"], "Goal")
 
     assert result["passed"] is False
-    assert edge_names(result) == ["AtoC", "CtoB", "AtoC"]
-    assert result["break"]["from"]["name"] == "C"
-    assert result["break"]["to"]["name"] == "Goal"
+    assert edge_names(result) == ["AtoC", "CtoB"]
+    assert result["break"]["from"]["name"] == "B"
+    assert result["break"]["to"]["name"] == "C"
 
 
 def test_compile_tries_another_arrival_when_first_choice_is_a_dead_end(
@@ -353,7 +470,7 @@ def test_compile_keeps_nested_and_groups_relevant_to_goal(horon_db):
 
     assert result["passed"] is True
     assert edge_names(result) == [
-        "StartA", "StartB", "StartC", "AB", "ABC", "ABCGoal",
+        "StartA", "StartB", "AB", "StartC", "ABC", "ABCGoal",
     ]
 
 
@@ -365,15 +482,17 @@ def test_compile_does_not_treat_relation_shadow_as_arrow_destination(horon_db):
     destination_first = horon_db.compile(["A", "B", "AtoB"], "Goal")
     edge_first = horon_db.compile(["A", "AtoB", "B"], "Goal")
 
-    assert destination_first["passed"] is False
+    # AtoB is defined to occur after B, rather than simultaneously with it.
+    assert destination_first["passed"] is True
     assert edge_first["passed"] is False
 
 
-def test_compile_rejects_duplicate_waypoints(horon_db):
+def test_compile_allows_duplicate_waypoints_and_reports_break(horon_db):
+    """重复 occurrence 是合法约束；没有对应路线时应正常报告断点。"""
     create_concepts(horon_db, ["A", "Goal"])
-    horon_db.add("Goal", "name", "Goal alias")
 
-    result = horon_db.compile(["A", "Goal alias"], "Goal")
+    result = horon_db.compile(["A", "A"], "Goal")
 
     assert result["passed"] is False
-    assert result["errors"] == ["Duplicate waypoints are not allowed."]
+    assert result["errors"] == []
+    assert result["break"]["to"]["name"] == "A"

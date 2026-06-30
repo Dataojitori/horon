@@ -78,7 +78,9 @@
   top: 0;
   left: 0;
   pointer-events: none; /* SVG container itself is click-through */
-  z-index: 15;
+  z-index: 5;
+  transform: translateZ(0);
+  overflow: visible !important;
 }
 
 /* Make sure non-clickable link elements do not block drag actions on the canvas */

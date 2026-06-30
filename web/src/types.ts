@@ -41,20 +41,17 @@ export interface VariationDetail {
   members?: ComposeMemberDetail[];
 }
 
-export interface RelationRow {
-  expression: string;
+export interface RelationMember {
   concept_id: number;
   concept_name: string;
-  from_concept_id: number;
-  from_concept_disclosure: string | null;
+  disclosure: string | null;
 }
 
-export interface OutboundRelation {
+export interface DirectedRelation {
   expression: string;
   concept_id: number;
   concept_name: string;
-  target_concept_id: number;
-  target_concept_disclosure: string | null;
+  members: RelationMember[];
 }
 
 export interface ConceptDetail {
@@ -63,12 +60,12 @@ export interface ConceptDetail {
   disclosure: string | null;
   aliases: string[];
   variations: VariationDetail[];
-  inbound_confirmed: RelationRow[];
-  inbound_negated: RelationRow[];
-  inbound_hypotheses: RelationRow[];
-  outbound_confirmed: OutboundRelation[];
-  outbound_negated: OutboundRelation[];
-  outbound_hypotheses: OutboundRelation[];
+  inbound_confirmed: DirectedRelation[];
+  inbound_negated: DirectedRelation[];
+  inbound_hypotheses: DirectedRelation[];
+  outbound_confirmed: DirectedRelation[];
+  outbound_negated: DirectedRelation[];
+  outbound_hypotheses: DirectedRelation[];
   alerts: string[];
 }
 

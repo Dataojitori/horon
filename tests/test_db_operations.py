@@ -181,10 +181,10 @@ def test_read_concept_groups_relations_and_surfaces_disclosures(horon_db):
     target = horon_db.read_concept("Target")
 
     assert [r.concept_name for r in target.inbound_confirmed] == ["ConfirmedIn"]
-    assert target.inbound_confirmed[0].from_concept_disclosure == "source disclosure"
+    assert target.inbound_confirmed[0].members[0].disclosure == "source disclosure"
     assert [r.concept_name for r in target.inbound_hypotheses] == ["HypothesisIn"]
     assert [r.concept_name for r in target.outbound_negated] == ["NegatedOut"]
-    assert target.outbound_negated[0].target_concept_disclosure == "other disclosure"
+    assert target.outbound_negated[0].members[0].disclosure == "other disclosure"
 
 
 def test_read_concept_alerts_when_unless_condition_is_met(horon_db):

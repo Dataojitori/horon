@@ -55,33 +55,37 @@ def get_graph():
         degree: Counter[int] = Counter()
         links: list[dict] = []
 
-        for src, edges in graph.adjacency.items():
-            for tgt, edge_cid, edge_sc, status in edges:
-                links.append({
-                    "source": src,
-                    "target": tgt,
-                    "relation_id": edge_cid,
-                    "status": status,
-                    "kind": "directed",
-                })
-                degree[src] += 1
-                degree[tgt] += 1
-                degree[edge_cid] += 1
+        for expression in graph.expressions:
+            positions = expression.positions
+            for left, right in zip(positions, positions[1:]):
+                for src in sorted(left):
+                    for tgt in sorted(right):
+                        links.append({
+                            "source": src,
+                            "target": tgt,
+                            "relation_id": expression.concept_id,
+                            "status": expression.status,
+                            "kind": "directed",
+                        })
+                        degree[src] += 1
+                        degree[tgt] += 1
+                        degree[expression.concept_id] += 1
 
-        for members, edge_cid, edge_sc, status in graph.and_groups:
-            mems = list(members)
-            for i, a in enumerate(mems):
-                for b in mems[i + 1:]:
-                    links.append({
-                        "source": a,
-                        "target": b,
-                        "relation_id": edge_cid,
-                        "status": status,
-                        "kind": "undirected",
-                    })
-                    degree[a] += 1
-                    degree[b] += 1
-            degree[edge_cid] += len(mems)
+            for position in positions:
+                mems = sorted(position)
+                for i, a in enumerate(mems):
+                    for b in mems[i + 1:]:
+                        links.append({
+                            "source": a,
+                            "target": b,
+                            "relation_id": expression.concept_id,
+                            "status": expression.status,
+                            "kind": "undirected",
+                        })
+                        degree[a] += 1
+                        degree[b] += 1
+                if len(positions) == 1:
+                    degree[expression.concept_id] += len(mems)
 
         nodes = []
         for c in concepts:
@@ -140,11 +144,13 @@ def get_neighborhood(concept_id: int):
 
     for rel in (focal.inbound_confirmed + focal.inbound_negated +
                 focal.inbound_hypotheses):
-        neighbor_ids.add(rel.from_concept_id)
+        for member in rel.members:
+            neighbor_ids.add(member.concept_id)
 
     for rel in (focal.outbound_confirmed + focal.outbound_negated +
                 focal.outbound_hypotheses):
-        neighbor_ids.add(rel.target_concept_id)
+        for member in rel.members:
+            neighbor_ids.add(member.concept_id)
 
     neighbor_ids.discard(focal.id)
 
@@ -177,39 +183,41 @@ def get_neighborhood(concept_id: int):
 
     for rel in (focal.inbound_confirmed + focal.inbound_negated +
                 focal.inbound_hypotheses):
-        key = (rel.from_concept_id, rel.concept_id)
-        if key not in seen_inbound:
-            seen_inbound.add(key)
-            status = ("confirmed" if rel in focal.inbound_confirmed
-                      else "negated" if rel in focal.inbound_negated
-                      else "hypothesis")
-            internal_links.append({
-                "source": rel.from_concept_id,
-                "target": focal.id,
-                "variation_code": "",
-                "status": status,
-                "kind": "directed",
-                "relation_id": rel.concept_id,
-                "relation_name": rel.concept_name,
-            })
+        for member in rel.members:
+            key = (member.concept_id, rel.concept_id)
+            if key not in seen_inbound:
+                seen_inbound.add(key)
+                status = ("confirmed" if rel in focal.inbound_confirmed
+                          else "negated" if rel in focal.inbound_negated
+                          else "hypothesis")
+                internal_links.append({
+                    "source": member.concept_id,
+                    "target": focal.id,
+                    "variation_code": "",
+                    "status": status,
+                    "kind": "directed",
+                    "relation_id": rel.concept_id,
+                    "relation_name": rel.concept_name,
+                })
 
     for rel in (focal.outbound_confirmed + focal.outbound_negated +
                 focal.outbound_hypotheses):
-        key = (rel.target_concept_id, rel.concept_id)
-        if key not in seen_outbound:
-            seen_outbound.add(key)
-            status = ("confirmed" if rel in focal.outbound_confirmed
-                      else "negated" if rel in focal.outbound_negated
-                      else "hypothesis")
-            internal_links.append({
-                "source": focal.id,
-                "target": rel.target_concept_id,
-                "variation_code": "",
-                "status": status,
-                "kind": "directed",
-                "relation_id": rel.concept_id,
-                "relation_name": rel.concept_name,
-            })
+        for member in rel.members:
+            key = (member.concept_id, rel.concept_id)
+            if key not in seen_outbound:
+                seen_outbound.add(key)
+                status = ("confirmed" if rel in focal.outbound_confirmed
+                          else "negated" if rel in focal.outbound_negated
+                          else "hypothesis")
+                internal_links.append({
+                    "source": focal.id,
+                    "target": member.concept_id,
+                    "variation_code": "",
+                    "status": status,
+                    "kind": "directed",
+                    "relation_id": rel.concept_id,
+                    "relation_name": rel.concept_name,
+                })
 
     return {
         "focal": focal.model_dump(),
