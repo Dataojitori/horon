@@ -57,22 +57,24 @@ def get_graph():
 
         for expression in graph.expressions:
             positions = expression.positions
-            for left, right in zip(positions, positions[1:]):
-                for src in sorted(left):
-                    for tgt in sorted(right):
-                        links.append({
-                            "source": src,
-                            "target": tgt,
-                            "relation_id": expression.concept_id,
-                            "status": expression.status,
-                            "kind": "directed",
-                        })
-                        degree[src] += 1
-                        degree[tgt] += 1
-                        degree[expression.concept_id] += 1
 
-            for position in positions:
-                mems = sorted(position)
+            if expression.type == "CHAIN":
+                for left, right in zip(positions, positions[1:]):
+                    for src in sorted(left):
+                        for tgt in sorted(right):
+                            links.append({
+                                "source": src,
+                                "target": tgt,
+                                "relation_id": expression.concept_id,
+                                "status": expression.status,
+                                "kind": "directed",
+                            })
+                            degree[src] += 1
+                            degree[tgt] += 1
+                            degree[expression.concept_id] += 1
+            else:
+                mems = sorted(positions[0])
+                link_kind = "or" if expression.type == "OR" else "undirected"
                 for i, a in enumerate(mems):
                     for b in mems[i + 1:]:
                         links.append({
@@ -80,12 +82,11 @@ def get_graph():
                             "target": b,
                             "relation_id": expression.concept_id,
                             "status": expression.status,
-                            "kind": "undirected",
+                            "kind": link_kind,
                         })
                         degree[a] += 1
                         degree[b] += 1
-                if len(positions) == 1:
-                    degree[expression.concept_id] += len(mems)
+                degree[expression.concept_id] += len(mems)
 
         nodes = []
         for c in concepts:

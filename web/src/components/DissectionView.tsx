@@ -32,7 +32,7 @@ interface SimNode extends SimulationNodeDatum {
 
 interface SimLink extends SimulationLinkDatum<SimNode> {
   status: string | null;
-  kind: "directed" | "undirected" | "internal-directed" | "internal-joint";
+  kind: "directed" | "undirected" | "internal-directed" | "internal-joint" | "internal-or-joint";
   short_code?: string;
   relation_id?: number;
   relation_name?: string;
@@ -223,48 +223,48 @@ export default function DissectionView({
     // 4. Build links
     const links: SimLink[] = [];
 
-    // Add internal links (composition relations)
+    // Add internal links (composition relations), type-aware
     focalConcept.variations.forEach((v) => {
       const members = v.members;
-      if (!members) return;
+      if (!members || members.length === 0) return;
 
-      const positions = Array.from(new Set(members.map((m) => m.position))).sort((a, b) => a - b);
+      const sorted = [...members].sort((a, b) => a.order_index - b.order_index);
 
-      // 1. 同位置成员之间的并列连线 (无向，无箭头，靠引力聚拢)
-      positions.forEach((pos) => {
-        const posMembers = members.filter((m) => m.position === pos);
-        if (posMembers.length > 1) {
-          for (let i = 0; i < posMembers.length; i++) {
-            for (let j = i + 1; j < posMembers.length; j++) {
-              links.push({
-                source: posMembers[i].concept_id,
-                target: posMembers[j].concept_id,
-                status: v.status ?? "hypothesis",
-                kind: "internal-joint",
-                short_code: v.short_code,
-              });
-            }
+      if (v.type === "CHAIN") {
+        // CHAIN: directed arrows between consecutive members
+        for (let i = 0; i < sorted.length - 1; i++) {
+          links.push({
+            source: sorted[i].concept_id,
+            target: sorted[i + 1].concept_id,
+            status: v.status ?? "hypothesis",
+            kind: "internal-directed",
+            short_code: v.short_code,
+          });
+        }
+      } else if (v.type === "AND") {
+        // AND: undirected joint links between all pairs
+        for (let i = 0; i < sorted.length; i++) {
+          for (let j = i + 1; j < sorted.length; j++) {
+            links.push({
+              source: sorted[i].concept_id,
+              target: sorted[j].concept_id,
+              status: v.status ?? "hypothesis",
+              kind: "internal-joint",
+              short_code: v.short_code,
+            });
           }
         }
-      });
-
-      // 2. 不同位置之间的递进连线 (有向箭头 pos1 -> pos2)
-      if (positions.length > 1) {
-        for (let i = 0; i < positions.length - 1; i++) {
-          const currentPosMembers = members.filter((m) => m.position === positions[i]);
-          const nextPosMembers = members.filter((m) => m.position === positions[i + 1]);
-          
-          if (currentPosMembers.length > 0 && nextPosMembers.length > 0) {
-            currentPosMembers.forEach((sourceMember) => {
-              nextPosMembers.forEach((targetMember) => {
-                links.push({
-                  source: sourceMember.concept_id,
-                  target: targetMember.concept_id,
-                  status: v.status ?? "hypothesis",
-                  kind: "internal-directed",
-                  short_code: v.short_code,
-                });
-              });
+      } else if (v.type === "OR") {
+        // OR: alternatives — connected by a distinct visual dotted/dashed link
+        // so they are grouped together in force simulation but styled as alternative options.
+        for (let i = 0; i < sorted.length; i++) {
+          for (let j = i + 1; j < sorted.length; j++) {
+            links.push({
+              source: sorted[i].concept_id,
+              target: sorted[j].concept_id,
+              status: v.status ?? "hypothesis",
+              kind: "internal-or-joint",
+              short_code: v.short_code,
             });
           }
         }
@@ -641,7 +641,11 @@ export default function DissectionView({
                 textEl.setAttribute("x", String(labelX));
                 textEl.setAttribute("y", String(labelY));
                 if (rectEl) {
-                  const labelText = isInternal ? (link.short_code || "") : (link.relation_name || "");
+                  const labelText = isInternal
+                    ? link.kind === "internal-or-joint"
+                      ? `${link.short_code} (OR)`
+                      : (link.short_code || "")
+                    : (link.relation_name || "");
                   const textLen = estimateStringWidth(labelText, 10) + 12;
                   const rectH = 18;
                   rectEl.setAttribute("x", String(labelX - textLen / 2));
@@ -911,9 +915,15 @@ export default function DissectionView({
                       stroke={statusColor(link.status)}
                       strokeWidth={isInternal ? 1.5 : 1.5}
                       strokeOpacity={isInternal ? 0.6 : 0.6}
-                      strokeDasharray={link.status === "hypothesis" ? "4 4" : undefined}
+                      strokeDasharray={
+                        link.kind === "internal-or-joint"
+                          ? "2 6"
+                          : link.status === "hypothesis"
+                          ? "4 4"
+                          : undefined
+                      }
                       markerEnd={
-                        link.kind !== "internal-joint"
+                        link.kind !== "internal-joint" && link.kind !== "internal-or-joint"
                           ? `url(#arrowhead-${link.status || "default"})`
                           : undefined
                       }
@@ -936,7 +946,13 @@ export default function DissectionView({
                         <rect className="link-label-bg" style={!isInternal ? { opacity: 0.92 } : undefined} />
                         <text
                           className="link-label"
-                          fill={isInternal ? "var(--accent-blue)" : "var(--text-secondary)"}
+                          fill={
+                            isInternal
+                              ? link.kind === "internal-or-joint"
+                                ? "var(--accent-purple)"
+                                : "var(--accent-blue)"
+                              : "var(--text-secondary)"
+                          }
                           fontSize="10px"
                           fontFamily={isInternal ? "var(--font-mono)" : "var(--font-sans)"}
                           fontWeight={isInternal ? "600" : "500"}
@@ -944,7 +960,11 @@ export default function DissectionView({
                           dominantBaseline="middle"
                           opacity={0.9}
                         >
-                          {isInternal ? link.short_code : link.relation_name}
+                          {isInternal
+                            ? link.kind === "internal-or-joint"
+                              ? `${link.short_code} (OR)`
+                              : link.short_code
+                            : link.relation_name}
                         </text>
                       </g>
                     )}

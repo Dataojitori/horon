@@ -35,20 +35,21 @@ def test_search_treats_backslash_as_literal_character(horon_db):
     assert names(horon_db.search_concepts(r"C:\tmp")) == ["Path"]
 
 
-def test_expression_allows_ampersand_within_arrow_segments(horon_db):
-    """& 可以在 → 的段内使用，表示该 position 的并列成员。"""
+def test_expression_rejects_mixed_operators(horon_db):
+    """一个变体只能用一种运算符，严禁混用 → / & / |。"""
     create_concepts(horon_db, ["A", "B", "C", "Rel"])
 
-    horon_db.set("Rel", "expression", "A & B → C")
-    result = horon_db.read_concept("Rel")
+    with pytest.raises(ValueError, match="Mixed operators"):
+        horon_db.set("Rel", "expression", "A & B → C")
 
-    assert result.variations[0].expression == "A & B → C"
+    with pytest.raises(ValueError, match="Mixed operators"):
+        horon_db.set("Rel", "expression", "A → B | C")
 
 
-def test_expression_rejects_empty_position_and_duplicate_members(horon_db):
+def test_expression_rejects_empty_operand_and_duplicate_members(horon_db):
     create_concepts(horon_db, ["A", "B", "Rel"])
 
-    with pytest.raises(ValueError, match="Empty concept at position"):
+    with pytest.raises(ValueError, match="empty operand"):
         horon_db.set("Rel", "expression", "A → ")
 
     with pytest.raises(ValueError, match="appear more than once"):
@@ -67,35 +68,18 @@ def test_unordered_composition_duplicate_detection_ignores_member_order(horon_db
 
 
 def test_multi_position_three_segment_expression(horon_db):
-    """A → B → C stores 3 positions and round-trips through get_expression."""
+    """A → B → C stores 3 ordered members and round-trips through get_expression."""
     create_concepts(horon_db, ["o", "p", "q", "Chain"])
     horon_db.set("Chain", "expression", "o → p → q")
 
     result = horon_db.read_concept("Chain")
+    assert result.variations[0].type == "CHAIN"
     assert result.variations[0].expression == "o → p → q"
 
     members = result.variations[0].members
-    by_pos = {}
-    for m in members:
-        by_pos.setdefault(m.position, []).append(m.name)
-    assert by_pos == {1: ["o"], 2: ["p"], 3: ["q"]}
-
-
-def test_multi_position_with_ampersand_at_tail(horon_db):
-    """A → B → C & D places C and D at position 3."""
-    create_concepts(horon_db, ["o", "p", "E", "R", "Seq"])
-    horon_db.set("Seq", "expression", "o → p → E & R")
-
-    result = horon_db.read_concept("Seq")
-    assert result.variations[0].expression == "o → p → E & R"
-
-    members = result.variations[0].members
-    by_pos = {}
-    for m in members:
-        by_pos.setdefault(m.position, []).append(m.name)
-    assert by_pos[1] == ["o"]
-    assert by_pos[2] == ["p"]
-    assert set(by_pos[3]) == {"E", "R"}
+    assert [(m.order_index, m.name) for m in members] == [
+        (1, "o"), (2, "p"), (3, "q"),
+    ]
 
 
 def test_multi_position_duplicate_detection(horon_db):
@@ -119,16 +103,28 @@ def test_multi_position_different_order_is_different(horon_db):
     assert rev.variations[0].expression == "A → C → B"
 
 
-def test_multi_position_allows_duplicate_concept_across_positions(horon_db):
-    """同一概念可在不同 position 再次出现，并保留每次 occurrence。"""
+def test_chain_allows_revisiting_a_concept_at_a_later_position(horon_db):
+    """CHAIN 允许同一概念在不同位置重复出现（A → B → A 绕回起点）。"""
     create_concepts(horon_db, ["A", "B", "Rel"])
 
     horon_db.set("Rel", "expression", "A → B → A")
 
     members = horon_db.read_concept("Rel").variations[0].members
-    assert [(member.position, member.name) for member in members] == [
+    assert [(member.order_index, member.name) for member in members] == [
         (1, "A"), (2, "B"), (3, "A"),
     ]
+
+
+def test_chain_rejects_adjacent_self_repeat(horon_db):
+    """相邻两段相同（A → A）是零跨度自环，无语义，应被拒绝。"""
+    create_concepts(horon_db, ["A", "B", "Rel"])
+
+    with pytest.raises(ValueError, match="immediately follow itself"):
+        horon_db.set("Rel", "expression", "A → A")
+
+    # 但非相邻的重复仍然合法。
+    horon_db.set("Rel", "expression", "A → B → A")
+    assert horon_db.read_concept("Rel").variations[0].expression == "A → B → A"
 
 
 def test_multi_position_inbound_shows_at_max_position(horon_db):

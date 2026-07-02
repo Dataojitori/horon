@@ -88,6 +88,68 @@ def test_parent_stays_confirmed_while_member_has_another_confirmed_variation(
     assert "Cascaded downgrades:" not in result.message
 
 
+def test_confirm_or_variation_needs_only_one_confirmed_member(horon_db):
+    """OR 是「择一」：任一成员 confirmed 即可确认，无需全部。"""
+    create_concepts(horon_db, ["A", "B", "K"])
+    horon_db.set("A", "status", "confirmed")  # B 保持 hypothesis
+    horon_db.set("K", "expression", "A | B")
+
+    result = horon_db.set("K", "status", "confirmed")
+
+    assert horon_db.read_concept("K").variations[0].status == "confirmed"
+    assert "Cascaded downgrades:" not in result.message
+
+
+def test_confirm_or_variation_rejected_when_no_member_confirmed(horon_db):
+    """OR 的所有成员都未确认时，不允许确认该 OR。"""
+    create_concepts(horon_db, ["A", "B", "K"])
+    horon_db.set("K", "expression", "A | B")
+
+    with pytest.raises(ValueError, match="Cannot confirm OR variation"):
+        horon_db.set("K", "status", "confirmed")
+
+
+def test_confirm_and_variation_still_requires_all_members(horon_db):
+    """AND 维持原语义：成员缺一不可。"""
+    create_concepts(horon_db, ["A", "B", "M"])
+    horon_db.set("A", "status", "confirmed")  # B 未确认
+    horon_db.set("M", "expression", "A & B")
+
+    with pytest.raises(ValueError, match="has no confirmed variations"):
+        horon_db.set("M", "status", "confirmed")
+
+
+def test_or_variation_survives_audit_while_one_member_stays_confirmed(horon_db):
+    """降级 OR 的一个成员，只要还有另一个 confirmed，OR 不应被级联降级。"""
+    create_concepts(horon_db, ["A", "B", "K"])
+    horon_db.set("A", "status", "confirmed")
+    horon_db.set("B", "status", "confirmed")
+    horon_db.set("K", "expression", "A | B")
+    horon_db.set("K", "status", "confirmed")
+
+    result = horon_db.set("B", "status", "hypothesis")  # A 仍 confirmed
+
+    assert horon_db.read_concept("K").variations[0].status == "confirmed"
+    assert "Downgraded 'K'" not in result.message
+
+
+def test_or_variation_downgraded_when_all_members_lose_confirmation(horon_db):
+    """OR 的成员全部失去 confirmed 时，才级联降级该 OR。"""
+    create_concepts(horon_db, ["A", "B", "K"])
+    horon_db.set("A", "status", "confirmed")
+    horon_db.set("B", "status", "confirmed")
+    horon_db.set("K", "expression", "A | B")
+    horon_db.set("K", "status", "confirmed")
+
+    horon_db.set("A", "status", "hypothesis")  # B 还在，OR 仍成立
+    assert horon_db.read_concept("K").variations[0].status == "confirmed"
+
+    result = horon_db.set("B", "status", "hypothesis")  # 两者都掉
+
+    assert horon_db.read_concept("K").variations[0].status == "hypothesis"
+    assert "Downgraded 'K'" in result.message
+
+
 def test_add_variation_requires_explicit_short_code_after_ambiguity(horon_db):
     create_concepts(horon_db, ["A", "B", "C", "Poly"])
     horon_db.add("Poly", "variation", "A → B")
@@ -207,9 +269,20 @@ def test_read_concept_alerts_when_unless_reference_breaks_legally(horon_db):
 
     result = horon_db.read_concept("Watcher")
 
+    # A → B is no longer confirmed (in fact, it doesn't exist anymore).
+    # Thus the condition ${A → B confirmed} is simply NOT met.
+    # It should not complain about "Broken reference" for a missing relation.
+    assert len(result.alerts) == 0
+
+def test_read_concept_alerts_broken_reference_for_missing_concept(horon_db):
+    create_concepts(horon_db, ["A", "Watcher"])
+    horon_db.update("Watcher", "unless", "Recheck when ${NonExistent → A confirmed}.")
+
+    result = horon_db.read_concept("Watcher")
+
     assert len(result.alerts) == 1
     assert "Broken reference in 'Watcher'" in result.alerts[0]
-    assert "A → B" in result.alerts[0]
+    assert "could not be resolved" in result.alerts[0]
 
 
 def test_read_concept_does_not_alert_when_unless_status_does_not_match(horon_db):
@@ -220,3 +293,65 @@ def test_read_concept_does_not_alert_when_unless_status_does_not_match(horon_db)
     result = horon_db.read_concept("Watcher")
 
     assert result.alerts == []
+
+def test_read_concept_alerts_for_single_concept_and_or_condition(horon_db):
+    create_concepts(horon_db, ["A", "B", "C", "RelOr", "Watcher1", "Watcher2"])
+    horon_db.set("A", "status", "confirmed")
+    
+    set_relation(horon_db, "RelOr", "B | C", status="negated")
+    
+    horon_db.update("Watcher1", "unless", "Recheck when ${A confirmed}.")
+    horon_db.update("Watcher2", "unless", "Recheck when ${B | C negated}.")
+    
+    res1 = horon_db.read_concept("Watcher1")
+    assert len(res1.alerts) == 1
+    assert "Unless triggered on 'Watcher1'" in res1.alerts[0]
+    assert "'A' has a confirmed variation" in res1.alerts[0]
+    
+    res2 = horon_db.read_concept("Watcher2")
+    assert len(res2.alerts) == 1
+    assert "Invalid condition in 'Watcher2'" in res2.alerts[0]
+    assert "'B | C negated' is not supported" in res2.alerts[0]
+
+
+def test_read_concept_alerts_when_any_or_member_is_confirmed(horon_db):
+    create_concepts(horon_db, ["A", "B", "Watcher"])
+    horon_db.set("B", "status", "confirmed")
+    horon_db.update("Watcher", "unless", "Recheck when ${A | B confirmed}.")
+
+    result = horon_db.read_concept("Watcher")
+
+    assert len(result.alerts) == 1
+    assert "Unless triggered on 'Watcher'" in result.alerts[0]
+    assert "'B' has a confirmed variation" in result.alerts[0]
+
+
+def test_read_concept_rejects_and_condition(horon_db):
+    create_concepts(horon_db, ["A", "B", "Group", "Watcher"])
+    horon_db.set("A", "status", "confirmed")
+    horon_db.set("B", "status", "confirmed")
+    set_relation(horon_db, "Group", "A & B", status="confirmed")
+    horon_db.update("Watcher", "unless", "Recheck when ${A & B confirmed}.")
+
+    result = horon_db.read_concept("Watcher")
+
+    assert len(result.alerts) == 1
+    assert "Invalid condition in 'Watcher'" in result.alerts[0]
+    assert "AND conditions" in result.alerts[0]
+
+
+def test_unless_cache_separates_same_expression_by_expected_status(horon_db):
+    create_concepts(horon_db, ["A", "Watcher"])
+    horon_db.set("A", "status", "confirmed")
+    horon_db.update(
+        "Watcher",
+        "unless",
+        "Recheck ${A confirmed}; invalid condition ${A negated}.",
+    )
+
+    result = horon_db.read_concept("Watcher")
+
+    assert len(result.alerts) == 2
+    assert "Unless triggered on 'Watcher'" in result.alerts[0]
+    assert "Invalid condition in 'Watcher'" in result.alerts[1]
+    assert "Single-concept and OR conditions do not support 'negated'" in result.alerts[1]

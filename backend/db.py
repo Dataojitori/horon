@@ -3,7 +3,8 @@ Horon — Inference Language for Intelligent Agents
 DB operations (Concept → Variation 分層結構)
 
 Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
-Variation: 同一概念的不同解释（concept_id + short_code），
+Variation: 同一概念的不同解释（concept_id + short_code + type），
+           type ∈ {CHAIN, AND, OR, NULL(原子)}，
            每个 variation 有独立的 status / evidence / unless / compose_members。
 compose_members 的 member 引用 concept_id（hub），不是具体 variation。
 """
@@ -26,10 +27,10 @@ from .models import (
 )
 
 
-_CONDITION_RE = re.compile(r'\$\{\s*(.+?→.+?)\s+(confirmed|negated)\s*\}')
+_CONDITION_RE = re.compile(r'\$\{\s*(.+?)\s+(confirmed|negated)\s*\}')
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
-_FORBIDDEN_CHARS = {'→', '&', ':'}
+_FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 
 def _validate_name(name: str) -> str:
@@ -294,7 +295,7 @@ class HoronDB:
         concepts = self.get_all_concepts()
 
         var_rows = self.conn.execute(
-            "SELECT concept_id, short_code, status FROM variations "
+            "SELECT concept_id, short_code, type, status FROM variations "
             "ORDER BY concept_id, short_code"
         ).fetchall()
         vars_by_cid: dict[int, list] = {}
@@ -302,17 +303,18 @@ class HoronDB:
             vars_by_cid.setdefault(r["concept_id"], []).append(r)
 
         mem_rows = self.conn.execute(
-            "SELECT cm.concept_id, cm.short_code, cm.position, c.name "
+            "SELECT cm.concept_id, cm.short_code, cm.order_index, c.name "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
-            "ORDER BY cm.position, cm.member_concept_id"
+            "ORDER BY cm.order_index, cm.member_concept_id"
         ).fetchall()
 
-        mems_by_var: dict[tuple, dict[int, list[str]]] = {}
+        mems_by_var: dict[tuple, list[str]] = {}
         for r in mem_rows:
             key = (r["concept_id"], r["short_code"])
-            mems_by_var.setdefault(key, {}).setdefault(
-                r["position"], []).append(r["name"])
+            mems_by_var.setdefault(key, []).append(r["name"])
+
+        _OP = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
 
         result = []
         for c in concepts:
@@ -325,19 +327,14 @@ class HoronDB:
             for v in vars_by_cid.get(c.id, []):
                 key = (c.id, v["short_code"])
                 expr = None
-                if key in mems_by_var:
-                    by_pos = mems_by_var[key]
-                    max_pos = max(by_pos)
-                    if max_pos >= 2:
-                        expr = " → ".join(
-                            " & ".join(by_pos[p])
-                            for p in sorted(by_pos)
-                        )
-                    else:
-                        expr = " & ".join(by_pos[1])
+                vtype = v["type"]
+                names = mems_by_var.get(key)
+                if names and vtype:
+                    expr = _OP.get(vtype, " & ").join(names)
 
                 c_dict["variations"].append({
                     "short_code": v["short_code"],
+                    "type": vtype,
                     "status": v["status"] or "hypothesis",
                     "expression": expr,
                 })
@@ -347,48 +344,69 @@ class HoronDB:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _parse_expression(self, expression: str) -> dict[int, list[int]]:
-        """拆分表达式，解析为 concept_id，并校验合法性。
+    def _parse_expression(self, expression: str, allow_single: bool = False) -> tuple[str, list[int]]:
+        """拆分表达式，解析为 (type, member_concept_ids)。
 
-        返回 {position: [concept_ids]} 的映射。
+        严格不混用：一个表达式只能包含一种运算符。
+        返回 (variation_type, ordered_member_ids)。
 
-        有序 (A → B):           {1: [id_A], 2: [id_B]}
-        有序多段 (A → B → C):   {1: [id_A], 2: [id_B], 3: [id_C]}
-        有序段内并列 (A → B → C & D): {1: [id_A], 2: [id_B], 3: [id_C, id_D]}
-        无序 (A & B & C):       {1: [id_A, id_B, id_C]}
+        CHAIN (A → B → C):  ('CHAIN', [id_A, id_B, id_C])
+        AND   (A & B & C):  ('AND',   [id_A, id_B, id_C])
+        OR    (A | B | C):  ('OR',    [id_A, id_B, id_C])
+        Single (A):         ('SINGLE',[id_A])
         """
-        segments = expression.split("→")
+        has_arrow = "→" in expression
+        has_amp = "&" in expression
+        has_pipe = "|" in expression
 
-        if len(segments) == 1:
-            # 纯 & 表达式（无箭头）
+        op_count = sum([has_arrow, has_amp, has_pipe])
+        if op_count > 1:
+            raise ValueError(
+                "Mixed operators in one expression are not allowed. "
+                "Use only one of: '→' (CHAIN), '&' (AND), '|' (OR). "
+                "Decompose into sub-concepts if needed.")
+
+        if has_arrow:
+            vtype = "CHAIN"
+            parts = [s.strip() for s in expression.split("→")]
+        elif has_pipe:
+            vtype = "OR"
+            parts = [s.strip() for s in expression.split("|")]
+        elif has_amp:
+            vtype = "AND"
             parts = [s.strip() for s in expression.split("&")]
-            if any(not p for p in parts):
+        else:
+            if not allow_single:
                 raise ValueError(
-                    "Invalid syntax: found consecutive '&' (like '&&') "
-                    "or a leading/trailing '&'. Each '&' must separate two concepts."
-                )
-            if len(parts) < 2:
-                raise ValueError("& requires at least 2 concepts.")
-            ids = [self._resolve_id(n)[0] for n in parts]
+                    "Expression must contain at least one operator: "
+                    "'→' (CHAIN), '&' (AND), or '|' (OR).")
+            vtype = "SINGLE"
+            parts = [expression.strip()]
+
+        if any(not p for p in parts):
+            raise ValueError(
+                "Invalid syntax: empty operand in expression. "
+                "Each operator must separate two concepts.")
+        if vtype != "SINGLE" and len(parts) < 2:
+            raise ValueError(
+                f"{vtype} expression requires at least 2 concepts.")
+
+        ids = [self._resolve_id(n)[0] for n in parts]
+        if vtype == "CHAIN":
+            # CHAIN 允许同一概念在不同位置重复出现（如 A → B → A：链条绕回
+            # 起点），每个 order_index 都是独立 occurrence，编译器不去重。
+            # 但相邻两段相同（A → A）是零跨度自环，无语义，拒绝。
+            if any(a == b for a, b in zip(ids, ids[1:])):
+                raise ValueError(
+                    "A concept cannot immediately follow itself in a chain "
+                    "(e.g. 'A → A' is invalid).")
+        elif vtype != "SINGLE":
+            # AND / OR 是集合语义，成员必须互不相同（A & A / A | A 无意义）。
             if len(set(ids)) != len(ids):
-                raise ValueError("A concept cannot appear more than once in the same position (i.e. A & A is invalid).")
-            return {1: ids}
-
-        # 多段有序表达式：每段按 & 拆分段内成员
-        pos_map: dict[int, list[int]] = {}
-        all_ids: list[int] = []
-        for pos_idx, segment in enumerate(segments, start=1):
-            parts = [s.strip() for s in segment.split("&")]
-            if any(not p for p in parts):
                 raise ValueError(
-                    f"Empty concept at position {pos_idx}. "
-                    f"Each position requires at least one concept."
-                )
-            ids = [self._resolve_id(n)[0] for n in parts]
-            pos_map[pos_idx] = ids
-            all_ids.extend(ids)
-
-        return pos_map
+                    "A concept cannot appear more than once in an AND/OR "
+                    "expression (duplicates are not allowed).")
+        return vtype, ids
 
     def _next_short_code(self, concept_id: int) -> str:
         """为 concept 生成随机 short_code（4 位 hex，不复用已删除的码）。"""
@@ -452,14 +470,13 @@ class HoronDB:
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
 
-        pos_map = self._parse_expression(expression)
+        vtype, member_ids = self._parse_expression(expression)
 
-        all_members = [mid for ids in pos_map.values() for mid in ids]
-        if cid in all_members:
+        if cid in member_ids:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
 
-        existing = self._find_composition_variation(expression)
+        existing = self._find_composition_variation(vtype, member_ids)
         if existing is not None:
             exist_cid, exist_sc, _ = existing
             exist_name = self._resolve_concept_name(exist_cid)
@@ -471,18 +488,17 @@ class HoronDB:
         now = _now()
         self.conn.execute(
             "INSERT INTO variations "
-            "(concept_id, short_code, created_at, updated_at) "
-            "VALUES (?,?,?,?)",
-            (cid, sc, now, now),
+            "(concept_id, short_code, type, created_at, updated_at) "
+            "VALUES (?,?,?,?,?)",
+            (cid, sc, vtype, now, now),
         )
-        for pos, member_ids in pos_map.items():
-            for member_cid in member_ids:
-                self.conn.execute(
-                    "INSERT INTO compose_members "
-                    "(concept_id, short_code, member_concept_id, position) "
-                    "VALUES (?,?,?,?)",
-                    (cid, sc, member_cid, pos),
-                )
+        for idx, member_cid in enumerate(member_ids, start=1):
+            self.conn.execute(
+                "INSERT INTO compose_members "
+                "(concept_id, short_code, member_concept_id, order_index) "
+                "VALUES (?,?,?,?)",
+                (cid, sc, member_cid, idx),
+            )
         return MutationResult(
             message=f"Success. Added variation {sc} to {label}.",
             concept_id=cid, concept_name=cname, short_code=sc,
@@ -656,7 +672,7 @@ class HoronDB:
             (cid, sc),
         )
         self.conn.execute(
-            "UPDATE variations SET status=NULL, updated_at=? "
+            "UPDATE variations SET type=NULL, status=NULL, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
@@ -722,18 +738,40 @@ class HoronDB:
                 "WHERE concept_id=? AND short_code=?",
                 (cid, sc)
             ).fetchall()
-            for row in members:
-                member_cid = row["member_concept_id"]
-                has_confirmed = self.conn.execute(
-                    "SELECT 1 FROM variations WHERE concept_id=? AND status='confirmed'",
-                    (member_cid,)
+            if members:
+                vtype_row = self.conn.execute(
+                    "SELECT type FROM variations "
+                    "WHERE concept_id=? AND short_code=?",
+                    (cid, sc)
                 ).fetchone()
-                if not has_confirmed:
-                    member_name = self._resolve_concept_name(member_cid)
-                    raise ValueError(
-                        f"Cannot confirm variation. Member concept '{member_name}' "
-                        f"(id={member_cid}) has no confirmed variations."
-                    )
+                vtype = vtype_row["type"] if vtype_row else None
+                member_ids = [row["member_concept_id"] for row in members]
+
+                def _member_confirmed(mid: int) -> bool:
+                    return self.conn.execute(
+                        "SELECT 1 FROM variations "
+                        "WHERE concept_id=? AND status='confirmed'",
+                        (mid,)
+                    ).fetchone() is not None
+
+                if vtype == "OR":
+                    # OR 是「择一」：只要任一成员有 confirmed 变体即可确认。
+                    if not any(_member_confirmed(mid) for mid in member_ids):
+                        names = ", ".join(
+                            f"'{self._resolve_concept_name(mid)}'"
+                            for mid in member_ids)
+                        raise ValueError(
+                            f"Cannot confirm OR variation. None of its members "
+                            f"({names}) has a confirmed variation.")
+                else:
+                    # CHAIN / AND（及兼容的 NULL 类型）：成员缺一不可。
+                    for mid in member_ids:
+                        if not _member_confirmed(mid):
+                            member_name = self._resolve_concept_name(mid)
+                            raise ValueError(
+                                f"Cannot confirm variation. Member concept "
+                                f"'{member_name}' (id={mid}) has no confirmed "
+                                f"variations.")
 
         self.conn.execute(
             "UPDATE variations SET status=?, updated_at=? "
@@ -741,7 +779,10 @@ class HoronDB:
             (value, _now(), cid, sc),
         )
 
-        downgraded = self.audit_status_integrity()
+        downgraded = []
+        if value != "confirmed":
+            downgraded = self.audit_status_integrity()
+            
         msg = f"Success. Status of {label} variation {sc} set to: {value}"
         if downgraded:
             msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
@@ -762,14 +803,32 @@ class HoronDB:
         max_iterations = 100
         for _ in range(max_iterations):
             violating_variations = self.conn.execute("""
+                -- CHAIN / AND（含兼容的 NULL 类型）：成员缺一不可，
+                -- 任一成员没有 confirmed 变体即违规。
                 SELECT DISTINCT v.concept_id, v.short_code, c.name
                 FROM variations v
                 JOIN concepts c ON v.concept_id = c.id
                 JOIN compose_members cm ON v.concept_id = cm.concept_id AND v.short_code = cm.short_code
                 WHERE v.status = 'confirmed'
+                  AND IFNULL(v.type, 'AND') <> 'OR'
                   AND NOT EXISTS (
                       SELECT 1 FROM variations child_v
                       WHERE child_v.concept_id = cm.member_concept_id
+                        AND child_v.status = 'confirmed'
+                  )
+                UNION
+                -- OR 是「择一」：只有当所有成员都没有 confirmed 变体时才违规。
+                SELECT v.concept_id, v.short_code, c.name
+                FROM variations v
+                JOIN concepts c ON v.concept_id = c.id
+                WHERE v.status = 'confirmed'
+                  AND v.type = 'OR'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM compose_members cm
+                      JOIN variations child_v
+                        ON child_v.concept_id = cm.member_concept_id
+                      WHERE cm.concept_id = v.concept_id
+                        AND cm.short_code = v.short_code
                         AND child_v.status = 'confirmed'
                   )
             """).fetchall()
@@ -833,14 +892,13 @@ class HoronDB:
         cname = self._resolve_concept_name(cid)
         label = f"'{node}' ('{cname}', id={cid})"
 
-        pos_map = self._parse_expression(expression)
+        vtype, member_ids = self._parse_expression(expression)
 
-        all_members = [mid for ids in pos_map.values() for mid in ids]
-        if cid in all_members:
+        if cid in member_ids:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
 
-        existing = self._find_composition_variation(expression)
+        existing = self._find_composition_variation(vtype, member_ids)
         if existing is not None:
             exist_cid, exist_sc, _ = existing
             if exist_cid != cid or exist_sc != sc:
@@ -854,18 +912,17 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (cid, sc),
         )
-        for pos, member_ids in pos_map.items():
-            for member_cid in member_ids:
-                self.conn.execute(
-                    "INSERT INTO compose_members "
-                    "(concept_id, short_code, member_concept_id, position) "
-                    "VALUES (?,?,?,?)",
-                    (cid, sc, member_cid, pos),
-                )
+        for idx, member_cid in enumerate(member_ids, start=1):
+            self.conn.execute(
+                "INSERT INTO compose_members "
+                "(concept_id, short_code, member_concept_id, order_index) "
+                "VALUES (?,?,?,?)",
+                (cid, sc, member_cid, idx),
+            )
         self.conn.execute(
-            "UPDATE variations SET status=NULL, updated_at=? "
+            "UPDATE variations SET type=?, status=NULL, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
-            (_now(), cid, sc),
+            (vtype, _now(), cid, sc),
         )
 
         downgraded = self.audit_status_integrity()
@@ -926,73 +983,70 @@ class HoronDB:
     def _get_expression(self, concept_id: int,
                         short_code: str) -> str | None:
         """取 variation 的组合表达式字符串。无组合返回 None。"""
+        vtype_row = self.conn.execute(
+            "SELECT type FROM variations "
+            "WHERE concept_id = ? AND short_code = ?",
+            (concept_id, short_code),
+        ).fetchone()
+        if not vtype_row or not vtype_row["type"]:
+            return None
+
         rows = self.conn.execute(
-            "SELECT cm.position, c.name "
+            "SELECT c.name "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "WHERE cm.concept_id = ? AND cm.short_code = ? "
-            "ORDER BY cm.position, cm.member_concept_id",
+            "ORDER BY cm.order_index",
             (concept_id, short_code),
         ).fetchall()
         if not rows:
             return None
-        by_pos: dict[int, list[str]] = {}
-        for r in rows:
-            by_pos.setdefault(r["position"], []).append(r["name"])
-        max_pos = max(by_pos)
-        if max_pos >= 2:
-            return " → ".join(
-                " & ".join(by_pos[p]) for p in sorted(by_pos)
-            )
-        return " & ".join(by_pos[1])
+
+        names = [r["name"] for r in rows]
+        op = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
+        return op.get(vtype_row["type"], " & ").join(names)
 
     def _find_composition_variation(
-        self, expression: str,
+        self, vtype: str, member_ids: list[int]
     ) -> tuple[int, str, str | None] | None:
         """找到持有某个组合的 variation → (concept_id, short_code, status)。
 
-        通过构建目标组合的规范签名（position→sorted member_ids），
-        在所有候选 variation 中精确匹配。
+        通过构建规范签名在候选 variation 中精确匹配。
+        CHAIN 按有序列表比较；AND/OR 按排序后的集合比较（忽略顺序），
+        且 type 必须相同。
         """
-        try:
-            pos_map = self._parse_expression(expression)
-        except ValueError:
-            return None
+        total_members = len(member_ids)
+        if vtype == "CHAIN":
+            target_sig: tuple[int, ...] = tuple(member_ids)
+        else:
+            target_sig = tuple(sorted(member_ids))
 
-        target_sig = tuple(
-            (pos, tuple(sorted(ids)))
-            for pos, ids in sorted(pos_map.items())
-        )
-        total_members = sum(len(ids) for ids in pos_map.values())
-        all_member_ids = [mid for ids in pos_map.values() for mid in ids]
-
-        # 先用成员数量快速过滤候选
-        placeholders = ",".join("?" * len(all_member_ids))
+        placeholders = ",".join("?" * total_members)
         candidates = self.conn.execute(
             f"SELECT cm.concept_id, cm.short_code "
             f"FROM compose_members cm "
+            f"JOIN variations v USING (concept_id, short_code) "
             f"WHERE cm.member_concept_id IN ({placeholders}) "
+            f"AND v.type = ? "
             f"GROUP BY cm.concept_id, cm.short_code "
             f"HAVING COUNT(*) = ?",
-            (*all_member_ids, total_members),
+            (*member_ids, vtype, total_members),
         ).fetchall()
 
         for cand in candidates:
             rows = self.conn.execute(
-                "SELECT member_concept_id, position FROM compose_members "
-                "WHERE concept_id = ? AND short_code = ?",
+                "SELECT member_concept_id FROM compose_members "
+                "WHERE concept_id = ? AND short_code = ? "
+                "ORDER BY order_index",
                 (cand["concept_id"], cand["short_code"]),
             ).fetchall()
             if len(rows) != total_members:
                 continue
-            cand_map: dict[int, list[int]] = {}
-            for r in rows:
-                cand_map.setdefault(r["position"], []).append(
-                    r["member_concept_id"])
-            cand_sig = tuple(
-                (pos, tuple(sorted(ids)))
-                for pos, ids in sorted(cand_map.items())
-            )
+            cand_ids = [r["member_concept_id"] for r in rows]
+            if vtype == "CHAIN":
+                cand_sig = tuple(cand_ids)
+            else:
+                cand_sig = tuple(sorted(cand_ids))
             if cand_sig == target_sig:
                 status = self.conn.execute(
                     "SELECT status FROM variations "
@@ -1011,21 +1065,22 @@ class HoronDB:
     ) -> dict[str, list[DirectedRelation]]:
         """查 concept_id 的有向关系，按 status 分组。
 
-        inbound=True：concept_id 作为被指向方（出现在 position >= 2），
-            关系另一端是相邻上一个 position (pos - 1) 的成员。
-        inbound=False：concept_id 作为指向方（其 position + 1 存在），
-            关系另一端是相邻下一个 position (pos + 1) 的成员。
+        只有 CHAIN 类型的变体有方向性。AND/OR 的成员之间无有向关系。
+
+        inbound=True：concept_id 作为被指向方（出现在 order_index >= 2），
+            关系另一端是相邻上一个 order_index (idx - 1) 的成员。
+        inbound=False：concept_id 作为指向方（其 order_index + 1 存在），
+            关系另一端是相邻下一个 order_index (idx + 1) 的成员。
 
         单条 JOIN 一次取出 (variation, status, 另一端成员名/disclosure)，
         避免逐行回查；表达式字符串按 variation 缓存，不重复构建。
         """
-        # self_pos 是 concept_id 所在 position，other_pos 是关系另一端的相邻 position。
         offset = -1 if inbound else 1
         rows = self.conn.execute(
             "SELECT "
             "  self_cm.concept_id AS v_cid, "
             "  self_cm.short_code AS v_sc, "
-            "  self_cm.position   AS self_pos, "
+            "  self_cm.order_index AS self_pos, "
             "  v.status           AS status, "
             "  rel.name           AS concept_name, "
             "  other_cm.member_concept_id AS member_id, "
@@ -1035,22 +1090,23 @@ class HoronDB:
             "JOIN variations v "
             "  ON v.concept_id = self_cm.concept_id "
             "  AND v.short_code = self_cm.short_code "
+            "  AND v.type = 'CHAIN' "
             "JOIN concepts rel ON rel.id = self_cm.concept_id "
             "JOIN compose_members other_cm "
             "  ON other_cm.concept_id = self_cm.concept_id "
             "  AND other_cm.short_code = self_cm.short_code "
-            "  AND other_cm.position = self_cm.position + ? "
+            "  AND other_cm.order_index = self_cm.order_index + ? "
             "JOIN concepts m ON m.id = other_cm.member_concept_id "
             "WHERE self_cm.member_concept_id = ? "
             "ORDER BY self_cm.concept_id, self_cm.short_code, "
-            "self_cm.position, other_cm.member_concept_id",
+            "self_cm.order_index, other_cm.member_concept_id",
             (offset, concept_id),
         ).fetchall()
 
         grouped: dict[str, list[DirectedRelation]] = {
             "confirmed": [], "negated": [], "hypothesis": [],
         }
-        # 同一 (variation, position) 的多个并列成员聚成一条关系。
+        # 同一 (variation, order_index) 的关系聚合成一条。
         relations: dict[tuple[int, str, int], DirectedRelation] = {}
         expr_cache: dict[tuple[int, str], str | None] = {}
         for row in rows:
@@ -1111,34 +1167,80 @@ class HoronDB:
                 expr = match.group(1).strip()
                 expected = match.group(2)
 
-                if expr not in expr_cache:
-                    expr_cache[expr] = self._find_composition_variation(expr)
-                target = expr_cache[expr]
+                cache_key = (expr, expected)
+                if cache_key not in expr_cache:
+                    try:
+                        vtype, member_ids = self._parse_expression(expr, allow_single=True)
+                        if vtype in ("SINGLE", "OR"):
+                            # 动态单节点 / OR 追踪
+                            if expected == "negated":
+                                expr_cache[cache_key] = {"mode": "unsupported_negated", "target": None}
+                            else:
+                                expr_cache[cache_key] = {"mode": "any_confirmed", "member_ids": member_ids}
+                        elif vtype == "AND":
+                            expr_cache[cache_key] = {"mode": "unsupported_and", "target": None}
+                        else:
+                            # CHAIN 实体追踪
+                            target = self._find_composition_variation(vtype, member_ids)
+                            if target:
+                                expr_cache[cache_key] = {"mode": "exact", "target": target}
+                            else:
+                                expr_cache[cache_key] = {"mode": "not_met", "target": None}
+                    except ValueError:
+                        expr_cache[cache_key] = {"mode": "broken", "target": None}
 
-                if target is None:
+                cache_val = expr_cache[cache_key]
+                mode = cache_val["mode"]
+
+                if mode == "not_met":
+                    continue
+                elif mode == "broken":
                     alerts.append(
                         f"Broken reference in '{source_name}': "
                         f"its unless condition watches '{expr}', "
-                        f"but that composition no longer exists in "
-                        f"the graph. read_concept '{source_name}' "
-                        f"and decide whether to update or remove "
-                        f"the unless condition.")
+                        f"but some concepts in it could not be resolved. "
+                        f"read_concept '{source_name}' and decide whether "
+                        f"to update or remove the unless condition.")
                     continue
-                target_cid, _, actual = target
-
-                if actual != expected:
+                elif mode == "unsupported_negated":
+                    alerts.append(
+                        f"Invalid condition in '{source_name}': "
+                        f"'{expr} negated' is not supported. "
+                        f"Single-concept and OR conditions do not support 'negated'.")
                     continue
-
-                target_name = self._resolve_concept_name(target_cid)
-
-                alerts.append(
-                    f"Unless triggered on '{source_name}': "
-                    f"'{target_name}' is now {actual} "
-                    f"(the condition ${{{expr} {expected}}} "
-                    f"has been met). The ground has shifted — "
-                    f"review '{source_name}' and any related "
-                    f"concepts to decide whether its evidence, "
-                    f"status, and unless still hold.")
+                elif mode == "unsupported_and":
+                    alerts.append(
+                        f"Invalid condition in '{source_name}': "
+                        f"AND conditions such as '{expr} {expected}' are not supported.")
+                    continue
+                elif mode == "exact":
+                    target_cid, _, actual = cache_val["target"]
+                    if actual != expected:
+                        continue
+                    target_name = self._resolve_concept_name(target_cid)
+                    alerts.append(
+                        f"Unless triggered on '{source_name}': "
+                        f"'{target_name}' is now {actual} "
+                        f"(the condition ${{{expr} {expected}}} has been met). "
+                        f"The ground has shifted — review '{source_name}' "
+                        f"and any related concepts.")
+                elif mode == "any_confirmed":
+                    member_ids = cache_val["member_ids"]
+                    placeholders = ",".join("?" * len(member_ids))
+                    row = self.conn.execute(
+                        f"SELECT v.concept_id FROM variations v "
+                        f"WHERE v.concept_id IN ({placeholders}) AND v.status = 'confirmed' LIMIT 1",
+                        tuple(member_ids)
+                    ).fetchone()
+                    if row:
+                        target_cid = row["concept_id"]
+                        target_name = self._resolve_concept_name(target_cid)
+                        alerts.append(
+                            f"Unless triggered on '{source_name}': "
+                            f"'{target_name}' has a confirmed variation "
+                            f"(the condition ${{{expr} confirmed}} has been met). "
+                            f"The ground has shifted — review '{source_name}' "
+                            f"and any related concepts.")
         return alerts
 
     def read_concept(self, concept) -> ReadResult:
@@ -1154,14 +1256,13 @@ class HoronDB:
             "ORDER BY short_code",
             (cid,),
         ).fetchall()
-        # 一次性查出该 concept 所有变体的成员，按 short_code 分组（避免逐变体 N+1 查询）。
         member_rows = self.conn.execute(
             "SELECT cm.short_code, cm.member_concept_id AS concept_id, c.name, "
-            "       cm.position, c.disclosure "
+            "       cm.order_index, c.disclosure "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "WHERE cm.concept_id = ? "
-            "ORDER BY cm.position, cm.member_concept_id",
+            "ORDER BY cm.order_index, cm.member_concept_id",
             (cid,),
         ).fetchall()
         members_by_sc: dict[str, list[ComposeMemberDetail]] = {}
@@ -1215,33 +1316,38 @@ class HoronDB:
     # ── Compile (path verification) ─────────────────────────────────────────
 
     def _load_relation_graph(self) -> RelationGraph:
-        """Load each variation as one indivisible ordered expression rule."""
+        """Load each variation as one indivisible expression rule."""
         rows = self.conn.execute(
-            "SELECT cm.concept_id, cm.short_code, cm.position, "
-            "cm.member_concept_id, v.status "
+            "SELECT cm.concept_id, cm.short_code, cm.order_index, "
+            "cm.member_concept_id, v.status, v.type "
             "FROM compose_members cm "
             "JOIN variations v USING (concept_id, short_code) "
-            "ORDER BY cm.concept_id, cm.short_code, cm.position, "
+            "ORDER BY cm.concept_id, cm.short_code, cm.order_index, "
             "cm.member_concept_id"
         ).fetchall()
-        grouped: dict[tuple[int, str], tuple[dict[int, set[int]], str]] = {}
+        grouped: dict[tuple[int, str], tuple[list[int], str, str]] = {}
         for row in rows:
             key = (row["concept_id"], row["short_code"])
             if key not in grouped:
-                grouped[key] = ({}, row["status"] or "hypothesis")
-            grouped[key][0].setdefault(row["position"], set()).add(
-                row["member_concept_id"])
+                grouped[key] = (
+                    [],
+                    row["status"] or "hypothesis",
+                    row["type"] or "AND",
+                )
+            grouped[key][0].append(row["member_concept_id"])
 
         expressions = []
-        for (concept_id, short_code), (by_position, status) in grouped.items():
+        for (concept_id, short_code), (members, status, vtype) in grouped.items():
+            if vtype == "CHAIN":
+                positions = tuple(frozenset({m}) for m in members)
+            else:
+                positions = (frozenset(members),)
             expressions.append(ExpressionRule(
                 concept_id=concept_id,
                 short_code=short_code,
                 status=status,
-                positions=tuple(
-                    frozenset(by_position[position])
-                    for position in sorted(by_position)
-                ),
+                type=vtype,
+                positions=positions,
             ))
         return RelationGraph(tuple(expressions))
 

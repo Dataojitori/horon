@@ -14,7 +14,7 @@ export interface GraphLink {
   target: number | GraphNode;
   relation_id: number;
   status: string | null;
-  kind: "directed" | "undirected";
+  kind: "directed" | "undirected" | "or";
 }
 
 export interface GraphData {
@@ -22,16 +22,19 @@ export interface GraphData {
   links: GraphLink[];
 }
 
+export type VariationType = "CHAIN" | "AND" | "OR";
+
 export interface ComposeMemberDetail {
   concept_id: number;
   name: string;
-  position: number;
+  order_index: number;
   disclosure: string | null;
 }
 
 export interface VariationDetail {
   concept_id: number;
   short_code: string;
+  type: VariationType | null;
   status: string | null;
   evidence: string | null;
   unless: string | null;
