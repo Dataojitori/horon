@@ -191,7 +191,8 @@ def _format_read_concept(result: ReadResult) -> str:
         if multi:
             lines.append(f"--- [{v.short_code}] ---")
         if v.expression:
-            lines.append(f"Expression: {v.expression} (status: {v.status or 'not set'})")
+            type_tag = f" [{v.type}]" if v.type else ""
+            lines.append(f"Expression: {v.expression}{type_tag} (status: {v.status or 'not set'})")
         else:
             lines.append(f"Expression: (Atomic / Not yet decomposed) (status: {v.status or 'not set'})")
         lines.append(f"Evidence:\n{v.evidence}" if v.evidence else "Evidence: (empty)")
@@ -205,7 +206,7 @@ def _format_read_concept(result: ReadResult) -> str:
         out = [f"  * {group_name}:"]
         for item in items:
             out.append(f"    - {item.expression} (Concept ID: {item.concept_id}, Name: '{item.concept_name}')")
-            # 关系另一端可能是同一 position 的多个并列成员，逐个展示有 disclosure 的。
+            # 关系另一端的成员列表，逐个展示有 disclosure 的。
             for member in item.members:
                 if member.disclosure:
                     out.append(

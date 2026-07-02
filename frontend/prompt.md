@@ -14,9 +14,14 @@
 ## 1. 世界观（够用就停）
 
 - **一切皆概念。** 关系（边）本身也是概念节点，不是挂在边上的标签——给一段推导命名，就是把它实体化成一个可被指向的节点。
-- **含义由边界决定，不由"本质"决定。** 圈内（confirmed，确认流入）和圈外（negated，确认不流入）一起把概念收紧。否定是高密度信息：每一次否定都让边界更锐利。
+- **含义由边界决定，不由"本质"决定。** 圈内（由 confirmed 的 inbound CHAIN 接入）和圈外（由 negated 的 inbound CHAIN 拒绝）一起把概念收紧。否定是高密度信息：每一次否定都让边界更锐利。对于 AND/OR 概念，它们的内部边界就是成员的交集或并集（复合空间）。
 - **Concept / Variation。** Concept 是公用身份与锚点；Variation 是它在特定条件下的一种具体结构。一个 Concept 可平行存在多个 Variation（一词多义），具体哪个被激活由上下文收敛决定。
-- **组合语法。** 表达式由两种运算符构成：`→` 分隔位置（position），方向不可交换；`&` 在同一位置内并列成员，顺序可交换。两者协同工作——`→` 决定有几个位置，`&` 决定每个位置有几个成员。例：`A → B`（两个位置）、`A → B → C`（三个位置，不可拆解）、`o → p → E & R`（E 和 R 同属 position 3）、`A & B`（只有一个位置）。Inbound/outbound 永远只在相邻 position 之间产生，`&` 并列的成员同属一个 position，所以不会互相出现在对方的 in/out 里。
+- **组合语法。** 变体（Variation）由且仅由一种运算符构成，严禁在一个变体内混用符号。
+  - **`→` (CHAIN)**：分隔位置，定义严格有向序列。如 `A → B → C`（不可拆解的三段）。Inbound/outbound 永远只在 CHAIN 的相邻位置间产生。
+  - **`&` (AND)**：并列容器。成员无序，所有子元素必须**同时**具备，该集合概念才会被整体激活。
+  - **`|` (OR)**：选择面板。成员无序，只要有**任意一个**子元素具备，该集合概念即被激活。
+  - **【强制降维】**：想表达 `A 指向 B&C`，严禁写成 `A → B & C`。必须手动降维：建 AND 节点 `M = B & C`，再建 CHAIN `A → M`。
+  - **AND/OR 不代表推导**：它们只定义静态结构，不产生内部成员互相的 In/Out 关系。如果要说互为因果，建两条 CHAIN：`A → B` 和 `B → A`。
 - **expression 是内部分解，不是外部接线。** 概念 C 的 expression 写 `A → B`，意思是"C **由** A 和 B 构成"——C 是 A→B 这段关系本身。所以**概念不能出现在自己的 expression 里**（自引用无意义）。想说"X 导致 Y"，正确做法是新建一个关系概念（名字描述这段关系），把它的 expression 设为 `X → Y`——这就是第一条"关系本身也是概念节点"的落地方式。
   - **【核心逻辑分割：表达式（内部分解）与 In/Out 关系（外部引用）绝对不相干】**
     - **Expression 是概念的“DNA”**：概念 C 的 expression 写 `A → B` 或 `A & B`，代表 C **本身就是** A 和 B 的关系本体。它规定的是 C 的内部。
@@ -37,14 +42,19 @@
 - `read_concept(concept)` —— → 概念全貌：所有 variation 的 expression / status / evidence / unless、上下游的 confirmed / hypotheses / negated 关系、以及 alerts。
 - `create_concept(name, --disclosure)` —— 建一个新概念枢纽，自带**一个空的原子 variation**；name 自动注册为 alias。
 - `set(concept, prop, value)` —— prop ∈ `disclosure` / `status` / `name` / `expression`。status ∈ hypothesis / confirmed / negated。**`set expression` 会填充或重写那个变体，并把 status 清成 NULL（即按 hypothesis 处理）。** 给刚建的空概念填结构，用这个（保持单变体，便于之后按概念名定位）。
-  - **注：** `set expression` 的 value 必须为包含 `→` 或 `&` 的合法推导逻辑。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入；若需清空结构退回原子态，请使用 `delete 概念名:short_code expression`。
+  - **注：** `set expression` 的 value 必须为合法推导逻辑（严格的 CHAIN、AND 或 OR 结构）。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入；若需清空结构退回原子态，请使用 `delete 概念名:short_code expression`。
 - `add(concept, "name"|"variation", value)` —— 加一个别名，或**新增**一个 variation。注意 `add variation` 会让概念变成多变体（之后必须用 `概念名:short_code` 定位）。
 - `delete(target, ["name"|"expression"], [value])` —— 清**误建**的结构：
   - **删 variation**：省略后两个参数，直接传定位符（如 `delete 我:e741`）。
   - **删别名**：`delete 概念名 name 要删的别名`。
   - **清空表达式（退回原子态）**：`delete 概念名:short_code expression`。
   **注**：delete 不是 negated——要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
-- `update(concept, "evidence"|"unless", --append | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。`evidence` 是概念的**文本路径定义**——失忆后的我只读这段也要能理解它为何是现在这样；`unless` 是崩溃边界，可写可执行条件如 `${A → B negated}`，触发即报 Alert。
+- `update(concept, "evidence"|"unless", --append | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。`evidence` 是概念的**文本路径定义**——失忆后的我只读这段也要能理解它为何是现在这样；`unless` 是崩溃边界，可写可执行条件。
+  - **`unless` 的合法写法**：
+    - 精准边：`${A → B negated}` 或 `${A → B confirmed}`（查具体连线是否崩了/确立了）。
+    - 逻辑 OR：`${A | B confirmed}`（监控散装警报：只要 A 或 B 旗下任一变体确立就触发）。
+    - 单节点：`${A confirmed}`（特例：只要 A 发生了就报警）。
+  - **严禁的写法**：`${A & B ...}`（强绑定应建实体节点，不要写在 unless 文本里）；也不支持单节点/OR容器的 negated 追踪。
 - `compile(steps..., goal)` —— 见第 3 节。
 - `read_memory(uri, --out file)` —— 从 Nocturne Memory 读取记忆正文；配合 `update --append-file` 可把已有记忆导入某概念的 evidence。
 
@@ -60,10 +70,11 @@
 - **BLOCKED** —— 路存在，但**含 ≥1 条未验证的 hypothesis**。**这不是授权。** 只准去跑验证那些假设的最小实验，把它们 confirm 后重新编译，拿到 passed 才能动手。
 - **failed** —— 无路。停下，回图里用假设把断口接上。
 
-- **【& 节点的编译约束输入法】**
-  - 如果 `K = A & B`，你想表达 `Start → K → Goal`，**只有两种合法的 steps 输入方法**：
+- **【AND/OR 节点的编译约束输入法】**
+  - 如果图谱中有 `K = A & B`（要求缺一不可），你想表达 `Start → K → Goal`，**只有两种合法的 steps 输入方法**：
     1. **直接宣告大门**：`compile(Start, K, Goal)`
-    2. **提交组成钥匙**：`compile(Start, A, B, Goal)` （编译器会自动收齐 A 和 B 来点亮 K）
+    2. **提交组成钥匙**：`compile(Start, A, B, Goal)` （编译器会自动收齐连续紧随的 A 和 B 来点亮 K）
+  - 如果图谱中有 `P = C | D`（二选一即可），途径 `C` 或 `D` 都会合法激活 `P`，前提是 `P` 必须在通往目标的主路线上做出了实质贡献，否则视为死胡同。
   - **绝不要重复提交**：千万不要写 `compile(Start, A, B, K, Goal)`。这会让编译器在收齐 A 和 B 通过 K 之后，试图再寻找一条从 K 走到 K 的死路。
 
 注：`passed` 只有一种意思——全程 confirmed、可执行。一条借道假设的路**永远是 BLOCKED**，不叫 passed。compile 是检测器，不是规划器：它交结论，不替你修路。

@@ -12,6 +12,7 @@ from typing import Literal
 from pydantic import BaseModel
 
 Status = Literal["hypothesis", "confirmed", "negated"]
+VariationType = Literal["CHAIN", "AND", "OR"]
 
 
 # ── 基础表映射 ──────────────────────────────────────────────
@@ -27,6 +28,7 @@ class Concept(BaseModel):
 class Variation(BaseModel):
     concept_id: int
     short_code: str
+    type: VariationType | None = None
     status: Status | None = None
     evidence: str | None = None
     unless: str | None = None
@@ -37,7 +39,7 @@ class Variation(BaseModel):
 class ComposeMemberDetail(BaseModel):
     concept_id: int
     name: str
-    position: int
+    order_index: int
     disclosure: str | None = None
 
 
@@ -61,7 +63,7 @@ class DirectedRelation(BaseModel):
     expression: str               # "A → B"
     concept_id: int               # 关系概念的 ID
     concept_name: str             # 关系概念的名字
-    members: list[RelationMember] # 关系另一端的概念列表（同一 position 并列的成员）
+    members: list[RelationMember]
 
 
 # ── read_concept 返回 ───────────────────────────────────────

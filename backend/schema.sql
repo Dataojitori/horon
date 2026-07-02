@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS concepts (
 CREATE TABLE IF NOT EXISTS variations (
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     short_code  TEXT    NOT NULL,
+    type        TEXT    CHECK(type IN ('CHAIN', 'AND', 'OR')),
     status      TEXT    CHECK(status IN ('hypothesis', 'confirmed', 'negated')),
     evidence    TEXT,
     unless      TEXT,
@@ -30,9 +31,9 @@ CREATE TABLE IF NOT EXISTS compose_members (
     concept_id        INTEGER NOT NULL,
     short_code        TEXT    NOT NULL,
     member_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    position          INTEGER NOT NULL CHECK(position >= 1),
+    order_index       INTEGER NOT NULL CHECK(order_index >= 1),
     FOREIGN KEY (concept_id, short_code) REFERENCES variations(concept_id, short_code) ON DELETE CASCADE,
-    PRIMARY KEY (concept_id, short_code, position, member_concept_id)
+    PRIMARY KEY (concept_id, short_code, order_index)
 );
 
 CREATE TABLE IF NOT EXISTS aliases (
@@ -58,7 +59,8 @@ CREATE TABLE IF NOT EXISTS cli_audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_variations_concept ON variations(concept_id);
-CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
+CREATE INDEX IF NOT EXISTS idx_cm_member           ON compose_members(member_concept_id);
+CREATE INDEX IF NOT EXISTS idx_variations_type     ON variations(type);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
@@ -68,11 +70,13 @@ CREATE VIEW IF NOT EXISTS v_compose AS
 SELECT
     cm.concept_id,
     cm.short_code,
+    v.type   AS variation_type,
     c1.name  AS variation_concept_name,
     cm.member_concept_id,
     c2.name  AS member_concept_name,
-    cm.position
+    cm.order_index
 FROM compose_members cm
 JOIN concepts c1 ON cm.concept_id = c1.id
 JOIN concepts c2 ON cm.member_concept_id = c2.id
-ORDER BY cm.concept_id, cm.short_code, cm.position, cm.member_concept_id;
+JOIN variations v ON cm.concept_id = v.concept_id AND cm.short_code = v.short_code
+ORDER BY cm.concept_id, cm.short_code, cm.order_index, cm.member_concept_id;

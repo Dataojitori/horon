@@ -1,10 +1,10 @@
-"""Ordered proof search for Horon expressions.
+"""Proof search for Horon expressions (CHAIN / AND / OR).
 
-An expression variation is one indivisible causal action.  Its first
-position is the prerequisite; later positions are emitted in order; the
-concept that owns the expression is emitted last.  Members inside one
-position are unordered, so the compiler may arrange them to satisfy the
-user's ordered ``steps``.
+Each variation type defines a distinct traversal rule:
+  CHAIN: Ordered sequence.  positions[0] is the prerequisite; later
+         positions are emitted in order; the owning concept is emitted last.
+  AND:   All members in positions[0] must be reached (conjunction).
+  OR:    Any member in positions[0] suffices (disjunction).
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ class ExpressionRule:
     concept_id: int
     short_code: str
     status: str
+    type: str                              # 'CHAIN', 'AND', 'OR'
     positions: tuple[frozenset[int], ...]
 
     @property
@@ -58,7 +59,7 @@ class Compiler:
         self._rules = {rule.key: rule for rule in graph.expressions}
         pure_groups: dict[int, list[tuple[int, str]]] = {}
         for rule in graph.expressions:
-            if len(rule.positions) == 1 and rule.status != "negated":
+            if rule.type == "AND" and rule.status != "negated":
                 pure_groups.setdefault(rule.concept_id, []).append(rule.key)
         self._pure_groups = {
             concept_id: tuple(keys)
@@ -261,21 +262,28 @@ class Compiler:
                 if rule.status == "negated":
                     continue
                 prerequisites = tuple(sorted(rule.positions[0]))
-                if not all(member in labels for member in prerequisites):
-                    continue
 
-                choices = [tuple(labels[member].values())
-                           for member in prerequisites]
-                for selected in itertools.product(*choices):
-                    # Once this expression has activated, its proof is also
-                    # attached to the members of a pure ``&`` group.  Feeding
-                    # such a proof back into the same rule is a causal cycle;
-                    # reject it before doing any parent-order search.
+                if rule.type == "OR":
+                    # OR: any single prerequisite being reached suffices.
+                    reachable = [m for m in prerequisites if m in labels]
+                    if not reachable:
+                        continue
+                    # Try each reachable member independently.
+                    candidate_selections: list[tuple[_Proof, ...]] = []
+                    for member in reachable:
+                        for proof in labels[member].values():
+                            candidate_selections.append((proof,))
+                else:
+                    # CHAIN / AND: all prerequisites must be reached.
+                    if not all(member in labels for member in prerequisites):
+                        continue
+                    choices = [tuple(labels[member].values())
+                               for member in prerequisites]
+                    candidate_selections = list(itertools.product(*choices))
+
+                for selected in candidate_selections:
                     if any(rule.key in proof.actions for proof in selected):
                         continue
-                    # Parent order is semantically free for an & position.
-                    # Trying each distinct proof order lets ordered steps pick
-                    # M,N or N,M without permuting members inside the database.
                     orders = self._merge_parent_orders(
                         start_id, tuple(selected), steps)
                     for actions in orders:
@@ -292,14 +300,9 @@ class Compiler:
                             self._consume(events, steps),
                         )
 
-                        # Every occurrence produced by the atomic expression
-                        # becomes available after the expression completes.
                         produced = {rule.concept_id}
                         for position in rule.positions[1:]:
                             produced.update(position)
-                        # When arrival at an & container concretely expanded
-                        # all of its members, those occurrences are available
-                        # to subsequent expressions just like ordinary steps.
                         for concept_id in tuple(produced):
                             for group_key in self._pure_groups.get(
                                     concept_id, ()):
@@ -331,26 +334,30 @@ class Compiler:
             rule = self._rules[key]
             from_ids = tuple(sorted(rule.positions[0]))
             final_ids = tuple(sorted(rule.positions[-1]))
+            if rule.type == "OR":
+                from_sep = " | "
+            else:
+                from_sep = " & "
             route.append({
                 "concept_id": rule.concept_id,
                 "short_code": rule.short_code,
                 "name": self._resolve_concept_name(rule.concept_id),
+                "type": rule.type,
                 "status": rule.status,
                 "from": {
                     "concept_ids": list(from_ids),
-                    "name": " & ".join(
+                    "name": from_sep.join(
                         self._resolve_concept_name(cid) for cid in from_ids),
                 },
                 "to": {
                     "concept_id": (
-                        rule.concept_id if len(rule.positions) == 1
+                        rule.concept_id if rule.type != "CHAIN"
                         else final_ids[0]
                     ),
                     "name": (
                         self._resolve_concept_name(rule.concept_id)
-                        if len(rule.positions) == 1
-                        else " & ".join(
-                            self._resolve_concept_name(cid) for cid in final_ids)
+                        if rule.type != "CHAIN"
+                        else self._resolve_concept_name(final_ids[0])
                     ),
                 },
             })
