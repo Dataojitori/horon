@@ -32,7 +32,8 @@ def _format_route(edges: list[dict], label: str) -> list[str]:
     Args:
         edges: compile 返回的边链。每条边形如
                {"from": {"name": ...}, "to": {"name": ...},
-                "concept_id": int, "name": str, "status": str}
+                "concept_id": int, "name": str, "status": str,
+                "segments": [{"from": ..., "to": ...}, ...]}
         label: 输出首行的前缀标签（如 "route", "detour"）。
 
     Returns:
@@ -61,7 +62,7 @@ def _format_route(edges: list[dict], label: str) -> list[str]:
         return [f"{label}: (empty)"]
 
     # ── 摘要：检测断裂，分段拼接 ──
-    segments: list[list[str]] = []
+    route_segments: list[list[str]] = []
     seg: list[str] = [edges[0]["from"]["name"]]
     for i, edge in enumerate(edges):
         is_break = False
@@ -74,19 +75,32 @@ def _format_route(edges: list[dict], label: str) -> list[str]:
                 is_break = True
 
         if is_break:
-            segments.append(seg)
+            route_segments.append(seg)
             seg = [edge["from"]["name"]]
-        seg.append(f'{edge["to"]["name"]}({edge["status"]})')
-    segments.append(seg)
-    summary = ", ".join(" → ".join(s) for s in segments)
+            
+        if edge.get("segments"):
+            for s in edge["segments"]:
+                seg.append(f'{s["to"]["name"]}({edge["status"]})')
+        else:
+            seg.append(f'{edge["to"]["name"]}({edge["status"]})')
+            
+    route_segments.append(seg)
+    summary = ", ".join(" → ".join(s) for s in route_segments)
     lines = [f"{label}: {summary}"]
 
     # ── 明细 ──
     for edge in edges:
-        lines.append(
-            f'  {edge["from"]["name"]} → {edge["to"]["name"]}'
-            f' : see "{edge["name"]}"'
-        )
+        if edge.get("segments"):
+            for s in edge["segments"]:
+                lines.append(
+                    f'  {s["from"]["name"]} → {s["to"]["name"]}'
+                    f' : see "{edge["name"]}"'
+                )
+        else:
+            lines.append(
+                f'  {edge["from"]["name"]} → {edge["to"]["name"]}'
+                f' : see "{edge["name"]}"'
+            )
     return lines
 
 
@@ -154,9 +168,15 @@ def _format_compile(result: dict) -> str:
             "(to investigate these assumptions, use read_concept):"
         )
         for e in hyp_edges:
-            lines.append(
-                f'  ✗ {e["from"]["name"]} → {e["to"]["name"]} '
-                f'({e["status"]}) : see "{e["name"]}"')
+            if e.get("segments"):
+                for s in e["segments"]:
+                    lines.append(
+                        f'  ✗ {s["from"]["name"]} → {s["to"]["name"]} '
+                        f'({e["status"]}) : see "{e["name"]}"')
+            else:
+                lines.append(
+                    f'  ✗ {e["from"]["name"]} → {e["to"]["name"]} '
+                    f'({e["status"]}) : see "{e["name"]}"')
     elif all_edges:
         lines.append(
             'all steps confirmed. if you intend to execute any part of this route, '

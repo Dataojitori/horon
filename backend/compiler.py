@@ -333,34 +333,60 @@ class Compiler:
         for key in report_keys:
             rule = self._rules[key]
             from_ids = tuple(sorted(rule.positions[0]))
-            final_ids = tuple(sorted(rule.positions[-1]))
-            if rule.type == "OR":
-                from_sep = " | "
+            if rule.type == "CHAIN":
+                segments = []
+                for i in range(len(rule.positions) - 1):
+                    seg_from = tuple(sorted(rule.positions[i]))
+                    seg_to = tuple(sorted(rule.positions[i + 1]))
+                    segments.append({
+                        "from": {
+                            "concept_id": seg_from[0],
+                            "name": self._resolve_concept_name(seg_from[0]),
+                        },
+                        "to": {
+                            "concept_id": seg_to[0],
+                            "name": self._resolve_concept_name(seg_to[0]),
+                        },
+                    })
+                from_ids = tuple(sorted(rule.positions[0]))
+                final_ids = tuple(sorted(rule.positions[-1]))
+                route.append({
+                    "concept_id": rule.concept_id,
+                    "short_code": rule.short_code,
+                    "name": self._resolve_concept_name(rule.concept_id),
+                    "type": rule.type,
+                    "status": rule.status,
+                    "from": {
+                        "concept_ids": list(from_ids),
+                        "name": self._resolve_concept_name(from_ids[0]),
+                    },
+                    "to": {
+                        "concept_id": final_ids[0],
+                        "name": self._resolve_concept_name(final_ids[0]),
+                    },
+                    "segments": segments,
+                })
             else:
-                from_sep = " & "
-            route.append({
-                "concept_id": rule.concept_id,
-                "short_code": rule.short_code,
-                "name": self._resolve_concept_name(rule.concept_id),
-                "type": rule.type,
-                "status": rule.status,
-                "from": {
-                    "concept_ids": list(from_ids),
-                    "name": from_sep.join(
-                        self._resolve_concept_name(cid) for cid in from_ids),
-                },
-                "to": {
-                    "concept_id": (
-                        rule.concept_id if rule.type != "CHAIN"
-                        else final_ids[0]
-                    ),
-                    "name": (
-                        self._resolve_concept_name(rule.concept_id)
-                        if rule.type != "CHAIN"
-                        else self._resolve_concept_name(final_ids[0])
-                    ),
-                },
-            })
+                from_ids = tuple(sorted(rule.positions[0]))
+                final_ids = tuple(sorted(rule.positions[-1]))
+                from_sep = " | " if rule.type == "OR" else " & "
+                route.append({
+                    "concept_id": rule.concept_id,
+                    "short_code": rule.short_code,
+                    "name": self._resolve_concept_name(rule.concept_id),
+                    "type": rule.type,
+                    "status": rule.status,
+                    "from": {
+                        "concept_ids": list(from_ids),
+                        "name": from_sep.join(
+                            self._resolve_concept_name(cid) for cid in from_ids),
+                    },
+                    "to": {
+                        "concept_id": rule.concept_id if rule.type != "CHAIN" else final_ids[0],
+                        "name": self._resolve_concept_name(rule.concept_id) if rule.type != "CHAIN" else self._resolve_concept_name(final_ids[0]),
+                    },
+                    "segments": None,
+                })
         return route
 
     def compile(self, waypoints: list[int], input_names: dict[int, str]) -> dict:
