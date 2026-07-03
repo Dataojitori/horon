@@ -36,7 +36,7 @@ export interface VariationDetail {
   short_code: string;
   type: VariationType | null;
   status: string | null;
-  evidence: string | null;
+  content: string | null;
   unless: string | null;
   expression: string | null;
   created_at: string;

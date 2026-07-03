@@ -236,7 +236,7 @@ def _format_read_concept(result: ReadResult) -> str:
             lines.append(f"Expression: {v.expression}{type_tag} (status: {v.status or 'not set'})")
         else:
             lines.append(f"Expression: (Atomic / Not yet decomposed) (status: {v.status or 'not set'})")
-        lines.append(f"Evidence:\n{v.evidence}" if v.evidence else "Evidence: (empty)")
+        lines.append(f"Content:\n{v.content}" if v.content else "Content: (empty)")
         lines.append(f"Unless:\n{v.unless}" if v.unless else "Unless: (empty)")
     lines.append("")
     lines.append("=" * 60)
@@ -494,10 +494,10 @@ def _build_parser():
                                      "expression"])
     p.add_argument("value")
 
-    # update (evidence / unless — patch or append)
+    # update (content / unless — patch or append)
     p = sub.add_parser("update", allow_abbrev=False)
     p.add_argument("node")
-    p.add_argument("field", choices=["evidence", "unless"])
+    p.add_argument("field", choices=["content", "unless"])
     # patch
     p.add_argument("--old", default=None)
     p.add_argument("--old-file", default=None)

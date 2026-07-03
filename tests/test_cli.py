@@ -69,7 +69,7 @@ def test_cli_create_update_and_read_share_the_same_database(tmp_path):
         db_path=db_path,
     )
     updated = run_cli(
-        ["update", "Topic", "evidence", "--append", "first evidence"],
+        ["update", "Topic", "content", "--append", "first content"],
         tmp_path,
         db_path=db_path,
     )
@@ -80,7 +80,7 @@ def test_cli_create_update_and_read_share_the_same_database(tmp_path):
     assert read.returncode == 0
     assert "CONCEPT: Topic" in read.stdout
     assert "Disclosure: short note" in read.stdout
-    assert "Evidence:\nfirst evidence" in read.stdout
+    assert "Content:\nfirst content" in read.stdout
 
 
 def test_cli_batch_runs_multiple_commands_and_prints_only_last_by_default(tmp_path):
@@ -91,7 +91,7 @@ def test_cli_batch_runs_multiple_commands_and_prints_only_last_by_default(tmp_pa
         tmp_path,
         input_text=(
             'create_concept Topic --disclosure "short note"\n'
-            'update Topic evidence --append "batch evidence"\n'
+            'update Topic content --append "batch content"\n'
             "read_concept Topic\n"
         ),
         db_path=db_path,
@@ -100,7 +100,7 @@ def test_cli_batch_runs_multiple_commands_and_prints_only_last_by_default(tmp_pa
     assert result.returncode == 0
     assert result.stdout.count("CONCEPT: Topic") == 1
     assert "Success. Created concept" not in result.stdout
-    assert "Evidence:\nbatch evidence" in result.stdout
+    assert "Content:\nbatch content" in result.stdout
 
 
 def test_cli_batch_all_prints_each_command_result(tmp_path):
@@ -111,7 +111,7 @@ def test_cli_batch_all_prints_each_command_result(tmp_path):
         tmp_path,
         input_text=(
             "create_concept Topic\n"
-            'update Topic evidence --append "batch evidence"\n'
+            'update Topic content --append "batch content"\n'
             "read_concept Topic\n"
         ),
         db_path=db_path,
@@ -119,7 +119,7 @@ def test_cli_batch_all_prints_each_command_result(tmp_path):
 
     assert result.returncode == 0
     assert "Success. Created concept 'Topic'" in result.stdout
-    assert "Success. Updated evidence" in result.stdout
+    assert "Success. Updated content" in result.stdout
     assert "CONCEPT: Topic" in result.stdout
 
 
@@ -128,7 +128,7 @@ def test_cli_batch_reads_commands_from_file(tmp_path):
     batch_file = tmp_path / "commands.txt"
     batch_file.write_text(
         'create_concept Topic --disclosure "from file"\n'
-        'update Topic evidence --append "file batch evidence"\n'
+        'update Topic content --append "file batch content"\n'
         "read_concept Topic\n",
         encoding="utf-8",
     )
@@ -138,17 +138,17 @@ def test_cli_batch_reads_commands_from_file(tmp_path):
     assert result.returncode == 0
     assert "CONCEPT: Topic" in result.stdout
     assert "Disclosure: from file" in result.stdout
-    assert "Evidence:\nfile batch evidence" in result.stdout
+    assert "Content:\nfile batch content" in result.stdout
 
 
 def test_cli_update_accepts_append_file(tmp_path):
     db_path = init_cli_db(tmp_path)
-    append_file = tmp_path / "evidence.txt"
-    append_file.write_text("evidence from file\n", encoding="utf-8")
+    append_file = tmp_path / "content.txt"
+    append_file.write_text("content from file\n", encoding="utf-8")
 
     assert run_cli(["create_concept", "Topic"], tmp_path, db_path=db_path).returncode == 0
     updated = run_cli(
-        ["update", "Topic", "evidence", "--append-file", str(append_file)],
+        ["update", "Topic", "content", "--append-file", str(append_file)],
         tmp_path,
         db_path=db_path,
     )
@@ -156,18 +156,18 @@ def test_cli_update_accepts_append_file(tmp_path):
 
     assert updated.returncode == 0
     assert read.returncode == 0
-    assert "Evidence:\nevidence from file" in read.stdout
+    assert "Content:\ncontent from file" in read.stdout
 
 
 def test_cli_batch_handles_windows_paths_and_quotes(tmp_path):
     db_path = init_cli_db(tmp_path)
-    append_file = tmp_path / "win_evidence.txt"
-    append_file.write_text("evidence from windows path\n", encoding="utf-8")
+    append_file = tmp_path / "win_content.txt"
+    append_file.write_text("content from windows path\n", encoding="utf-8")
     
     batch_text = (
         "create_concept Topic\n"
-        f"update Topic evidence --append-file {str(append_file)}\n"
-        "update Topic evidence --append 'hello \"world\"'\n"
+        f"update Topic content --append-file {str(append_file)}\n"
+        "update Topic content --append 'hello \"world\"'\n"
         "read_concept Topic\n"
     )
     
@@ -179,7 +179,7 @@ def test_cli_batch_handles_windows_paths_and_quotes(tmp_path):
     )
     
     assert result.returncode == 0
-    assert "evidence from windows path" in result.stdout
+    assert "content from windows path" in result.stdout
     assert 'hello "world"' in result.stdout
 
 
@@ -188,7 +188,7 @@ def test_cli_successful_write_records_target_in_audit_log(tmp_path):
 
     created = run_cli(["create_concept", "Topic"], tmp_path, db_path=db_path)
     updated = run_cli(
-        ["update", "Topic", "evidence", "--append", "proof"],
+        ["update", "Topic", "content", "--append", "proof"],
         tmp_path,
         db_path=db_path,
     )
@@ -208,7 +208,7 @@ def test_cli_successful_write_records_target_in_audit_log(tmp_path):
         "concept_id": rows[0]["concept_id"],
         "concept_name": "Topic",
         "short_code": rows[0]["short_code"],
-        "sub_action": "evidence",
+        "sub_action": "content",
         "success": 1,
     }
 
@@ -276,7 +276,7 @@ def test_cli_batch_records_each_executed_subcommand(tmp_path):
         tmp_path,
         input_text=(
             "create_concept Topic\n"
-            'update Topic evidence --append "batch evidence"\n'
+            'update Topic content --append "batch content"\n'
             "read_concept Topic\n"
         ),
         db_path=db_path,

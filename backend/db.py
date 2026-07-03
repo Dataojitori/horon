@@ -5,7 +5,7 @@ DB operations (Concept → Variation 分層結構)
 Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
 Variation: 同一概念的不同解释（concept_id + short_code + type），
            type ∈ {CHAIN, AND, OR, NULL(原子)}，
-           每个 variation 有独立的 status / evidence / unless / compose_members。
+           每个 variation 有独立的 status / content / unless / compose_members。
 compose_members 的 member 引用 concept_id（hub），不是具体 variation。
 """
 from __future__ import annotations
@@ -271,7 +271,7 @@ class HoronDB:
         )
 
     def search_concepts(self, query) -> list[Concept]:
-        """按 alias、disclosure 或 evidence 模糊搜索 concept。"""
+        """按 alias、disclosure 或 content 模糊搜索 concept。"""
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         like = f"%{escaped}%"
         rows = self.conn.execute(
@@ -280,7 +280,7 @@ class HoronDB:
             "LEFT JOIN variations v ON c.id = v.concept_id "
             "WHERE a.alias LIKE ? ESCAPE '\\' "
             "OR c.disclosure LIKE ? ESCAPE '\\' "
-            "OR v.evidence LIKE ? ESCAPE '\\'",
+            "OR v.content LIKE ? ESCAPE '\\'",
             (like, like, like),
         ).fetchall()
         return [Concept(**dict(row)) for row in rows]
@@ -621,8 +621,7 @@ class HoronDB:
         if remaining["cnt"] == 0:
             self.conn.execute(
                 "DELETE FROM concepts WHERE id=?", (cid,))
-            msg = (f"Success. Deleted variation {sc} from {label}. "
-                   f"No variations remaining; concept deleted.")
+            msg = f"Success. Deleted concept {label} (last variation {sc} removed)."
         else:
             msg = (f"Success. Deleted variation {sc} from {label}. "
                    f"{remaining['cnt']} variation(s) remaining.")
@@ -941,7 +940,7 @@ class HoronDB:
 
     def get_variation_field(self, node, field: str) -> tuple[int, str, str | None]:
         """获取 variation 指定字段的当前值，供 CLI 层 patch mode 使用。避免 CLI 重复解析。"""
-        valid_fields = ("evidence", "unless")
+        valid_fields = ("content", "unless")
         if field not in valid_fields:
             raise ValueError(
                 f"Unknown field: '{field}'. "
@@ -955,12 +954,12 @@ class HoronDB:
 
     @transactional
     def update(self, node, field: str, value: str) -> MutationResult:
-        """给 variation 写 evidence 或 unless（patch/append 由 CLI 层处理）。
+        """给 variation 写 content 或 unless（patch/append 由 CLI 层处理）。
 
         node: concept 名/ID，或 "concept:short_code"。
         sole variation 时自动定位。
         """
-        valid_fields = ("evidence", "unless")
+        valid_fields = ("content", "unless")
         if field not in valid_fields:
             raise ValueError(
                 f"Unknown field: '{field}'. "

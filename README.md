@@ -78,7 +78,7 @@ Nocturne发帖                            ← 手动赋予的独立身份（名�
 概念的边界可以从两条路径进入，互不依赖，先后随意：
 
 - **结构路径**：通过 `add`（新增）、`set`（更新）或 `delete`（清除）操作，将概念组合为其他概念的关系，并声明该关系的 status（hypothesis / confirmed / negated）。
-- **文本路径**：通过 `update` 写入 evidence（内容/理由）和 unless（崩溃边界）。
+- **文本路径**：通过 `update` 写入 content（内容/理由）和 unless（崩溃边界）。
 
 一个概念可以先有文字描述再被拆解为结构，也可以先有结构再补文字解释，也可以只走其中一条。两条路径画的是同一个圈的边界——一个用概念间的关系画，一个用语言画。
 
@@ -108,16 +108,16 @@ Nocturne发帖                            ← 手动赋予的独立身份（名�
 ```
 
 **审批标准：名副其实**
-变体的“实质内容”包含了它的一切构件：**表达式（如果有）、evidence，以及 unless**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
+变体的“实质内容”包含了它的一切构件：**表达式（如果有）、content，以及 unless**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
 例如，你建了一个组合概念，名字叫“我的史诗级重构”，表达式是“修改文档拼写 → Linux内核开发者”。
 哪怕“改拼写属于开发者工作”这个逻辑推导本身没毛病，但这丁点儿内容和它宏大的名字完全不匹配。所以这个组合概念的 status 无法被设为 confirmed。
-同样，原子概念如果没有表达式，那就拿它的 evidence 和 unless 去和名字对账。
+同样，原子概念如果没有表达式，那就拿它的 content 和 unless 去和名字对账。
 
 - **假设**：尚未经过严格验证的试探性节点或关系。
 - **确认**：证据表明该概念确实成立。
 - **否定**：证据表明该概念确实不成立。
 
-evidence 和 unless 可以写在任何 variation 上。evidence 记录为什么打上该状态，unless 指定什么条件下需要重新审视。所有确认的状态都保持可证伪性。
+content 和 unless 可以写在任何 variation 上。content 记录为什么打上该状态，unless 指定什么条件下需要重新审视。所有确认的状态都保持可证伪性。
 
 ### unless 条件声明
 
@@ -215,7 +215,7 @@ compile --assume A C --block B --constraints D E --goal G
 
 ### variations 表
 
-同一概念的不同解释（variation）。每个 variation 是一种纯粹的推导路径（CHAIN/AND/OR），有独立的 status / evidence / unless。
+同一概念的不同解释（variation）。每个 variation 是一种纯粹的推导路径（CHAIN/AND/OR），有独立的 status / content / unless。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -223,7 +223,7 @@ compile --assume A C --block B --constraints D E --goal G
 | short_code | TEXT | 随机 4 位 hex（不复用已删除的码） |
 | type | TEXT | 变体类型，严格限制为：`'CHAIN'`, `'AND'`, `'OR'` |
 | status | TEXT? | hypothesis / confirmed / negated；适用于所有 variation，NULL 等同于 hypothesis |
-| evidence | TEXT? | 支撑当前状态的理由 |
+| content | TEXT? | 支撑当前状态的理由 |
 | unless | TEXT? | 崩溃边界：什么条件下需要重新审视 |
 | created_at | TEXT | ISO时间戳 |
 | updated_at | TEXT | ISO时间戳 |
@@ -272,14 +272,14 @@ compile --assume A C --block B --constraints D E --goal G
 - `add(target, kind, value)` — 给概念添加别名 (`name`) 或组合关系变体 (`variation`)
 - `delete(target, kind?, value?)` — 删除操作。缺省删 variation，也可指定删 `name` 或清除关系组合回到原子态 (`expression`)
 - `set(target, prop, value)` — 设置属性，支持 `disclosure`, `status`, `name` (重命名) 或重写当前 variation 的 `expression`
-- `update(node, field)` — 给 variation 写 `evidence` 或 `unless`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
+- `update(node, field)` — 给 variation 写 `content` 或 `unless`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
   - **patch**（`--old` + `--new`，含 `-file` 变体）：局部修改
   - **append**（`--append`，含 `-file` 变体）：在已有内容末尾换行追加
   - 两种模式互斥
 
 ### 查询
-- `search_concepts(query)` — 模糊搜索，LIKE 匹配 name, alias, disclosure 和 evidence
-- `read_concept(concept)` — 展示概念全貌：concept 信息、所有 variation（各自的组合 / status / evidence）、定义（圈内）、边界（圈外）、假设、出边
+- `search_concepts(query)` — 模糊搜索，LIKE 匹配 name, alias, disclosure 和 content
+- `read_concept(concept)` — 展示概念全貌：concept 信息、所有 variation（各自的组合 / status / content）、定义（圈内）、边界（圈外）、假设、出边
 
 ### 编译
 - `compile(--assume [...], --block [...], --constraints [...], --goal G)` — 状态空间规划器。在 assume 状态池出发、绕开 block 障碍物、收集所有 constraints、最终到达 goal。详见[推理 = 编译](#推理--编译)

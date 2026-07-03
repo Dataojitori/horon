@@ -4,7 +4,7 @@ Horon v2 data models (Pydantic)
 Concept → Variation 分层结构：
   Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
   Variation: 同一概念的不同解释（concept_id + short_code），
-             每个 variation 有独立的 status / evidence / unless / compose_members。
+             每个 variation 有独立的 status / content / unless / compose_members。
 """
 
 from typing import Literal
@@ -30,7 +30,7 @@ class Variation(BaseModel):
     short_code: str
     type: VariationType | None = None
     status: Status | None = None
-    evidence: str | None = None
+    content: str | None = None
     unless: str | None = None
     created_at: str
     updated_at: str

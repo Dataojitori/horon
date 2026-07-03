@@ -48,8 +48,8 @@ def test_losing_last_confirmed_variation_cascades_without_deleting_content(
     create_concepts(horon_db, ["A", "B", "C", "AtoB", "AtoBToC"])
     set_relation(horon_db, "AtoB", "A → B")
     set_relation(horon_db, "AtoBToC", "AtoB → C")
-    horon_db.update("AtoB", "evidence", "evidence for A to B")
-    horon_db.update("AtoBToC", "evidence", "evidence for the parent")
+    horon_db.update("AtoB", "content", "content for A to B")
+    horon_db.update("AtoBToC", "content", "content for the parent")
 
     result = horon_db.set("A", "status", "hypothesis")
 
@@ -59,8 +59,8 @@ def test_losing_last_confirmed_variation_cascades_without_deleting_content(
     assert parent.status == "hypothesis"
     assert child.expression == "A → B"
     assert parent.expression == "AtoB → C"
-    assert child.evidence == "evidence for A to B"
-    assert parent.evidence == "evidence for the parent"
+    assert child.content == "content for A to B"
+    assert parent.content == "content for the parent"
     assert "Cascaded downgrades:" in result.message
     assert "Downgraded 'AtoB'" in result.message
     assert "Downgraded 'AtoBToC'" in result.message
@@ -155,12 +155,12 @@ def test_add_variation_requires_explicit_short_code_after_ambiguity(horon_db):
     horon_db.add("Poly", "variation", "A → B")
 
     with pytest.raises(ValueError, match="multiple variations"):
-        horon_db.update("Poly", "evidence", "ambiguous write")
+        horon_db.update("Poly", "content", "ambiguous write")
 
     first = horon_db.read_concept("Poly").variations[0].short_code
-    horon_db.update(f"Poly:{first}", "evidence", "specific write")
+    horon_db.update(f"Poly:{first}", "content", "specific write")
 
-    assert horon_db.read_concept("Poly").variations[0].evidence == "specific write"
+    assert horon_db.read_concept("Poly").variations[0].content == "specific write"
 
 
 def test_delete_last_variation_rejects_still_referenced_concept(horon_db):

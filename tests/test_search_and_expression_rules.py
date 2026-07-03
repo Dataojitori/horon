@@ -7,15 +7,15 @@ def names(results):
     return [item.name for item in results]
 
 
-def test_search_matches_alias_disclosure_and_evidence(horon_db):
-    create_concepts(horon_db, ["Topic", "Other", "EvidenceOnly"])
+def test_search_matches_alias_disclosure_and_content(horon_db):
+    create_concepts(horon_db, ["Topic", "Other", "ContentOnly"])
     horon_db.add("Topic", "name", "AliasNeedle")
     horon_db.set("Other", "disclosure", "DisclosureNeedle is here")
-    horon_db.update("EvidenceOnly", "evidence", "EvidenceNeedle is here")
+    horon_db.update("ContentOnly", "content", "ContentNeedle is here")
 
     assert names(horon_db.search_concepts("AliasNeedle")) == ["Topic"]
     assert names(horon_db.search_concepts("DisclosureNeedle")) == ["Other"]
-    assert names(horon_db.search_concepts("EvidenceNeedle")) == ["EvidenceOnly"]
+    assert names(horon_db.search_concepts("ContentNeedle")) == ["ContentOnly"]
 
 
 def test_search_treats_percent_and_underscore_as_literal_characters(horon_db):

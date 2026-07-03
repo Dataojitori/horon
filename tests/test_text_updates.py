@@ -12,7 +12,7 @@ def test_resolve_text_appends_to_empty_and_existing_fields():
         new_file=None,
         append="first",
         append_file=None,
-        field_name="evidence",
+        field_name="content",
         current_value=None,
     ) == "first"
 
@@ -23,7 +23,7 @@ def test_resolve_text_appends_to_empty_and_existing_fields():
         new_file=None,
         append="second",
         append_file=None,
-        field_name="evidence",
+        field_name="content",
         current_value="first",
     ) == "first\nsecond"
 
@@ -37,7 +37,7 @@ def test_resolve_text_rejects_mixed_patch_and_append_modes():
             new_file=None,
             append="extra",
             append_file=None,
-            field_name="evidence",
+            field_name="content",
             current_value="old",
         )
 
@@ -51,7 +51,7 @@ def test_resolve_text_requires_patch_target_to_be_unique():
             new_file=None,
             append=None,
             append_file=None,
-            field_name="evidence",
+            field_name="content",
             current_value="repeat and repeat",
         )
 
@@ -64,7 +64,7 @@ def test_resolve_text_converts_literal_newlines_for_patch_mode():
         new_file=None,
         append=None,
         append_file=None,
-        field_name="evidence",
+        field_name="content",
         current_value="before\nline one\nline two\nafter",
     )
 
@@ -84,7 +84,7 @@ def test_resolve_text_reads_patch_content_from_files(tmp_path):
         new_file=str(new_file),
         append=None,
         append_file=None,
-        field_name="evidence",
+        field_name="content",
         current_value="before\nold block\nafter",
     )
 
@@ -102,7 +102,7 @@ def test_resolve_text_reads_append_content_from_file(tmp_path):
         new_file=None,
         append=None,
         append_file=str(append_file),
-        field_name="evidence",
+        field_name="content",
         current_value="before",
     )
 
@@ -121,7 +121,7 @@ def test_resolve_text_rejects_string_and_file_for_same_patch_side(tmp_path):
             new_file=None,
             append=None,
             append_file=None,
-            field_name="evidence",
+            field_name="content",
             current_value="old",
         )
 

@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS variations (
     short_code  TEXT    NOT NULL,
     type        TEXT    CHECK(type IN ('CHAIN', 'AND', 'OR')),
     status      TEXT    CHECK(status IN ('hypothesis', 'confirmed', 'negated')),
-    evidence    TEXT,
+    content    TEXT,
     unless      TEXT,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,

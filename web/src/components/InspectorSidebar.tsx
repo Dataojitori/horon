@@ -75,11 +75,11 @@ export default function InspectorSidebar({ concept, open, onClose }: Props) {
                       <span className="var-expression">{v.expression}</span>
                     )}
                   </div>
-                  {v.evidence && (
+                  {v.content && (
                     <div className="var-field">
-                      <span className="field-label">Evidence</span>
-                      <div className="field-content evidence-content">
-                        {v.evidence}
+                      <span className="field-label">Content</span>
+                      <div className="field-content content-content">
+                        {v.content}
                       </div>
                     </div>
                   )}
