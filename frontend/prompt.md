@@ -37,7 +37,7 @@
 2. **带变体后缀名**：当概念有多变体需精确指定时，填 `名字:short_code`，如 `测试:a3f1`。
 3. **数字 ID**：直接填 `12` 或 `12:a3f1`，适合防止重名歧义时使用。
 
-- `list_concepts(--with-disclosure)` —— 列出所有概念的 ID 和名字（可选带上 disclosure）。用于概览全图或找不到入手点时兜底。
+- `list_concepts()` —— 列出所有概念的 ID 和名字。用于概览全图或找不到入手点时兜底。
 - `search_concepts(query)` —— 模糊搜索（匹配 name / alias / disclosure / evidence）→ 命中的概念列表。不知道名字时用它定位，不要猜。
 - `read_concept(concept)` —— → 概念全貌：所有 variation 的 expression / status / evidence / unless、上下游的 confirmed / hypotheses / negated 关系、以及 alerts。
 - `create_concept(name, --disclosure)` —— 建一个新概念枢纽，自带**一个空的原子 variation**；name 自动注册为 alias。
@@ -55,29 +55,25 @@
     - 逻辑 OR：`${A | B confirmed}`（监控散装警报：只要 A 或 B 旗下任一变体确立就触发）。
     - 单节点：`${A confirmed}`（特例：只要 A 发生了就报警）。
   - **严禁的写法**：`${A & B ...}`（强绑定应建实体节点，不要写在 unless 文本里）；也不支持单节点/OR容器的 negated 追踪。
-- `compile(steps..., goal)` —— 见第 3 节。
+- `compile(--assume A C, --block B, --constraints D E, --goal G)` —— 见第 3 节。
 - `read_memory(uri, --out file)` —— 从 Nocturne Memory 读取记忆正文；配合 `update --append-file` 可把已有记忆导入某概念的 evidence。
 
-## 3. compile —— 状态机（全文唯一定义）
+## 3. compile —— 状态推演引擎
 
-**目的：沿图寻找一条从 start 出发，按顺序途经所有输入点，最终到达 goal 的有向路径。**
+**目的：在已知条件下，绕开死路，找一条凑齐必经目标并最终到达 goal 的路径。**
 
-`compile(start, [途经点...], goal)`：途经点是对路径的**约束**，给得越多，路径被钉得越死；只给 start 和 goal 两个概念 = 无约束搜索。
-  - **有向顺序假定**：编译器寻路时，**基本假定你输入的 steps 约束是一个可沿有向边（outbound）顺流而下的、具有先后顺序的边链**。
-  - 检测器沿图寻找符合上述约束的边链。结果三选一：
+`compile(--assume [公理...], --block [障碍...], --constraints [必经约束...], --goal 目标)`：
+  - **`--assume` (燃料)**：你当前确认拥有的状态。把它们丢进去，引擎会把它们当做绝对的、全局生效的公理（不管库里怎么标）。只要路线上需要，随时可以无条件取用。不给 fuel，引擎一步都走不动。
+  - **`--block` (障碍物)**：你不希望在最终路径里看到的节点。把它们填进这里，就是向引擎下死命令：**找出来的路绝对不能包含它们（必须绕道而行）**。
+    - **【警告】**：它**不能**用来防止副作用！如果你 block 了“封号”，但某条涨粉的主路会分叉导致“封号”，引擎依然会判定主路 passed（因为它找路时没用到封号节点，所以封号也没有出现在最终路径里）。它只防主干借道，不防分支连带。
 
-- **passed** —— 路存在，且**每一条边都是 confirmed**。这是唯一合法的"可执行"信号。
-- **BLOCKED** —— 路存在，但**含 ≥1 条未验证的 hypothesis**。**这不是授权。** 只准去跑验证那些假设的最小实验，把它们 confirm 后重新编译，拿到 passed 才能动手。
-- **failed** —— 无路。停下，回图里用假设把断口接上。
+结果三选一：
 
-- **【AND/OR 节点的编译约束输入法】**
-  - 如果图谱中有 `K = A & B`（要求缺一不可），你想表达 `Start → K → Goal`，**只有两种合法的 steps 输入方法**：
-    1. **直接宣告大门**：`compile(Start, K, Goal)`
-    2. **提交组成钥匙**：`compile(Start, A, B, Goal)` （编译器会自动收齐连续紧随的 A 和 B 来点亮 K）
-  - 如果图谱中有 `P = C | D`（二选一即可），途径 `C` 或 `D` 都会合法激活 `P`，前提是 `P` 必须在通往目标的主路线上做出了实质贡献，否则视为死胡同。
-  - **绝不要重复提交**：千万不要写 `compile(Start, A, B, K, Goal)`。这会让编译器在收齐 A 和 B 通过 K 之后，试图再寻找一条从 K 走到 K 的死路。
+- **passed** —— 路通了，且**每一条借道的边都是 confirmed**。这是唯一合法的"可执行"信号。
+- **BLOCKED** —— 路通了，但**含 ≥1 条未验证的 hypothesis**。**这不是授权。** 只准去跑验证那些假设的最小实验，把它们 confirm 后重新编译，拿到 passed 才能动手。
+- **failed** —— 无路。停下，回图里用假设把断口接上，或者调整你的约束。
 
-注：`passed` 只有一种意思——全程 confirmed、可执行。一条借道假设的路**永远是 BLOCKED**，不叫 passed。compile 是检测器，不是规划器：它交结论，不替你修路。
+注：`passed` 只有一种意思——全程 confirmed、可执行。一条借道假设的路**永远是 BLOCKED**，不叫 passed。compile 是检测器，只交结论，不替你盲目修路。
 
 ---
 

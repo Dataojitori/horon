@@ -1353,28 +1353,56 @@ class HoronDB:
 
 
 
-    def compile(self, steps: list[str | int],
-                goal: str | int) -> dict:
+    def compile(
+        self,
+        assume: list[str | int],
+        block: list[str | int],
+        constraints: list[str | int],
+        goal: str | int,
+    ) -> dict:
         """解析用户输入并委托给独立的编译引擎。"""
         result: dict = {
             "passed": False,
             "compiled_route": [],
+            "concept_order": [],
             "break": None,
             "detour": None,
+            "blocked": [],
             "errors": [],
         }
 
-        waypoint_inputs = list(steps) + [goal]
         try:
-            waypoints = [self._resolve_id(s)[0] for s in waypoint_inputs]
+            assume_ids = {self._resolve_id(s)[0] for s in assume}
+            block_ids = frozenset(self._resolve_id(s)[0] for s in block)
+            constraint_ids = {self._resolve_id(s)[0] for s in constraints}
+            goal_id = self._resolve_id(goal)[0]
         except ValueError as e:
             result["errors"].append(str(e))
             return result
 
-        input_names = {
-            cid: str(inp)
-            for cid, inp in zip(waypoints, waypoint_inputs)
-        }
+        conflicts = []
+        if goal_id in block_ids:
+            conflicts.append(f"goal ({self._resolve_concept_name(goal_id)}) is blocked")
+        if assume_ids & block_ids:
+            names = [self._resolve_concept_name(cid) for cid in assume_ids & block_ids]
+            conflicts.append(f"assume and block intersect: {', '.join(names)}")
+        if constraint_ids & block_ids:
+            names = [self._resolve_concept_name(cid) for cid in constraint_ids & block_ids]
+            conflicts.append(f"constraints and block intersect: {', '.join(names)}")
+        
+        if conflicts:
+            result["errors"].append("Contradictory inputs: " + "; ".join(conflicts))
+            return result
+
+        input_names: dict[int, str] = {}
+        for raw in list(assume) + list(block) + list(constraints) + [goal]:
+            try:
+                cid = self._resolve_id(raw)[0]
+                input_names.setdefault(cid, str(raw))
+            except ValueError:
+                pass
+
         graph = self._load_relation_graph()
-        return Compiler(graph, self._resolve_concept_name).compile(
-            waypoints, input_names)
+        return Compiler(
+            graph, self._resolve_concept_name, block=block_ids,
+        ).compile(assume_ids, constraint_ids, goal_id, input_names)

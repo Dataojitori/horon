@@ -139,26 +139,47 @@ def _format_compile(result: dict) -> str:
             lines.append(
                 "compilation passed. this route is ready to execute:")
     else:
-        lines.append(
-            f'compilation failed. '
-            f'no known path from {brk["from"]["name"]} '
-            f'to {brk["to"]["name"]}.')
+        if brk and not brk["goal_reached"]:
+            blocked = result.get("blocked") or []
+            if blocked and brk.get("goal_reachable_without_block"):
+                blocked_names = ", ".join(b["name"] for b in blocked)
+                lines.append(
+                    "compilation failed. goal not reachable from your "
+                    "assumed state without routing through the nodes you "
+                    f"excluded via --block: {blocked_names}.")
+            else:
+                lines.append(
+                    "compilation failed. goal not reachable "
+                    "from your assumed state.")
+        elif brk and brk["unmet_constraints"]:
+            unmet_names = ", ".join(
+                c["name"] for c in brk["unmet_constraints"])
+            lines.append(
+                f"compilation failed. route to goal exists "
+                f"but constraint(s) not met: {unmet_names}")
+        else:
+            # goal 单独可达、约束也各自能满足，但没有一条路能同时做到。
+            # 有价值的事实是「带上约束后 goal 到不了」，不是「约束能触达」。
+            lines.append(
+                "compilation failed. no route reaches goal "
+                "while satisfying your constraints.")
 
     # ── 第二段：路线展示 ──
     if result["passed"]:
         lines.extend(_format_route(compiled, "route"))
     else:
         if compiled:
-            lines.append(
-                "verified path from start to break point:")
-            lines.extend(_format_route(compiled, "verified"))
+            lines.append("best partial route found:")
+            lines.extend(_format_route(compiled, "partial"))
         if detour:
             lines.append(
-                "an alternative route from one of your established waypoints to the goal exists:")
+                "route to goal ignoring your constraints "
+                "(still respects --block):")
             lines.extend(_format_route(detour, "detour"))
-        if not compiled and not detour:
+        if not compiled and not detour and not (result.get("blocked")):
+            # block 断路时第一段已点名原因，不再重复；此处只兜底无 block 的情形。
             lines.append(
-                "no route from start to goal exists. "
+                "no route from assumed state to goal exists. "
                 "bridge the gap with hypotheses.")
 
     # ── 第三段：行动指令（假设阻断 与 执行提醒 互斥）──
@@ -177,7 +198,7 @@ def _format_compile(result: dict) -> str:
                 lines.append(
                     f'  ✗ {e["from"]["name"]} → {e["to"]["name"]} '
                     f'({e["status"]}) : see "{e["name"]}"')
-    elif all_edges:
+    elif all_edges and result["passed"]:
         lines.append(
             'all steps confirmed. if you intend to execute any part of this route, '
             'use read_concept to inspect the nodes first — do not assume based on names alone.')
@@ -452,7 +473,6 @@ def _build_parser():
 
     # list_concepts
     p = sub.add_parser("list_concepts", allow_abbrev=False)
-    p.add_argument("--with-disclosure", action="store_true", default=False)
 
     # add (name or variation)
     p = sub.add_parser("add", allow_abbrev=False)
@@ -491,13 +511,12 @@ def _build_parser():
     p = sub.add_parser("read_concept", allow_abbrev=False)
     p.add_argument("concept")
 
-    # compile — travel order: start, waypoints..., goal.
-    # Waypoints are constraints on the path search: the more you give,
-    # the tighter the route is pinned down. Two concepts = unconstrained
-    # search (subsumes the old find_path).
+    # compile — state-space planner: assume + block + constraints → goal
     p = sub.add_parser("compile", allow_abbrev=False)
-    p.add_argument("steps", nargs="+")
-    p.add_argument("goal")
+    p.add_argument("--assume", nargs="*", default=[])
+    p.add_argument("--block", nargs="*", default=[])
+    p.add_argument("--constraints", nargs="*", default=[])
+    p.add_argument("--goal", required=True)
 
     # read_memory — read from nocturne_memory.db
     p = sub.add_parser("read_memory", allow_abbrev=False,
@@ -545,9 +564,6 @@ def _dispatch(args, db):
                 else:
                     lines.append(f"      = {prefix}[Atomic] ({status})")
                     
-            if args.with_disclosure and c["disclosure"]:
-                lines.append(f"      Disclosure: {c['disclosure']}")
-                
         return RawOutput("\n".join(lines))
 
     elif args.command == "add":
@@ -589,7 +605,14 @@ def _dispatch(args, db):
         return RawOutput(content)
 
     elif args.command == "compile":
-        return db.compile(args.steps, args.goal)
+        result = db.compile(
+            args.assume, args.block, args.constraints, args.goal)
+        # 输入解析失败（概念不存在、变体码不对）是坏输入，不是编译结论：
+        # 抛异常走统一错误通道（非零退出码 / batch 中止），与其它命令一致。
+        # passed/failed（含"无路可走"）是正常结论，照常返回、退出码 0。
+        if result["errors"]:
+            raise ValueError("; ".join(result["errors"]))
+        return result
 
 
 def _audited_dispatch(args, db):

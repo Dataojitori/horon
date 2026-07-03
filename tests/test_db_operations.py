@@ -1,6 +1,6 @@
 import pytest
 
-from conftest import create_concepts, set_relation
+from conftest import create_concepts, set_relation, compile_path
 
 
 def variation_ref(db, concept):
@@ -207,7 +207,7 @@ def test_delete_expression_clears_members_and_status(horon_db):
 
     assert result.variations[0].expression is None
     assert result.variations[0].status is None
-    assert horon_db.compile(["A"], "B")["passed"] is False
+    assert compile_path(horon_db, ["A"], "B")["passed"] is False
 
 
 def test_delete_expression_rejects_creating_second_atomic_variation(horon_db):

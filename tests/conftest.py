@@ -55,3 +55,13 @@ def set_relation(db, name, expression, status="confirmed"):
             db.set(member_name, "status", "confirmed")
     if status is not None:
         db.set(name, "status", status)
+
+
+def compile_path(db, assume, goal, *, constraints=(), block=()):
+    """新版 compile API 的测试包装。
+
+    旧模型是有序途经点 compile(steps, goal)：steps[0] 是起点、steps[1:] 是
+    必经点。新模型改为无序集合：assume（燃料/公理）、constraints（必经，
+    无序）、block（禁行）、goal。此包装把测试意图映射到新签名。
+    """
+    return db.compile(list(assume), list(block), list(constraints), goal)

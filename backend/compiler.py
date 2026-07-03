@@ -45,7 +45,7 @@ class _Proof:
     actions: tuple[tuple[int, str], ...]
     supports: tuple[tuple[int, str], ...]
     events: tuple[int, ...]
-    consumed_steps: int
+    met_constraints: frozenset[int]
 
 
 class Compiler:
@@ -53,31 +53,26 @@ class Compiler:
         self,
         graph: RelationGraph,
         resolve_concept_name: Callable[[int], str],
+        block: frozenset[int] = frozenset(),
     ) -> None:
         self.graph = graph
         self._resolve_concept_name = resolve_concept_name
-        self._rules = {rule.key: rule for rule in graph.expressions}
-        pure_groups: dict[int, list[tuple[int, str]]] = {}
+        self._block = block
+        self._rules: dict[tuple[int, str], ExpressionRule] = {}
         for rule in graph.expressions:
+            if rule.concept_id in block:
+                continue
+            if any(m in block for pos in rule.positions for m in pos):
+                continue
+            self._rules[rule.key] = rule
+        pure_groups: dict[int, list[tuple[int, str]]] = {}
+        for rule in self._rules.values():
             if rule.type == "AND" and rule.status != "negated":
                 pure_groups.setdefault(rule.concept_id, []).append(rule.key)
         self._pure_groups = {
             concept_id: tuple(keys)
             for concept_id, keys in pure_groups.items()
         }
-
-    @staticmethod
-    def _consume(events: tuple[int, ...], steps: tuple[int, ...]) -> int:
-        """Return the length of the ordered step prefix found in events.
-
-        A future step appearing early is harmless: a later occurrence can
-        still consume it.  Repeated concept IDs therefore work naturally.
-        """
-        index = 0
-        for concept_id in events:
-            if index < len(steps) and concept_id == steps[index]:
-                index += 1
-        return index
 
     def _cost(self, proof: _Proof) -> _PathCost:
         keys = tuple(dict.fromkeys((*proof.actions, *proof.supports)))
@@ -100,36 +95,28 @@ class Compiler:
 
     def _merge_parent_orders(
         self,
-        start_id: int,
+        assume_events: tuple[int, ...],
         proofs: tuple[_Proof, ...],
-        steps: tuple[int, ...],
+        constraints: frozenset[int],
     ) -> tuple[tuple[tuple[int, str], ...], ...]:
         """Return the meaningfully distinct orders of prerequisite proofs.
 
-        A position's members are unordered, but enumerating every parent
-        permutation costs ``n!``.  Build the orders incrementally instead and
-        merge states that have selected the same parents, contain the same
-        actions, and have consumed the same ordered-step prefix.
-
-        Such states are interchangeable for the remaining parents: merging a
-        later proof appends the same not-yet-seen actions, and step matching
-        only depends on the already-consumed prefix length.  Keeping one
-        representative therefore removes duplicate work without choosing a
-        greedy parent order or discarding a distinct waypoint outcome.
+        States that have selected the same parents, contain the same
+        actions, and have met the same constraints are interchangeable.
         """
         if len(proofs) < 2:
             return (self._merge_actions(proofs),)
 
-        # (selected parent indexes, action set, consumed step count) -> order
+        initial_met = frozenset(assume_events) & constraints
         states: dict[
-            tuple[int, frozenset[tuple[int, str]], int],
+            tuple[int, frozenset[tuple[int, str]], frozenset[int]],
             tuple[tuple[int, str], ...],
-        ] = {(0, frozenset(), self._consume((start_id,), steps)): ()}
+        ] = {(0, frozenset(), initial_met): ()}
         full_mask = (1 << len(proofs)) - 1
 
         for _ in proofs:
             next_states: dict[
-                tuple[int, frozenset[tuple[int, str]], int],
+                tuple[int, frozenset[tuple[int, str]], frozenset[int]],
                 tuple[tuple[int, str], ...],
             ] = {}
             for (mask, action_set, _), actions in states.items():
@@ -145,9 +132,9 @@ class Compiler:
                     merged_actions = tuple(merged)
                     merged_set = frozenset((*action_set, *proof.actions))
                     events, _ = self._events_for_actions(
-                        start_id, merged_actions, steps)
-                    consumed = self._consume(events, steps)
-                    key = (mask | bit, merged_set, consumed)
+                        assume_events, merged_actions, constraints)
+                    met = frozenset(events) & constraints
+                    key = (mask | bit, merged_set, met)
                     next_states.setdefault(key, merged_actions)
             states = next_states
 
@@ -159,24 +146,26 @@ class Compiler:
 
     def _events_for_actions(
         self,
-        start_id: int,
+        assume_events: tuple[int, ...],
         actions: tuple[tuple[int, str], ...],
-        steps: tuple[int, ...],
+        constraints: frozenset[int],
     ) -> tuple[tuple[int, ...], tuple[tuple[int, str], ...]]:
-        events: list[int] = [start_id]
+        events: list[int] = list(assume_events)
         supports: list[tuple[int, str]] = []
         seen_supports: set[tuple[int, str]] = set()
         for key in actions:
             rule = self._rules[key]
             for position in rule.positions[1:]:
-                for concept_id in self._order_position(position, events, steps):
-                    support = self._append_arrival(events, concept_id, steps)
+                for concept_id in self._order_position(
+                        position, events, constraints):
+                    support = self._append_arrival(
+                        events, concept_id, constraints)
                     if (support is not None
                             and support not in seen_supports
                             and support not in actions):
                         seen_supports.add(support)
                         supports.append(support)
-            self._append_arrival(events, rule.concept_id, steps,
+            self._append_arrival(events, rule.concept_id, constraints,
                                  expand_container=False)
         return tuple(events), tuple(supports)
 
@@ -184,32 +173,24 @@ class Compiler:
         self,
         events: list[int],
         concept_id: int,
-        steps: tuple[int, ...],
+        constraints: frozenset[int],
         *,
         expand_container: bool = True,
     ) -> tuple[int, str] | None:
-        """Expand requested members when an arrow arrives at an & container.
-
-        This preserves Horon's existing rule that ``Start → N`` can
-        concretely use adjacent steps ``A, B`` when ``N = A & B``.  Members
-        already established earlier need not be emitted again.
-        """
+        """Expand AND containers when arriving, emitting unmet constraint members."""
         selected_key: tuple[int, str] | None = None
         if expand_container and concept_id in self._pure_groups:
             existing = set(events)
+            met = frozenset(events) & constraints
+            unmet = constraints - met
             best_match: tuple[int, ...] = ()
             best_rank: tuple[int, int, tuple[int, str]] | None = None
             for key in self._pure_groups[concept_id]:
                 members = self._rules[key].positions[0]
-                index = self._consume(tuple(events), steps)
-                matched: list[int] = []
-                while index < len(steps) and steps[index] in members:
-                    member = steps[index]
-                    if member in matched:
-                        break
-                    matched.append(member)
-                    index += 1
-                candidate = tuple(matched)
+                candidate_members = [
+                    m for m in members if m in unmet and m not in existing
+                ]
+                candidate = tuple(candidate_members)
                 if not candidate or not members <= existing | set(candidate):
                     continue
                 rank = (
@@ -229,52 +210,58 @@ class Compiler:
     def _order_position(
         members: frozenset[int],
         prior_events: list[int],
-        steps: tuple[int, ...],
+        constraints: frozenset[int],
     ) -> tuple[int, ...]:
-        """Choose a deterministic member order that consumes most next steps."""
-        consumed = Compiler._consume(tuple(prior_events), steps)
-        remaining = list(members)
-        ordered: list[int] = []
-        while consumed < len(steps) and steps[consumed] in remaining:
-            member = steps[consumed]
-            ordered.append(member)
-            remaining.remove(member)
-            consumed += 1
-        ordered.extend(sorted(remaining))
-        return tuple(ordered)
+        """Choose a deterministic member order that prioritises unmet constraints."""
+        met = frozenset(prior_events) & constraints
+        unmet = constraints - met
+        priority = sorted(m for m in members if m in unmet)
+        rest = sorted(m for m in members if m not in unmet)
+        return tuple(priority + rest)
 
     def _search(
         self,
-        start_id: int,
-        steps: tuple[int, ...],
-    ) -> tuple[dict[int, dict[frozenset[tuple[int, str]], _Proof]], _Proof | None]:
-        """Compute non-duplicate proofs until the finite expression closure."""
-        empty = _Proof((), (), (start_id,), self._consume((start_id,), steps))
-        labels: dict[int, dict[frozenset[tuple[int, str]], _Proof]] = {
-            start_id: {frozenset(): empty},
-        }
+        assume: frozenset[int],
+        constraints: frozenset[int],
+        goal: int,
+    ) -> tuple[
+        dict[int, dict[tuple[frozenset[tuple[int, str]], frozenset[int]], _Proof]],
+        _Proof | None,
+    ]:
+        """Compute proofs until fixed point, searching for goal with constraints."""
+        assume_events = tuple(sorted(assume))
+        initial_met = frozenset(assume_events) & constraints
+
+        labels: dict[
+            int,
+            dict[tuple[frozenset[tuple[int, str]], frozenset[int]], _Proof],
+        ] = {}
+        for aid in assume:
+            proof = _Proof((), (), assume_events, initial_met)
+            labels.setdefault(aid, {})[(frozenset(), initial_met)] = proof
 
         best_complete: _Proof | None = None
+        if goal in assume and constraints <= initial_met:
+            best_complete = _Proof((), (), assume_events, initial_met)
+            return labels, best_complete
+
         changed = True
         while changed:
             changed = False
-            for rule in self.graph.expressions:
+            for rule in self._rules.values():
                 if rule.status == "negated":
                     continue
                 prerequisites = tuple(sorted(rule.positions[0]))
 
                 if rule.type == "OR":
-                    # OR: any single prerequisite being reached suffices.
                     reachable = [m for m in prerequisites if m in labels]
                     if not reachable:
                         continue
-                    # Try each reachable member independently.
                     candidate_selections: list[tuple[_Proof, ...]] = []
                     for member in reachable:
                         for proof in labels[member].values():
                             candidate_selections.append((proof,))
                 else:
-                    # CHAIN / AND: all prerequisites must be reached.
                     if not all(member in labels for member in prerequisites):
                         continue
                     choices = [tuple(labels[member].values())
@@ -285,19 +272,20 @@ class Compiler:
                     if any(rule.key in proof.actions for proof in selected):
                         continue
                     orders = self._merge_parent_orders(
-                        start_id, tuple(selected), steps)
+                        assume_events, tuple(selected), constraints)
                     for actions in orders:
                         if rule.key in actions:
                             continue
                         actions = (*actions, rule.key)
                         action_set = frozenset(actions)
                         events, supports = self._events_for_actions(
-                            start_id, actions, steps)
+                            assume_events, actions, constraints)
+                        met = frozenset(events) & constraints
                         proof = _Proof(
                             actions,
                             supports,
                             events,
-                            self._consume(events, steps),
+                            met,
                         )
 
                         produced = {rule.concept_id}
@@ -311,14 +299,16 @@ class Compiler:
                                     produced.update(group)
                         for concept_id in produced:
                             node_labels = labels.setdefault(concept_id, {})
-                            previous = node_labels.get(action_set)
-                            if previous is None or proof.consumed_steps > previous.consumed_steps:
-                                node_labels[action_set] = proof
+                            label_key = (action_set, met)
+                            previous = node_labels.get(label_key)
+                            if previous is None:
+                                node_labels[label_key] = proof
                                 changed = True
 
-                        if proof.consumed_steps == len(steps):
+                        if goal in produced and constraints <= met:
                             if (best_complete is None
-                                    or self._cost(proof) < self._cost(best_complete)):
+                                    or self._cost(proof)
+                                    < self._cost(best_complete)):
                                 best_complete = proof
         return labels, best_complete
 
@@ -379,77 +369,119 @@ class Compiler:
                     "from": {
                         "concept_ids": list(from_ids),
                         "name": from_sep.join(
-                            self._resolve_concept_name(cid) for cid in from_ids),
+                            self._resolve_concept_name(cid)
+                            for cid in from_ids),
                     },
                     "to": {
-                        "concept_id": rule.concept_id if rule.type != "CHAIN" else final_ids[0],
-                        "name": self._resolve_concept_name(rule.concept_id) if rule.type != "CHAIN" else self._resolve_concept_name(final_ids[0]),
+                        "concept_id": (rule.concept_id if rule.type != "CHAIN"
+                                       else final_ids[0]),
+                        "name": (self._resolve_concept_name(rule.concept_id)
+                                 if rule.type != "CHAIN"
+                                 else self._resolve_concept_name(final_ids[0])),
                     },
                     "segments": None,
                 })
         return route
 
-    def compile(self, waypoints: list[int], input_names: dict[int, str]) -> dict:
+    def compile(
+        self,
+        assume: set[int],
+        constraints: set[int],
+        goal: int,
+        input_names: dict[int, str],
+    ) -> dict:
         result: dict = {
             "passed": False,
             "compiled_route": [],
             "concept_order": [],
             "break": None,
             "detour": None,
+            # 回带调用方传入的 --block 排除项（原样上交，供文案点名用）。
+            "blocked": [
+                {
+                    "concept_id": cid,
+                    "name": input_names.get(
+                        cid, self._resolve_concept_name(cid)),
+                }
+                for cid in sorted(self._block)
+            ],
             "errors": [],
         }
-        steps = tuple(waypoints)
-        labels, complete = self._search(waypoints[0], steps)
+
+        labels, complete = self._search(
+            frozenset(assume), frozenset(constraints), goal)
 
         if complete is not None:
-            # ``passed`` means the requested route exists.  Hypothesis edges
-            # remain visible in compiled_route for the CLI to report BLOCKED.
             result["passed"] = True
             result["compiled_route"] = self._route_for(complete)
             result["concept_order"] = [
                 {
                     "concept_id": cid,
-                    "name": input_names.get(cid, self._resolve_concept_name(cid)),
+                    "name": input_names.get(
+                        cid, self._resolve_concept_name(cid)),
                 }
                 for cid in complete.events
             ]
             return result
 
-        # Pick the proof that consumed the longest prefix, then the cheapest.
+        # compiled_route = 遵守约束下走得最远的「最佳部分路线」：满足约束最多，
+        # 其次代价最小。可能没到 goal。
         all_proofs = {
             proof
             for node_labels in labels.values()
             for proof in node_labels.values()
         }
-        best = min(
-            all_proofs,
-            key=lambda proof: (-proof.consumed_steps, self._cost(proof)),
+        best = (
+            min(
+                all_proofs,
+                key=lambda p: (-len(p.met_constraints), self._cost(p)),
+            )
+            if all_proofs
+            else None
         )
-        result["compiled_route"] = self._route_for(best)
-        result["concept_order"] = [
-            {
-                "concept_id": cid,
-                "name": input_names.get(cid, self._resolve_concept_name(cid)),
-            }
-            for cid in best.events
-        ]
-        index = best.consumed_steps
-        from_id = waypoints[index - 1] if index else waypoints[0]
-        to_id = waypoints[index] if index < len(waypoints) else waypoints[-1]
+        # goal 是否「撇开约束就能到」。约束在搜索中只影响打分、不拦路，
+        # 所以 goal 出现在 labels 里 == goal 本身可达。
+        goal_reached = bool(labels.get(goal))
+        
+        goal_reachable_without_block = goal_reached
+        if not goal_reached and self._block:
+            unblocked_compiler = Compiler(self.graph, self._resolve_concept_name)
+            unblocked_labels, _ = unblocked_compiler._search(
+                frozenset(assume), frozenset(), goal)
+            goal_reachable_without_block = bool(unblocked_labels.get(goal))
+
+        if best is not None:
+            result["compiled_route"] = self._route_for(best)
+            result["concept_order"] = [
+                {
+                    "concept_id": cid,
+                    "name": input_names.get(
+                        cid, self._resolve_concept_name(cid)),
+                }
+                for cid in best.events
+            ]
+
+        unmet = frozenset(constraints) - (
+            best.met_constraints if best else frozenset())
         result["break"] = {
-            "from": {"concept_id": from_id,
-                     "name": input_names.get(from_id, self._resolve_concept_name(from_id))},
-            "to": {"concept_id": to_id,
-                   "name": input_names.get(to_id, self._resolve_concept_name(to_id))},
+            "goal_reached": goal_reached,
+            "goal_reachable_without_block": goal_reachable_without_block,
+            "unmet_constraints": [
+                {
+                    "concept_id": cid,
+                    "name": input_names.get(
+                        cid, self._resolve_concept_name(cid)),
+                }
+                for cid in sorted(unmet)
+            ],
         }
 
-        # A detour ignores intermediate steps but still ends at the requested goal.
-        detour_start = from_id
-        _, detour = self._search(
-            detour_start, (detour_start, waypoints[-1]))
-        if detour is None and detour_start != waypoints[0]:
+        # goal 可达、只是被约束卡住 → 撤掉约束再搜一条到 goal 的兜底路线。
+        # goal 本身就不可达时，撤约束也白搭，不必再搜。
+        if goal_reached:
             _, detour = self._search(
-                waypoints[0], (waypoints[0], waypoints[-1]))
-        if detour is not None:
-            result["detour"] = self._route_for(detour)
+                frozenset(assume), frozenset(), goal)
+            if detour is not None:
+                result["detour"] = self._route_for(detour)
+
         return result
