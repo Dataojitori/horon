@@ -408,7 +408,9 @@ def test_cli_compile_raises_on_unresolvable_concept(horon_db):
     create_concepts(horon_db, ["Real"])
     parser = _build_parser()
 
-    bad = parser.parse_args(["compile", "--goal", "Ghost"])
+    bad = parser.parse_args([
+        "compile", "--assume", "Real", "--goal", "Ghost",
+    ])
     with pytest.raises(ValueError, match="Concept not found: Ghost"):
         _dispatch(bad, horon_db)
 

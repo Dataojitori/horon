@@ -1368,6 +1368,7 @@ class HoronDB:
             "detour": None,
             "blocked": [],
             "errors": [],
+            "goal_inbound_count": 0,
         }
 
         try:
@@ -1378,6 +1379,9 @@ class HoronDB:
         except ValueError as e:
             result["errors"].append(str(e))
             return result
+            
+        inbound = self._query_inbound_relations(goal_id)
+        result["goal_inbound_count"] = len(inbound.get("confirmed", [])) + len(inbound.get("hypothesis", []))
 
         conflicts = []
         if goal_id in block_ids:
@@ -1402,6 +1406,9 @@ class HoronDB:
                 pass
 
         graph = self._load_relation_graph()
-        return Compiler(
+        compiler_result = Compiler(
             graph, self._resolve_concept_name, block=block_ids,
         ).compile(assume_ids, constraint_ids, goal_id, input_names)
+        
+        result.update(compiler_result)
+        return result

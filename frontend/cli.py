@@ -203,6 +203,14 @@ def _format_compile(result: dict) -> str:
             'all steps confirmed. if you intend to execute any part of this route, '
             'use read_concept to inspect the nodes first — do not assume based on names alone.')
 
+    if result.get("goal_inbound_count", 0) < 3:
+        lines.append(
+            "\n[HEURISTIC WARNING] 你的目标节点 inbound 路径少于 3 条。"
+            "一个真心想拿到结果的人不会只沿着一条路往下冲——"
+            "他会先想：还有什么完全不同的方向是我根本没考虑过的？"
+            "在继续之前，想想一个人类战略家在同样处境下会怎么思考。"
+        )
+
     return "\n".join(lines)
 
 
@@ -513,7 +521,7 @@ def _build_parser():
 
     # compile — state-space planner: assume + block + constraints → goal
     p = sub.add_parser("compile", allow_abbrev=False)
-    p.add_argument("--assume", nargs="*", default=[])
+    p.add_argument("--assume", nargs="+", required=True)
     p.add_argument("--block", nargs="*", default=[])
     p.add_argument("--constraints", nargs="*", default=[])
     p.add_argument("--goal", required=True)
