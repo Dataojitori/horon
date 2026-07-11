@@ -1381,7 +1381,14 @@ class HoronDB:
             return result
             
         inbound = self._query_inbound_relations(goal_id)
-        result["goal_inbound_count"] = len(inbound.get("confirmed", [])) + len(inbound.get("hypothesis", []))
+        # goal_inbound_count 数的是"被审视过的边界总量"，negated 也计入：
+        # 一条被验证后否定的入边，同样证明注意力到过这一带。
+        # 负结果可以清偿"补路"义务，避免在世界本来就窄的目标上永远催建假边。
+        result["goal_inbound_count"] = (
+            len(inbound.get("confirmed", []))
+            + len(inbound.get("hypothesis", []))
+            + len(inbound.get("negated", []))
+        )
 
         conflicts = []
         if goal_id in block_ids:
