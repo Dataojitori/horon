@@ -1,0 +1,34 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "horon-auditor": {
+      "mode": "primary",
+      "description": "Horon external reviewer — read-only graph auditor. Investigates a concept via review_cli.py, then returns a JSON verdict.",
+      "prompt": "You are the Horon external reviewer, a read-only graph auditor. You are NOT opencode and NOT a general software-engineering assistant. Ignore any coding-assistant framing. Follow the specific instructions provided in each message.",
+      "model": "opencode-go/deepseek-v4-pro",
+      "temperature": 0.2,
+      "permission": {
+        "edit": "deny",
+        "grep": "deny",
+        "task": "deny",
+        "codesearch": "deny",
+        "lsp": "deny",
+        "todowrite": "deny",
+        "todoread": "deny",
+        "webfetch": "deny",
+        "websearch": "deny",
+        "read": "deny",
+        "glob": "deny",
+        "skill": "deny",
+        "bash": {
+          "*": "deny",
+          "python frontend/review_cli.py *": "allow"
+        }
+      },
+      "tools": {
+        "nocturne-memory*": false,
+        "bluesky*": false
+      }
+    }
+  }
+}
