@@ -225,6 +225,8 @@ def _format_read_concept(result: ReadResult) -> str:
 
     disc = result.disclosure if result.disclosure else "(not set)"
     lines.append(f"Disclosure: {disc}")
+    if result.tags:
+        lines.append(f"Tags: {', '.join(result.tags)}")
     lines.append("=" * 60)
 
     if result.alerts:
@@ -475,24 +477,39 @@ def _build_parser():
     p.add_argument("name")
     p.add_argument("--disclosure", default=None)
 
-    # search_concepts
+    # init_plan
+    p = sub.add_parser("init_plan", allow_abbrev=False)
+    p.add_argument("name")
+
+    # init_result
+    p = sub.add_parser("init_result", allow_abbrev=False)
+    p.add_argument("name")
+
+    # suppose
+    p = sub.add_parser("suppose", allow_abbrev=False)
+    p.add_argument("expression")
+
+    # search_concepts — 文本模糊搜索 / tag 过滤，至少给一个。
+    # goal 选单：search_concepts --tag result
     p = sub.add_parser("search_concepts", allow_abbrev=False)
-    p.add_argument("query")
+    p.add_argument("query", nargs="?", default=None)
+    p.add_argument("--tag", default=None,
+                   help="Only return concepts carrying this tag")
 
     # list_concepts
     p = sub.add_parser("list_concepts", allow_abbrev=False)
 
-    # add (name or variation)
+    # add (name / variation / tag)
     p = sub.add_parser("add", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("kind", choices=["name", "variation"])
+    p.add_argument("kind", choices=["name", "variation", "tag"])
     p.add_argument("value")
 
-    # delete (default=variation, or name/expression)
+    # delete (default=variation, or name/expression/tag)
     p = sub.add_parser("delete", allow_abbrev=False)
     p.add_argument("target")
     p.add_argument("kind", nargs="?", default=None,
-                   choices=["name", "expression"])
+                   choices=["name", "expression", "tag"])
     p.add_argument("value", nargs="?", default=None)
 
     # set (disclosure, status, name)
@@ -552,8 +569,17 @@ def _dispatch(args, db):
     if args.command == "create_concept":
         return db.create_concept(args.name, args.disclosure)
 
+    elif args.command == "init_plan":
+        return db.init_plan(args.name)
+
+    elif args.command == "init_result":
+        return db.init_result(args.name)
+
+    elif args.command == "suppose":
+        return db.suppose(args.expression)
+
     elif args.command == "search_concepts":
-        return db.search_concepts(args.query)
+        return db.search_concepts(args.query, tag=args.tag)
 
     elif args.command == "list_concepts":
         overviews = db.get_all_concepts_overview()

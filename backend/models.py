@@ -32,6 +32,10 @@ class Variation(BaseModel):
     status: Status | None = None
     content: str | None = None
     unless: str | None = None
+    # 价值通道：这条 variation 与现实碰撞后对我的利害。
+    # NULL=从未审视，-1.0=harmful，0.0=neutral，+1.0=beneficial。
+    # 写入只经 set valence 的符号标签，库里不存在手写数值。
+    valence: float | None = None
     created_at: str
     updated_at: str
 
@@ -63,6 +67,9 @@ class DirectedRelation(BaseModel):
     expression: str               # "A → B"
     concept_id: int               # 关系概念的 ID
     concept_name: str             # 关系概念的名字
+    # 价值投影：母链 variation 的 valence 随行带出（读取时继承，不落库到 hop）。
+    # 站在节点上看出边时，这个字段就是"执行前的预感"。
+    valence: float | None = None
     members: list[RelationMember]
 
 
@@ -82,6 +89,7 @@ class ReadResult(BaseModel):
     name: str
     disclosure: str | None = None
     aliases: list[str] = []
+    tags: list[str] = []
     variations: list[VariationDetail] = []
     inbound_confirmed: list[DirectedRelation] = []
     inbound_negated: list[DirectedRelation] = []

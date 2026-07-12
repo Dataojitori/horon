@@ -32,6 +32,11 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
+# 被代码直接引用的 tag。词表本身在 tags 表里（数据不是 schema），
+# 注册新 tag 走 create_tag；给概念盖未注册的 tag 会被外键拒绝。
+_TAG_PLAN = "plan"
+_TAG_RESULT = "result"
+
 
 def _validate_name(name: str) -> str:
     """校验并清理名字（concept 名或 alias）。返回 strip 后的名字，不合法则 raise。"""
@@ -270,18 +275,120 @@ class HoronDB:
             short_code=sc,
         )
 
-    def search_concepts(self, query) -> list[Concept]:
-        """按 alias、disclosure 或 content 模糊搜索 concept。"""
-        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        like = f"%{escaped}%"
+    @transactional
+    def init_plan(self, name: str) -> MutationResult:
+        """创建计划概念并原子化盖上 plan tag，返回引导性提示词。"""
+        res = self.create_concept(name)
+        self._add_tag(res.concept_id, _TAG_PLAN)
+        res.message = (
+            f"[OK] Concept '{name}' created with tag 'plan'.\n\n"
+            f"[ACTION REQUIRED]\n"
+            f"一个合法的计划必须包含具体的执行步骤。你现在必须补全其结构：\n"
+            f"使用 `horon add \"{name}\" variation ...` 为其添加一个由 CHAIN (→) 组成的表达式。"
+        )
+        return res
+
+    @transactional
+    def init_result(self, name: str) -> MutationResult:
+        """创建结果概念并原子化盖上 result tag，纯快捷方式，无多余引导。"""
+        res = self.create_concept(name)
+        self._add_tag(res.concept_id, "result")
+        res.message = f"[OK] Concept '{name}' created with tag 'result'."
+        return res
+
+    @transactional
+    def suppose(self, expression: str) -> MutationResult:
+        """从表达式直接原子化创建概念+组合变体（自动命名）。"""
+        vtype, member_ids = self._parse_expression(expression, allow_single=False)
+        
+        member_names = [self._resolve_concept_name(mid) for mid in member_ids]
+        
+        if vtype == "CHAIN":
+            joiner = "-then-"
+        elif vtype == "AND":
+            joiner = "-and-"
+        elif vtype == "OR":
+            joiner = "-or-"
+        else:
+            raise ValueError(f"Unknown variation type: {vtype}")
+            
+        base_name = joiner.join(member_names)
+        
+        try:
+            _validate_name(base_name)
+            self._check_name_available(base_name)
+        except ValueError as e:
+            raise ValueError(
+                f"Auto-naming failed for '{expression}': {e}. "
+                f"Please fall back to manual creation: "
+                f"use `horon create_concept <custom_name>` then `horon add <custom_name> variation \"{expression}\"`."
+            )
+            
+        final_name = base_name
+
+        res = self.create_concept(final_name)
+        var_res = self._add_variation(res.concept_id, expression)
+        
+        msg = (
+            f"Success. Created concept '{final_name}' (id={res.concept_id}) "
+            f"to represent this relation.\n"
+            f"Variation {var_res.short_code} expression: {expression}"
+        )
+        
+        if vtype == "CHAIN" and len(member_ids) == 2:
+            cursor = self.conn.execute("SELECT concept_id, tag FROM concept_tags WHERE concept_id IN (?, ?)", (member_ids[0], member_ids[1]))
+            rows = cursor.fetchall()
+            tags_a = {r["tag"] for r in rows if r["concept_id"] == member_ids[0]}
+            tags_b = {r["tag"] for r in rows if r["concept_id"] == member_ids[1]}
+            
+            if _TAG_PLAN in tags_a and "result" in tags_b:
+                msg += (
+                    f"\n\n[ACTION REQUIRED]\n"
+                    f"你刚刚建立了一个 Plan → Result 的预期链路。\n"
+                    f"注意：此连接当前处于 hypothesis (假设) 状态。\n"
+                    f"当你验证该关系得到成果后，别忘了：\n"
+                    f"`horon update {res.concept_id} content \"<填入验证过程和证据>\"`"
+                )
+        
+        var_res.message = msg
+        return var_res
+
+    def search_concepts(self, query=None, tag: str | None = None) -> list[Concept]:
+        """按 alias、disclosure 或 content 模糊搜索 concept，可选按 tag 过滤。
+
+        输入：query —— 文本子串（None = 不按文本过滤）；
+              tag  —— 只返回带该 tag 的概念（None = 不按 tag 过滤）。
+              两者都给取交集；两者都不给报错。
+        输出：命中的 Concept 列表。
+        典型用法：goal 选单 = search_concepts(tag='result')，
+        返回所有曾以结果身份出现的概念，供 compile --goal 选靶。
+        """
+        if query is None and tag is None:
+            raise ValueError("Provide a search query, a tag, or both.")
+        joins = [
+            "LEFT JOIN aliases a ON c.id = a.concept_id",
+            "LEFT JOIN variations v ON c.id = v.concept_id",
+        ]
+        conditions = []
+        parameters: list = []
+        if tag is not None:
+            joins.append("JOIN concept_tags ct ON c.id = ct.concept_id")
+            conditions.append("ct.tag = ?")
+            parameters.append(tag)
+        if query is not None:
+            escaped = (query.replace("\\", "\\\\")
+                       .replace("%", "\\%").replace("_", "\\_"))
+            like = f"%{escaped}%"
+            conditions.append(
+                "(a.alias LIKE ? ESCAPE '\\' "
+                "OR c.disclosure LIKE ? ESCAPE '\\' "
+                "OR v.content LIKE ? ESCAPE '\\')")
+            parameters.extend([like, like, like])
         rows = self.conn.execute(
             "SELECT DISTINCT c.* FROM concepts c "
-            "LEFT JOIN aliases a ON c.id = a.concept_id "
-            "LEFT JOIN variations v ON c.id = v.concept_id "
-            "WHERE a.alias LIKE ? ESCAPE '\\' "
-            "OR c.disclosure LIKE ? ESCAPE '\\' "
-            "OR v.content LIKE ? ESCAPE '\\'",
-            (like, like, like),
+            + " ".join(joins)
+            + " WHERE " + " AND ".join(conditions),
+            parameters,
         ).fetchall()
         return [Concept(**dict(row)) for row in rows]
 
@@ -425,13 +532,15 @@ class HoronDB:
     # ── Add ──────────────────────────────────────────────────────────────────
 
     def add(self, concept, kind: str, value: str) -> MutationResult:
-        """给概念添加 name（别名）或 variation（变种）。"""
+        """给概念添加 name（别名）、variation（变种）或 tag（分类标签）。"""
         if kind == "name":
             return self._add_name(concept, value)
         elif kind == "variation":
             return self._add_variation(concept, value)
+        elif kind == "tag":
+            return self._add_tag(concept, value)
         raise ValueError(
-            f"Unknown type: '{kind}'. Use 'name' or 'variation'.")
+            f"Unknown type: '{kind}'. Use 'name', 'variation' or 'tag'.")
 
     @transactional
     def _add_name(self, concept, name: str) -> MutationResult:
@@ -472,6 +581,18 @@ class HoronDB:
 
         vtype, member_ids = self._parse_expression(expression)
 
+        cursor = self.conn.execute("SELECT tag FROM concept_tags WHERE concept_id = ?", (cid,))
+        tags = {row["tag"] for row in cursor.fetchall()}
+        is_plan = _TAG_PLAN in tags
+        
+        if is_plan and vtype != "CHAIN":
+            raise ValueError(
+                f"Concept has '{_TAG_PLAN}' tag and can only accept CHAIN expressions (got {vtype})."
+            )
+            
+        cursor = self.conn.execute("SELECT COUNT(*) as c FROM variations WHERE concept_id = ? AND type = 'CHAIN'", (cid,))
+        is_first_chain = cursor.fetchone()["c"] == 0
+
         if cid in member_ids:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
@@ -499,9 +620,74 @@ class HoronDB:
                 "VALUES (?,?,?,?)",
                 (cid, sc, member_cid, idx),
             )
+        msg = f"Success. Added variation {sc} to {label}."
+        if is_plan and is_first_chain:
+            msg += (
+                f"\n\n[ACTION REQUIRED]\n"
+                f"你已经为计划确立了执行步骤。下一步是绑定预期的验证结果：\n"
+                f"请找到或新建预期结果概念（需带有 result 标签），然后执行：\n"
+                f"`horon suppose \"{cname} → 预期结果概念\"`\n"
+                f"以此将该计划的终点导向结果。"
+            )
+
         return MutationResult(
-            message=f"Success. Added variation {sc} to {label}.",
+            message=msg,
             concept_id=cid, concept_name=cname, short_code=sc,
+        )
+
+    @transactional
+    def _add_tag(self, concept, tag: str) -> MutationResult:
+        """给概念盖一个 tag。
+
+        输入：concept —— 概念名/别名/ID；tag —— 必须已在 tags 词表注册。
+        行为：未注册的 tag 直接报错并列出已知词表（词表变更走数据库迁移，
+              无运行时注册入口）；概念已有该 tag 时幂等成功。
+        输出：MutationResult。
+        """
+        tag = tag.strip()
+        if not tag:
+            raise ValueError("Tag cannot be empty.")
+        cid, _ = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
+        if tag == _TAG_PLAN:
+            invalid = self.conn.execute(
+                "SELECT type FROM variations "
+                "WHERE concept_id = ? AND type IN ('AND', 'OR') LIMIT 1",
+                (cid,),
+            ).fetchone()
+            if invalid:
+                raise ValueError(
+                    f"Cannot tag {label} as '{_TAG_PLAN}': "
+                    f"plans can only contain CHAIN expressions "
+                    f"(found {invalid['type']})."
+                )
+        registered = self.conn.execute(
+            "SELECT 1 FROM tags WHERE name = ?", (tag,)
+        ).fetchone()
+        if not registered:
+            known = [row["name"] for row in self.conn.execute(
+                "SELECT name FROM tags ORDER BY name")]
+            raise ValueError(
+                f"Tag '{tag}' is not registered. "
+                f"Known tags: {', '.join(known)}. "
+                f"New tags ship with their consumer code via DB migration.")
+        already = self.conn.execute(
+            "SELECT 1 FROM concept_tags WHERE concept_id = ? AND tag = ?",
+            (cid, tag),
+        ).fetchone()
+        if already:
+            return MutationResult(
+                message=f"Success. {label} already has tag '{tag}'.",
+                concept_id=cid, concept_name=cname,
+            )
+        self.conn.execute(
+            "INSERT INTO concept_tags (concept_id, tag) VALUES (?,?)",
+            (cid, tag),
+        )
+        return MutationResult(
+            message=f"Success. Tagged {label} as '{tag}'.",
+            concept_id=cid, concept_name=cname,
         )
 
     # ── Delete ───────────────────────────────────────────────────────────────
@@ -513,6 +699,7 @@ class HoronDB:
         kind 省略:   删除 variation（target 为概念名或 概念:sc）。
         name:       删除别名（value=要删的别名，必填）。
         expression: 清除组合回原子态（target 为概念名或 概念:sc）。
+        tag:        揭掉概念上的 tag（value=要揭的 tag，必填）。
         """
         if kind is None:
             return self._delete_variation(target)
@@ -526,9 +713,13 @@ class HoronDB:
                     f"delete expression takes no extra argument, "
                     f"but got: '{value}'.")
             return self._delete_expression(target)
+        elif kind == "tag":
+            if value is None:
+                raise ValueError("Specify which tag to delete.")
+            return self._delete_tag(target, value)
         raise ValueError(
             f"Unknown type: '{kind}'. "
-            f"Use 'name' or 'expression'.")
+            f"Use 'name', 'expression' or 'tag'.")
 
     @transactional
     def _delete_name(self, concept, name: str) -> MutationResult:
@@ -553,6 +744,35 @@ class HoronDB:
             "DELETE FROM aliases WHERE alias=?", (name,))
         return MutationResult(
             message=f"Success. Removed alias '{name}' from {label}.",
+            concept_id=cid, concept_name=cname,
+        )
+
+    @transactional
+    def _delete_tag(self, concept, tag: str) -> MutationResult:
+        """揭掉概念上的一个 tag。
+
+        输入：concept —— 概念名/别名/ID；tag —— 该概念身上现有的 tag。
+        行为：概念没有这个 tag 时报错（与 _delete_name 同待遇，删不存在
+              的东西是调用方认知错误，不静默吞掉）。只揭概念与 tag 的
+              关联，不动 tags 词表本身。
+        输出：MutationResult。
+        """
+        tag = tag.strip()
+        cid, _ = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
+        existing = self.conn.execute(
+            "SELECT 1 FROM concept_tags WHERE concept_id = ? AND tag = ?",
+            (cid, tag),
+        ).fetchone()
+        if not existing:
+            raise ValueError(f"{label} does not have tag '{tag}'.")
+        self.conn.execute(
+            "DELETE FROM concept_tags WHERE concept_id = ? AND tag = ?",
+            (cid, tag),
+        )
+        return MutationResult(
+            message=f"Success. Removed tag '{tag}' from {label}.",
             concept_id=cid, concept_name=cname,
         )
 
@@ -856,6 +1076,42 @@ class HoronDB:
             )
 
         return downgraded_logs
+
+    def audit_plans(self) -> list[str]:
+        """计划卫生检查：'plan' tag 的两条 lint。
+
+        输入：无（扫描全库带 plan tag 的概念）。
+        输出：问题行列表，全部合规时为空。两类问题：
+          [malformed] 计划没有任何 CHAIN 出边 —— 违反"建计划必须绑定
+                      期待结果"（计划之后必须 → 到你猜会发生的事）。
+          [open]      计划的某条出边 status 仍是假设 —— 期待还没跟现实
+                      碰撞结账，欠一次 confirm/negate。这是跨会话
+                      "接着上次的活继续干"的入口清单。
+        只读，不修改任何数据。
+        """
+        findings: list[str] = []
+        plan_rows = self.conn.execute(
+            "SELECT ct.concept_id, c.name FROM concept_tags ct "
+            "JOIN concepts c ON c.id = ct.concept_id "
+            "WHERE ct.tag = ? ORDER BY c.name",
+            (_TAG_PLAN,),
+        ).fetchall()
+        for plan in plan_rows:
+            outbound = self._query_outbound_relations(plan["concept_id"])
+            outbound_total = sum(len(group) for group in outbound.values())
+            if outbound_total == 0:
+                findings.append(
+                    f"[malformed] plan '{plan['name']}' "
+                    f"(id={plan['concept_id']}) has no outbound expectation. "
+                    f"A plan must chain into the result you expect from it.")
+                continue
+            for relation in outbound["hypothesis"]:
+                findings.append(
+                    f"[open] plan '{plan['name']}' (id={plan['concept_id']}): "
+                    f"expectation '{relation.expression}' "
+                    f"(see \"{relation.concept_name}\") is still a hypothesis. "
+                    f"Settle it against reality: confirm or negate.")
+        return findings
 
     @transactional
     def _set_name(self, concept, new_name: str) -> MutationResult:
@@ -1283,6 +1539,14 @@ class HoronDB:
             ).fetchall()
         ]
 
+        # tags
+        tags = [
+            tr["tag"] for tr in self.conn.execute(
+                "SELECT tag FROM concept_tags WHERE concept_id = ? "
+                "ORDER BY tag", (cid,)
+            ).fetchall()
+        ]
+
         # 入边 / 出边
         inbound = self._query_inbound_relations(cid)
         outbound = self._query_outbound_relations(cid)
@@ -1302,6 +1566,7 @@ class HoronDB:
             name=row["name"],
             disclosure=row["disclosure"],
             aliases=aliases,
+            tags=tags,
             variations=variations,
             inbound_confirmed=inbound["confirmed"],
             inbound_negated=inbound["negated"],

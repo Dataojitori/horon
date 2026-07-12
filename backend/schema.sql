@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS variations (
     status      TEXT    CHECK(status IN ('hypothesis', 'confirmed', 'negated')),
     content    TEXT,
     unless      TEXT,
+    -- 价值通道（与因果内容正交，编译器对此列全盲）：
+    -- 这条 variation 被现实碰撞后对我的利害。NULL=从未审视，
+    -- -1.0=harmful, 0.0=neutral, +1.0=beneficial。
+    -- 列用 REAL 保持存储通用；写入口（CLI）只接受符号标签、不接受裸数字，
+    -- 幅度将来若获得合法刻度来源（如读取端聚合缓存）再开闸。
+    valence     REAL,
     created_at  TEXT    NOT NULL,
     updated_at  TEXT    NOT NULL,
     PRIMARY KEY (concept_id, short_code)
@@ -39,6 +45,29 @@ CREATE TABLE IF NOT EXISTS compose_members (
 CREATE TABLE IF NOT EXISTS aliases (
     alias       TEXT    PRIMARY KEY,
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE
+);
+
+-- ── Tag 系统（记账元数据，编译器对这两张表全盲，不参与因果寻路）──
+--
+-- tags: tag 词表注册表。自然键（文本本身当主键），浏览时无需 JOIN 解码。
+-- 词表是数据不是 schema：注册新 tag = 插一行（经 CLI create_tag，显式动作），
+-- 但给概念盖未注册的 tag 会被外键当场拒绝——词汇漂移（plan/Plan/plans）在写入口就死。
+-- 纪律：tag 的存在资格是有查询消费者，没有消费者的分类是装饰。
+CREATE TABLE IF NOT EXISTS tags (
+    name  TEXT PRIMARY KEY
+);
+
+-- 种子词表（当前有工作流消费者的 tag）：
+--   'plan'   — 有序动作序列。消费者：audit_plans 两条 lint
+--              （未绑期待=不良构图；期待未结账=续接清单）。
+--   'result' — 曾以结果身份出现的概念。消费者：goal 选单检索
+--              （search_concepts --tag result）。
+INSERT OR IGNORE INTO tags (name) VALUES ('plan'), ('result');
+
+CREATE TABLE IF NOT EXISTS concept_tags (
+    concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    tag         TEXT    NOT NULL REFERENCES tags(name),
+    PRIMARY KEY (concept_id, tag)
 );
 
 -- 跨 concept 名字唯一性在应用层校验：
@@ -62,6 +91,7 @@ CREATE INDEX IF NOT EXISTS idx_variations_concept ON variations(concept_id);
 CREATE INDEX IF NOT EXISTS idx_cm_member           ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_variations_type     ON variations(type);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
+CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
 
@@ -80,3 +110,13 @@ JOIN concepts c1 ON cm.concept_id = c1.id
 JOIN concepts c2 ON cm.member_concept_id = c2.id
 JOIN variations v ON cm.concept_id = v.concept_id AND cm.short_code = v.short_code
 ORDER BY cm.concept_id, cm.short_code, cm.order_index, cm.member_concept_id;
+
+-- GUI 可读视图：浏览 tag 时直接看概念名，按 tag 归组
+CREATE VIEW IF NOT EXISTS v_concept_tags AS
+SELECT
+    ct.concept_id,
+    c.name AS concept_name,
+    ct.tag
+FROM concept_tags ct
+JOIN concepts c ON ct.concept_id = c.id
+ORDER BY ct.tag, c.name;
