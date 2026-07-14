@@ -284,7 +284,7 @@ class HoronDB:
             f"[OK] Concept '{name}' created with tag 'plan'.\n\n"
             f"[ACTION REQUIRED]\n"
             f"一个合法的计划必须包含具体的执行步骤。你现在必须补全其结构：\n"
-            f"使用 `horon add \"{name}\" variation ...` 为其添加一个由 CHAIN (→) 组成的表达式。"
+            f"使用 `horon set \"{name}\" expression \"步骤A → 步骤B → ...\"` 为其设定一个由 CHAIN (→) 组成的表达式。"
         )
         return res
 
@@ -300,7 +300,18 @@ class HoronDB:
     def suppose(self, expression: str) -> MutationResult:
         """从表达式直接原子化创建概念+组合变体（自动命名）。"""
         vtype, member_ids = self._parse_expression(expression, allow_single=False)
-        
+
+        existing = self._find_composition_variation(vtype, member_ids)
+        if existing is not None:
+            exist_cid, exist_sc, _ = existing
+            exist_name = self._resolve_concept_name(exist_cid)
+            raise ValueError(
+                f"This relation already exists: '{exist_name}:{exist_sc}' "
+                f"(id={exist_cid}). Do not create a duplicate. To record a "
+                f"new observation of this relation, update the content of "
+                f"that variation ('{exist_name}:{exist_sc}')."
+            )
+
         member_names = [self._resolve_concept_name(mid) for mid in member_ids]
         
         if vtype == "CHAIN":
@@ -327,12 +338,12 @@ class HoronDB:
         final_name = base_name
 
         res = self.create_concept(final_name)
-        var_res = self._add_variation(res.concept_id, expression)
-        
+        set_res = self._set_expression(final_name, expression)
+
         msg = (
             f"Success. Created concept '{final_name}' (id={res.concept_id}) "
             f"to represent this relation.\n"
-            f"Variation {var_res.short_code} expression: {expression}"
+            f"Variation {set_res.short_code} expression: {expression}"
         )
         
         if vtype == "CHAIN" and len(member_ids) == 2:
@@ -346,12 +357,11 @@ class HoronDB:
                     f"\n\n[ACTION REQUIRED]\n"
                     f"你刚刚建立了一个 Plan → Result 的预期链路。\n"
                     f"注意：此连接当前处于 hypothesis (假设) 状态。\n"
-                    f"当你验证该关系得到成果后，别忘了：\n"
-                    f"`horon update {res.concept_id} content \"<填入验证过程和证据>\"`"
+                    f"验证有了结果后，把验证过程和凭据 update 进该概念（id={res.concept_id}）的 content。"
                 )
         
-        var_res.message = msg
-        return var_res
+        set_res.message = msg
+        return set_res
 
     def search_concepts(self, query=None, tag: str | None = None) -> list[Concept]:
         """按 alias、disclosure 或 content 模糊搜索 concept，可选按 tag 过滤。
@@ -529,6 +539,34 @@ class HoronDB:
                 return sc
         raise RuntimeError("short_code collision limit reached")
 
+    def _check_plan_chain(self, cid: int, vtype: str) -> tuple[bool, bool]:
+        """plan tag 的表达式约束：只能是 CHAIN。返回 (is_plan, is_first_chain)。"""
+        cursor = self.conn.execute(
+            "SELECT tag FROM concept_tags WHERE concept_id = ?", (cid,))
+        tags = {row["tag"] for row in cursor.fetchall()}
+        is_plan = _TAG_PLAN in tags
+
+        if is_plan and vtype != "CHAIN":
+            raise ValueError(
+                f"Concept has '{_TAG_PLAN}' tag and can only accept "
+                f"CHAIN expressions (got {vtype})."
+            )
+
+        cursor = self.conn.execute(
+            "SELECT COUNT(*) as c FROM variations "
+            "WHERE concept_id = ? AND type = 'CHAIN'", (cid,))
+        is_first_chain = cursor.fetchone()["c"] == 0
+        return is_plan, is_first_chain
+
+    def _plan_first_chain_hint(self, cname: str) -> str:
+        """计划首次建立 CHAIN 后的下一步引导文案。"""
+        return (
+            f"\n\n[ACTION REQUIRED]\n"
+            f"你已经为计划确立了执行步骤。下一步是将它连接到预期结果：\n"
+            f"`horon suppose \"{cname} → 预期结果概念\"`\n"
+            f"（预期结果概念应带有 result 标签。如果还没有，先用 `horon init_result` 创建。）"
+        )
+
     # ── Add ──────────────────────────────────────────────────────────────────
 
     def add(self, concept, kind: str, value: str) -> MutationResult:
@@ -581,17 +619,7 @@ class HoronDB:
 
         vtype, member_ids = self._parse_expression(expression)
 
-        cursor = self.conn.execute("SELECT tag FROM concept_tags WHERE concept_id = ?", (cid,))
-        tags = {row["tag"] for row in cursor.fetchall()}
-        is_plan = _TAG_PLAN in tags
-        
-        if is_plan and vtype != "CHAIN":
-            raise ValueError(
-                f"Concept has '{_TAG_PLAN}' tag and can only accept CHAIN expressions (got {vtype})."
-            )
-            
-        cursor = self.conn.execute("SELECT COUNT(*) as c FROM variations WHERE concept_id = ? AND type = 'CHAIN'", (cid,))
-        is_first_chain = cursor.fetchone()["c"] == 0
+        is_plan, is_first_chain = self._check_plan_chain(cid, vtype)
 
         if cid in member_ids:
             raise ValueError(
@@ -622,13 +650,7 @@ class HoronDB:
             )
         msg = f"Success. Added variation {sc} to {label}."
         if is_plan and is_first_chain:
-            msg += (
-                f"\n\n[ACTION REQUIRED]\n"
-                f"你已经为计划确立了执行步骤。下一步是绑定预期的验证结果：\n"
-                f"请找到或新建预期结果概念（需带有 result 标签），然后执行：\n"
-                f"`horon suppose \"{cname} → 预期结果概念\"`\n"
-                f"以此将该计划的终点导向结果。"
-            )
+            msg += self._plan_first_chain_hint(cname)
 
         return MutationResult(
             message=msg,
@@ -1149,6 +1171,8 @@ class HoronDB:
 
         vtype, member_ids = self._parse_expression(expression)
 
+        is_plan, is_first_chain = self._check_plan_chain(cid, vtype)
+
         if cid in member_ids:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
@@ -1186,6 +1210,8 @@ class HoronDB:
                f"Status was also reset to null.")
         if downgraded:
             msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
+        if is_plan and is_first_chain:
+            msg += self._plan_first_chain_hint(cname)
 
         return MutationResult(
             message=msg,
