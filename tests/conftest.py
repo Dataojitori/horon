@@ -13,7 +13,6 @@ import backend.db as db_module
 def horon_db(tmp_path, monkeypatch):
     db_path = tmp_path / "horon-test.db"
     monkeypatch.setattr(db_module, "_DB_PATH", db_path)
-    db_module.init_db()
 
     db = db_module.HoronDB()
     try:

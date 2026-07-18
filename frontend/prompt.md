@@ -52,8 +52,8 @@
 **全局参数说明**：大部分命令首参为 `concept`，支持汉字主名、alias、带变体短码（`concept:a3f1`）或纯 ID。
 
 ### 基础检索与读写
-- `list_concepts()` —— 列出所有概念。
-- `search_concepts(query, --tag TAG)` —— 模糊搜索。加 `--tag result` 等可直接过滤对应标签的目标。
+- `list_concepts([--tag "表达式"])` —— 列出所有概念。`--tag` 接受表达式：`--tag "鳥類 & 会飛"`（AND，同时带两个标签）或 `--tag "鳥類 | 会飛"`（OR，带其中任一个）。单个 tag 直接写：`--tag plan`。
+- `search_concepts(query, [--tag "表达式"])` —— 模糊搜索。`--tag` 语法同上。至少给一个 query 或 `--tag`。
 - `read_concept(concept)` —— → 概念全貌及上下游关系、Tags 等。
 - `create_concept(name, --disclosure)` —— 建一个自带空原子变体的新概念；name 自动注册为 alias。
 - `set(concept, prop, value)` —— 填充或重写属性。prop ∈ `disclosure` / `status` / `name` / `expression`。
@@ -82,6 +82,16 @@
     - 单节点：`${A confirmed}`（特例：只要 A 发生了就报警）。
   - **严禁的写法**：`${A & B ...}`（强绑定应建实体节点，不要写在 unless 文本里）；也不支持单节点/OR容器的 negated 追踪。
   - **unless 触发后果**：命中不自动改任何 status，compile 也不看它；只在 `read_concept` 读到相关概念时浮出 `[ALERT]`，之后怎么处置由你定。
+
+### Tag 词表管理
+Tag 是给概念贴的分类元数据，编译器对其全盲。Tag 的名字必须是某个概念的**显示名（display name）**，alias 不算。
+- `create_tag(name)` —— 注册一个概念的显示名为 tag。源概念自动成为该 tag 的首位成员。
+- `delete_tag(name)` —— 注销一个 tag。系统保留 tag（`plan`、`result`）不可删。如果还有其他概念在用这个 tag，必须先把 tag 从它们身上摘掉才能删。
+- `list_tags()` —— 列出所有已注册的 tag 及其使用概念数。
+
+**自动行为：**
+- **改名跟随**：对注册为 tag 的概念 set name 会把所有使用该 tag 的概念同步绑定到新名字。
+- **删概念联动**：删除作为 tag 源的概念时，如果其他概念还在用该 tag，系统拒绝删除；如果没有其他使用者，tag 随概念一起清除。
 
 ### 桥接工具
 - `read_memory(uri, --out file)` —— 从 Nocturne Memory 读取记忆正文；配合 `--out` 导出为文件后，可用 `update --append-file` 导入 Horon 概念的 content。

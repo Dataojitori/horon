@@ -93,7 +93,7 @@ def test_search_by_tag_only(horon_db):
     horon_db.add("部署新版本", "tag", "plan")
     horon_db.add("服务恢复", "tag", "result")
 
-    goal_candidates = horon_db.search_concepts(tag="result")
+    goal_candidates = horon_db.search_concepts(tag_expr="result")
     assert [c.name for c in goal_candidates] == ["服务恢复"]
 
 
@@ -104,7 +104,7 @@ def test_search_intersects_query_and_tag(horon_db):
     horon_db.add("部署新版本", "tag", "plan")
     horon_db.add("部署回滚", "tag", "plan")
 
-    hits = horon_db.search_concepts("回滚", tag="plan")
+    hits = horon_db.search_concepts("回滚", tag_expr="plan")
     assert [c.name for c in hits] == ["部署回滚"]
 
 
@@ -120,6 +120,15 @@ def test_foreign_key_rejects_unregistered_tag_bypassing_app_layer(horon_db):
             "INSERT INTO concept_tags (concept_id, tag) VALUES (?,?)",
             (created.concept_id, "bogus"),
         )
+
+def test_rename_tag_source_to_same_name(horon_db):
+    """验证：当概念是 registered tag 的 source 时，被重命名为其自己（幂等）时不应该报错。"""
+    horon_db.create_concept("我的标签")
+    horon_db.create_tag("我的标签")
+    
+    # 不应该抛出 collision 错误
+    result = horon_db.set("我的标签", "name", "我的标签")
+    assert "Name is already" in result.message
 
 
 # ── audit_plans ──────────────────────────────────────────────

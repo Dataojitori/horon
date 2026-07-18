@@ -90,6 +90,7 @@ class ReadResult(BaseModel):
     disclosure: str | None = None
     aliases: list[str] = []
     tags: list[str] = []
+    tag_source_info: str | None = None
     variations: list[VariationDetail] = []
     inbound_confirmed: list[DirectedRelation] = []
     inbound_negated: list[DirectedRelation] = []

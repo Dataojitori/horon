@@ -12,11 +12,7 @@ SCHEMA = PROJECT_ROOT / "backend" / "schema.sql"
 
 def init_cli_db(tmp_path):
     db_path = tmp_path / "cli-test.db"
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(SCHEMA.read_text(encoding="utf-8"))
-    finally:
-        conn.close()
+    # let HoronDB.__init__ create and migrate the database automatically
     return db_path
 
 

@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS aliases (
 -- 但给概念盖未注册的 tag 会被外键当场拒绝——词汇漂移（plan/Plan/plans）在写入口就死。
 -- 纪律：tag 的存在资格是有查询消费者，没有消费者的分类是装饰。
 CREATE TABLE IF NOT EXISTS tags (
-    name  TEXT PRIMARY KEY
+    name              TEXT PRIMARY KEY,
+    source_concept_id INTEGER        -- NULL = system tag (plan, result)
 );
 
 -- 种子词表（当前有工作流消费者的 tag）：
@@ -66,7 +67,7 @@ INSERT OR IGNORE INTO tags (name) VALUES ('plan'), ('result');
 
 CREATE TABLE IF NOT EXISTS concept_tags (
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    tag         TEXT    NOT NULL REFERENCES tags(name),
+    tag         TEXT    NOT NULL REFERENCES tags(name) ON UPDATE CASCADE,
     PRIMARY KEY (concept_id, tag)
 );
 
@@ -85,6 +86,12 @@ CREATE TABLE IF NOT EXISTS cli_audit_log (
     short_code   TEXT,
     sub_action   TEXT,
     success      INTEGER NOT NULL DEFAULT 1
+);
+
+-- ── Schema migration tracking ──
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version    TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_variations_concept ON variations(concept_id);
