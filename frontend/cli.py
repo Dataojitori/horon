@@ -26,6 +26,17 @@ from backend.text_patch import (
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
+def _format_segments_chain(segments: list[dict]) -> str | None:
+    if not segments:
+        return None
+    chain_nodes = [segments[0]["from"]["name"]]
+    for i, s in enumerate(segments):
+        if i > 0 and s["from"]["name"] != segments[i-1]["to"]["name"]:
+            return None
+        chain_nodes.append(s["to"]["name"])
+    return " → ".join(chain_nodes)
+
+
 def _format_route(edges: list[dict], label: str) -> list[str]:
     """将由多条边拼接而成的路径，格式化为易读的文本列表。
 
@@ -91,11 +102,15 @@ def _format_route(edges: list[dict], label: str) -> list[str]:
     # ── 明细 ──
     for edge in edges:
         if edge.get("segments"):
-            for s in edge["segments"]:
-                lines.append(
-                    f'  {s["from"]["name"]} → {s["to"]["name"]}'
-                    f' : see "{edge["name"]}"'
-                )
+            chain_str = _format_segments_chain(edge["segments"])
+            if chain_str:
+                lines.append(f'  {chain_str} : see "{edge["name"]}"')
+            else:
+                for s in edge["segments"]:
+                    lines.append(
+                        f'  {s["from"]["name"]} → {s["to"]["name"]}'
+                        f' : see "{edge["name"]}"'
+                    )
         else:
             lines.append(
                 f'  {edge["from"]["name"]} → {edge["to"]["name"]}'
@@ -190,10 +205,14 @@ def _format_compile(result: dict) -> str:
         )
         for e in hyp_edges:
             if e.get("segments"):
-                for s in e["segments"]:
-                    lines.append(
-                        f'  ✗ {s["from"]["name"]} → {s["to"]["name"]} '
-                        f'({e["status"]}) : see "{e["name"]}"')
+                chain_str = _format_segments_chain(e["segments"])
+                if chain_str:
+                    lines.append(f'  ✗ {chain_str} ({e["status"]}) : see "{e["name"]}"')
+                else:
+                    for s in e["segments"]:
+                        lines.append(
+                            f'  ✗ {s["from"]["name"]} → {s["to"]["name"]} '
+                            f'({e["status"]}) : see "{e["name"]}"')
             else:
                 lines.append(
                     f'  ✗ {e["from"]["name"]} → {e["to"]["name"]} '
@@ -227,6 +246,8 @@ def _format_read_concept(result: ReadResult) -> str:
     lines.append(f"Disclosure: {disc}")
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
+    if result.tag_source_info:
+        lines.append(f"[Tag Source] {result.tag_source_info}")
     lines.append("=" * 60)
 
     if result.alerts:
@@ -489,15 +510,27 @@ def _build_parser():
     p = sub.add_parser("suppose", allow_abbrev=False)
     p.add_argument("expression")
 
-    # search_concepts — 文本模糊搜索 / tag 过滤，至少给一个。
-    # goal 选单：search_concepts --tag result
+    # create_tag
+    p = sub.add_parser("create_tag", allow_abbrev=False)
+    p.add_argument("name")
+
+    # delete_tag
+    p = sub.add_parser("delete_tag", allow_abbrev=False)
+    p.add_argument("name")
+
+    # list_tags
+    sub.add_parser("list_tags", allow_abbrev=False)
+
+    # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
     p.add_argument("query", nargs="?", default=None)
     p.add_argument("--tag", default=None,
-                   help="Only return concepts carrying this tag")
+                   help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
     # list_concepts
     p = sub.add_parser("list_concepts", allow_abbrev=False)
+    p.add_argument("--tag", default=None,
+                   help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
     # add (name / variation / tag)
     p = sub.add_parser("add", allow_abbrev=False)
@@ -578,26 +611,47 @@ def _dispatch(args, db):
     elif args.command == "suppose":
         return db.suppose(args.expression)
 
+    elif args.command == "create_tag":
+        return db.create_tag(args.name)
+
+    elif args.command == "delete_tag":
+        return db.delete_tag(args.name)
+
+    elif args.command == "list_tags":
+        rows = db.list_tags()
+        if not rows:
+            return RawOutput("(no tags registered)")
+        lines = []
+        for r in rows:
+            src = "(system)" if r["source_concept_id"] is None \
+                else f"(source: id={r['source_concept_id']})"
+            lines.append(
+                f"  {r['name']}  — {r['usage_count']} concept(s)  {src}")
+        return RawOutput("\n".join(lines))
+
     elif args.command == "search_concepts":
-        return db.search_concepts(args.query, tag=args.tag)
+        return db.search_concepts(args.query, tag_expr=args.tag)
 
     elif args.command == "list_concepts":
-        overviews = db.get_all_concepts_overview()
+        overviews = db.get_all_concepts_overview(tag_expr=args.tag)
         lines = []
         for c in overviews:
-            lines.append(f"[{c['id']}] {c['name']}")
-            
+            header = f"[{c['id']}] {c['name']}"
+            if c.get("tags"):
+                header += f"  [{', '.join(c['tags'])}]"
+            lines.append(header)
+
             variations = c["variations"]
             for v in variations:
                 expr = v["expression"]
                 status = v["status"]
                 prefix = f"[{v['short_code']}] " if len(variations) > 1 else ""
-                
+
                 if expr:
                     lines.append(f"      = {prefix}{expr} ({status})")
                 else:
                     lines.append(f"      = {prefix}[Atomic] ({status})")
-                    
+
         return RawOutput("\n".join(lines))
 
     elif args.command == "add":

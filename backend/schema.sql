@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS cli_audit_log (
     success      INTEGER NOT NULL DEFAULT 1
 );
 
--- ── Schema migration tracking ──
+-- 已发布数据库的增量升级记录。新数据库直接按本文件创建最新结构，
+-- 并由 HoronDB 将随代码发布的迁移标记为已包含。
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL

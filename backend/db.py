@@ -61,6 +61,7 @@ def _validate_name(name: str) -> str:
 
 _PROJECT_DIR = Path(__file__).parent.parent
 _SCHEMA_PATH = _PROJECT_DIR / "backend" / "schema.sql"
+_MIGRATIONS_DIR = _PROJECT_DIR / "backend" / "migrations"
 
 load_dotenv(_PROJECT_DIR / ".env")
 
@@ -68,12 +69,6 @@ if "HORON_DB" not in os.environ:
     raise RuntimeError("HORON_DB not set. Check .env file.")
 _DB_PATH = _PROJECT_DIR / os.environ["HORON_DB"]
 
-
-def init_db():
-    """建表。只需跑一次。"""
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.executescript(_SCHEMA_PATH.read_text())
-    conn.close()
 
 
 def _now():
@@ -106,9 +101,59 @@ class HoronDB:
         self.conn.execute("PRAGMA foreign_keys = ON")
         if is_new:
             self.conn.executescript(_SCHEMA_PATH.read_text())
+            self.conn.executemany(
+                "INSERT INTO schema_migrations (version, applied_at) "
+                "VALUES (?, ?)",
+                [(path.stem, _now()) for path in self._migration_files()],
+            )
+            self.conn.commit()
+        else:
+            self._apply_migrations()
 
     def close(self):
         self.conn.close()
+
+    # ── Schema migrations ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _migration_files() -> list[Path]:
+        if not _MIGRATIONS_DIR.exists():
+            return []
+        return sorted(_MIGRATIONS_DIR.glob("*.sql"))
+
+    def _apply_migrations(self):
+        """Apply SQL migrations that this existing database has not recorded."""
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                version    TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
+            )""")
+        self.conn.commit()
+        applied = {
+            row["version"]
+            for row in self.conn.execute(
+                "SELECT version FROM schema_migrations"
+            ).fetchall()
+        }
+
+        for path in self._migration_files():
+            version = path.stem
+            if version in applied:
+                continue
+            sql = path.read_text(encoding="utf-8")
+            escaped_version = version.replace("'", "''")
+            full_script = (
+                "BEGIN;\n"
+                f"{sql}\n"
+                "INSERT INTO schema_migrations (version, applied_at) "
+                f"VALUES ('{escaped_version}', '{_now()}');\n"
+                "COMMIT;"
+            )
+            try:
+                self.conn.executescript(full_script)
+            except Exception:
+                self.conn.rollback()
+                raise
 
     # ── Resolution ───────────────────────────────────────────────────────────
 
@@ -297,6 +342,119 @@ class HoronDB:
         return res
 
     @transactional
+    def create_tag(self, concept_name: str) -> MutationResult:
+        """Register a concept's display name as a tag.
+
+        The name must be an exact match on concepts.name (aliases don't
+        qualify).  The source concept is auto-enrolled under the new tag.
+        If the tag already exists, returns an info message with usage count.
+        """
+        concept_name = concept_name.strip()
+        if not concept_name:
+            raise ValueError("Tag name cannot be empty.")
+        row = self.conn.execute(
+            "SELECT id FROM concepts WHERE name = ?",
+            (concept_name,),
+        ).fetchone()
+        if not row:
+            raise ValueError(
+                f"No concept with display name '{concept_name}'. "
+                f"Tag name must be a concept's display name, not an alias.")
+        cid = row["id"]
+
+        existing = self.conn.execute(
+            "SELECT source_concept_id FROM tags WHERE name = ?",
+            (concept_name,),
+        ).fetchone()
+        if existing:
+            usage = self.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM concept_tags WHERE tag = ?",
+                (concept_name,),
+            ).fetchone()["cnt"]
+            return MutationResult(
+                message=(f"Tag '{concept_name}' already exists "
+                         f"(used by {usage} concept(s))."),
+                concept_id=cid, concept_name=concept_name,
+            )
+
+        self.conn.execute(
+            "INSERT INTO tags (name, source_concept_id) VALUES (?,?)",
+            (concept_name, cid),
+        )
+        self.conn.execute(
+            "INSERT OR IGNORE INTO concept_tags (concept_id, tag) "
+            "VALUES (?,?)",
+            (cid, concept_name),
+        )
+        return MutationResult(
+            message=(f"Success. Registered tag '{concept_name}' "
+                     f"(source concept id={cid}). "
+                     f"Concept '{concept_name}' auto-enrolled."),
+            concept_id=cid, concept_name=concept_name,
+        )
+
+    @transactional
+    def delete_tag(self, tag_name: str) -> MutationResult:
+        """Unregister a user-created tag from the vocabulary.
+
+        System tags (source_concept_id IS NULL) cannot be deleted.
+        Tags still carried by concepts other than the source are blocked.
+        """
+        tag_name = tag_name.strip()
+        if not tag_name:
+            raise ValueError("Tag name cannot be empty.")
+        row = self.conn.execute(
+            "SELECT name, source_concept_id FROM tags WHERE name = ?",
+            (tag_name,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Tag '{tag_name}' is not registered.")
+        if row["source_concept_id"] is None:
+            raise ValueError(
+                f"Tag '{tag_name}' is a system-reserved tag "
+                f"and cannot be deleted.")
+        source_cid = row["source_concept_id"]
+
+        other_users = self.conn.execute(
+            "SELECT c.name FROM concept_tags ct "
+            "JOIN concepts c ON ct.concept_id = c.id "
+            "WHERE ct.tag = ? AND ct.concept_id != ?",
+            (tag_name, source_cid),
+        ).fetchall()
+        if other_users:
+            names = ", ".join(f"'{r['name']}'" for r in other_users)
+            raise ValueError(
+                f"Cannot delete tag '{tag_name}': still carried by "
+                f"{names}.")
+
+        self.conn.execute(
+            "DELETE FROM concept_tags WHERE tag = ? AND concept_id = ?",
+            (tag_name, source_cid),
+        )
+        self.conn.execute(
+            "DELETE FROM tags WHERE name = ?", (tag_name,),
+        )
+        return MutationResult(
+            message=f"Success. Tag '{tag_name}' unregistered.",
+            concept_id=source_cid,
+            concept_name=self._resolve_concept_name(source_cid),
+        )
+
+    def list_tags(self) -> list[dict]:
+        """Return all registered tags with usage counts (excluding source concept)."""
+        rows = self.conn.execute(
+            "SELECT t.name, t.source_concept_id, "
+            "  COUNT(ct.concept_id) AS usage_count "
+            "FROM tags t "
+            "LEFT JOIN concept_tags ct ON t.name = ct.tag "
+            "  AND (t.source_concept_id IS NULL "
+            "       OR ct.concept_id != t.source_concept_id) "
+            "GROUP BY t.name "
+            "ORDER BY t.name"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    @transactional
     def suppose(self, expression: str) -> MutationResult:
         """从表达式直接原子化创建概念+组合变体（自动命名）。"""
         vtype, member_ids = self._parse_expression(expression, allow_single=False)
@@ -313,7 +471,7 @@ class HoronDB:
             )
 
         member_names = [self._resolve_concept_name(mid) for mid in member_ids]
-        
+
         if vtype == "CHAIN":
             joiner = "-then-"
         elif vtype == "AND":
@@ -322,7 +480,7 @@ class HoronDB:
             joiner = "-or-"
         else:
             raise ValueError(f"Unknown variation type: {vtype}")
-            
+
         base_name = joiner.join(member_names)
         
         try:
@@ -334,7 +492,7 @@ class HoronDB:
                 f"Please fall back to manual creation: "
                 f"use `horon create_concept <custom_name>` then `horon add <custom_name> variation \"{expression}\"`."
             )
-            
+
         final_name = base_name
 
         res = self.create_concept(final_name)
@@ -351,7 +509,7 @@ class HoronDB:
             rows = cursor.fetchall()
             tags_a = {r["tag"] for r in rows if r["concept_id"] == member_ids[0]}
             tags_b = {r["tag"] for r in rows if r["concept_id"] == member_ids[1]}
-            
+
             if _TAG_PLAN in tags_a and "result" in tags_b:
                 msg += (
                     f"\n\n[ACTION REQUIRED]\n"
@@ -363,29 +521,81 @@ class HoronDB:
         set_res.message = msg
         return set_res
 
-    def search_concepts(self, query=None, tag: str | None = None) -> list[Concept]:
+    @staticmethod
+    def _build_tag_filter_subquery(tag_expr: str) -> tuple[str, list]:
+        """Parse a tag filter expression and return (subquery_sql, parameters).
+
+        Syntax mirrors Horon's composition operators (& and | are
+        forbidden in concept/tag names, so they are unambiguous):
+          "鳥類 & 会飛ぶ"  → AND
+          "鳥類 | 会飛ぶ"  → OR
+          "plan"           → AND
+
+        Mixing & and | in one expression is rejected.
+        """
+        has_and = "&" in tag_expr
+        has_or = "|" in tag_expr
+        if has_and and has_or:
+            raise ValueError(
+                "Tag filter cannot mix & and |. "
+                "Use one operator per --tag expression.")
+
+        if has_or:
+            parts = [p.strip() for p in tag_expr.split("|")]
+            mode = "OR"
+        elif has_and:
+            parts = [p.strip() for p in tag_expr.split("&")]
+            mode = "AND"
+        else:
+            parts = [tag_expr.strip()]
+            mode = "AND"
+
+        parts = list(dict.fromkeys([p for p in parts if p]))
+        if not parts:
+            raise ValueError("Tag filter expression is empty.")
+
+        placeholders = ",".join("?" for _ in parts)
+        if mode == "AND":
+            subq = (
+                f"SELECT concept_id FROM concept_tags "
+                f"WHERE tag IN ({placeholders}) "
+                f"GROUP BY concept_id "
+                f"HAVING COUNT(DISTINCT tag) = ?"
+            )
+            params = list(parts) + [len(parts)]
+        else:
+            subq = (
+                f"SELECT DISTINCT concept_id FROM concept_tags "
+                f"WHERE tag IN ({placeholders})"
+            )
+            params = list(parts)
+
+        return subq, params
+
+    def search_concepts(self, query=None,
+                        tag_expr: str | None = None) -> list[Concept]:
         """按 alias、disclosure 或 content 模糊搜索 concept，可选按 tag 过滤。
 
         输入：query —— 文本子串（None = 不按文本过滤）；
-              tag  —— 只返回带该 tag 的概念（None = 不按 tag 过滤）。
+              tag_expr —— tag 过滤表达式（"A & B" = AND, "A | B" = OR）。
               两者都给取交集；两者都不给报错。
         输出：命中的 Concept 列表。
-        典型用法：goal 选单 = search_concepts(tag='result')，
-        返回所有曾以结果身份出现的概念，供 compile --goal 选靶。
+        典型用法：goal 选单 = search_concepts(tag_expr='result')。
         """
-        if query is None and tag is None:
+        if query is None and not tag_expr:
             raise ValueError("Provide a search query, a tag, or both.")
-        joins = [
-            "LEFT JOIN aliases a ON c.id = a.concept_id",
-            "LEFT JOIN variations v ON c.id = v.concept_id",
-        ]
+        joins = []
         conditions = []
         parameters: list = []
-        if tag is not None:
-            joins.append("JOIN concept_tags ct ON c.id = ct.concept_id")
-            conditions.append("ct.tag = ?")
-            parameters.append(tag)
+        if tag_expr:
+            subq, params = self._build_tag_filter_subquery(tag_expr)
+            joins.append(f"JOIN ({subq}) ct_filter ON c.id = ct_filter.concept_id")
+            parameters.extend(params)
         if query is not None:
+            joins.extend([
+                "LEFT JOIN aliases a ON c.id = a.concept_id",
+                "LEFT JOIN variations v ON c.id = v.concept_id",
+            ])
             escaped = (query.replace("\\", "\\\\")
                        .replace("%", "\\%").replace("_", "\\_"))
             like = f"%{escaped}%"
@@ -394,10 +604,10 @@ class HoronDB:
                 "OR c.disclosure LIKE ? ESCAPE '\\' "
                 "OR v.content LIKE ? ESCAPE '\\')")
             parameters.extend([like, like, like])
+        where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         rows = self.conn.execute(
             "SELECT DISTINCT c.* FROM concepts c "
-            + " ".join(joins)
-            + " WHERE " + " AND ".join(conditions),
+            + " ".join(joins) + where,
             parameters,
         ).fetchall()
         return [Concept(**dict(row)) for row in rows]
@@ -407,29 +617,65 @@ class HoronDB:
         rows = self.conn.execute("SELECT * FROM concepts ORDER BY id").fetchall()
         return [Concept(**dict(row)) for row in rows]
 
-    def get_all_concepts_overview(self) -> list[dict]:
-        """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。"""
-        concepts = self.get_all_concepts()
+    def get_all_concepts_overview(
+        self, tag_expr: str | None = None,
+    ) -> list[dict]:
+        """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。
+        tag_expr: 可选 tag 过滤表达式（"A & B" = AND, "A | B" = OR）。"""
+        if tag_expr:
+            subq, child_params = self._build_tag_filter_subquery(tag_expr)
+            join_clause = f"JOIN ({subq}) ct_filter ON c.id = ct_filter.concept_id"
+
+            # 直接使用 JOIN 查询提取 concepts
+            rows = self.conn.execute(
+                f"SELECT DISTINCT c.* FROM concepts c {join_clause} ORDER BY c.id", child_params
+            ).fetchall()
+            concepts = [Concept(**dict(row)) for row in rows]
+
+            if not concepts:
+                return []
+
+            cids = [c.id for c in concepts]
+            placeholders = ",".join("?" * len(cids))
+
+            where_clause = f"WHERE concept_id IN ({placeholders})"
+            mem_where_clause = f"WHERE cm.concept_id IN ({placeholders})"
+            child_params = cids
+        else:
+            concepts = self.get_all_concepts()
+            if not concepts:
+                return []
+            where_clause = ""
+            mem_where_clause = ""
+            child_params = []
 
         var_rows = self.conn.execute(
-            "SELECT concept_id, short_code, type, status FROM variations "
-            "ORDER BY concept_id, short_code"
+            f"SELECT concept_id, short_code, type, status FROM variations "
+            f"{where_clause} ORDER BY concept_id, short_code", child_params
         ).fetchall()
         vars_by_cid: dict[int, list] = {}
         for r in var_rows:
             vars_by_cid.setdefault(r["concept_id"], []).append(r)
 
         mem_rows = self.conn.execute(
-            "SELECT cm.concept_id, cm.short_code, cm.order_index, c.name "
-            "FROM compose_members cm "
-            "JOIN concepts c ON cm.member_concept_id = c.id "
-            "ORDER BY cm.order_index, cm.member_concept_id"
+            f"SELECT cm.concept_id, cm.short_code, cm.order_index, c.name "
+            f"FROM compose_members cm "
+            f"JOIN concepts c ON cm.member_concept_id = c.id "
+            f"{mem_where_clause} ORDER BY cm.order_index, cm.member_concept_id", child_params
         ).fetchall()
 
         mems_by_var: dict[tuple, list[str]] = {}
         for r in mem_rows:
             key = (r["concept_id"], r["short_code"])
             mems_by_var.setdefault(key, []).append(r["name"])
+
+        tag_rows = self.conn.execute(
+            f"SELECT concept_id, tag FROM concept_tags "
+            f"{where_clause} ORDER BY concept_id, tag", child_params
+        ).fetchall()
+        tags_by_cid: dict[int, list[str]] = {}
+        for r in tag_rows:
+            tags_by_cid.setdefault(r["concept_id"], []).append(r["tag"])
 
         _OP = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
 
@@ -439,6 +685,7 @@ class HoronDB:
                 "id": c.id,
                 "name": c.name,
                 "disclosure": c.disclosure,
+                "tags": tags_by_cid.get(c.id, []),
                 "variations": [],
             }
             for v in vars_by_cid.get(c.id, []):
@@ -662,8 +909,7 @@ class HoronDB:
         """给概念盖一个 tag。
 
         输入：concept —— 概念名/别名/ID；tag —— 必须已在 tags 词表注册。
-        行为：未注册的 tag 直接报错并列出已知词表（词表变更走数据库迁移，
-              无运行时注册入口）；概念已有该 tag 时幂等成功。
+        行为：未注册的 tag 直接报错并列出已知词表；概念已有该 tag 时幂等成功。
         输出：MutationResult。
         """
         tag = tag.strip()
@@ -693,7 +939,7 @@ class HoronDB:
             raise ValueError(
                 f"Tag '{tag}' is not registered. "
                 f"Known tags: {', '.join(known)}. "
-                f"New tags ship with their consumer code via DB migration.")
+                f"Use create_tag to register a new tag.")
         already = self.conn.execute(
             "SELECT 1 FROM concept_tags WHERE concept_id = ? AND tag = ?",
             (cid, tag),
@@ -820,6 +1066,7 @@ class HoronDB:
             (cid,),
         ).fetchone()["cnt"]
 
+        tag_row = None
         if var_count == 1:
             refs = self.conn.execute(
                 "SELECT DISTINCT cm.concept_id, cm.short_code, "
@@ -835,17 +1082,37 @@ class HoronDB:
                 for r in refs:
                     expr = self._get_expression(
                         r["concept_id"], r["short_code"])
-                    tag = f"  - '{r['name']}:{r['short_code']}'" \
-                          f" (id={r['concept_id']})"
+                    line = f"  - '{r['name']}:{r['short_code']}'" \
+                           f" (id={r['concept_id']})"
                     if expr:
-                        tag += f"  [{expr}]"
-                    ref_parts.append(tag)
+                        line += f"  [{expr}]"
+                    ref_parts.append(line)
                 detail = "\n".join(ref_parts)
                 raise ValueError(
                     f"Cannot delete {label}: it is still referenced "
                     f"as a compose member by:\n{detail}\n"
                     f"Use read_concept to review them before deciding "
                     f"how to proceed.")
+
+            tag_row = self.conn.execute(
+                "SELECT name FROM tags WHERE source_concept_id = ?",
+                (cid,),
+            ).fetchone()
+            if tag_row:
+                tag_name = tag_row["name"]
+                other_users = self.conn.execute(
+                    "SELECT c.name FROM concept_tags ct "
+                    "JOIN concepts c ON ct.concept_id = c.id "
+                    "WHERE ct.tag = ? AND ct.concept_id != ?",
+                    (tag_name, cid),
+                ).fetchall()
+                if other_users:
+                    names = ", ".join(
+                        f"'{r['name']}'" for r in other_users)
+                    raise ValueError(
+                        f"Cannot delete {label}: concept name "
+                        f"'{tag_name}' is a registered tag still "
+                        f"carried by: {names}.")
 
         self.conn.execute(
             "DELETE FROM variations "
@@ -863,7 +1130,13 @@ class HoronDB:
         if remaining["cnt"] == 0:
             self.conn.execute(
                 "DELETE FROM concepts WHERE id=?", (cid,))
+            if tag_row:
+                self.conn.execute(
+                    "DELETE FROM tags WHERE name = ?",
+                    (tag_row["name"],))
             msg = f"Success. Deleted concept {label} (last variation {sc} removed)."
+            if tag_row:
+                msg += f" Tag '{tag_row['name']}' auto-removed."
         else:
             msg = (f"Success. Deleted variation {sc} from {label}. "
                    f"{remaining['cnt']} variation(s) remaining.")
@@ -1137,12 +1410,35 @@ class HoronDB:
 
     @transactional
     def _set_name(self, concept, new_name: str) -> MutationResult:
-        """改显示名。旧显示名降级为 alias，保留在名字集合里。"""
+        """改显示名。旧显示名降级为 alias，保留在名字集合里。
+        If old name was a registered tag source, the tag is auto-renamed
+        (ON UPDATE CASCADE propagates to concept_tags)."""
         new_name = _validate_name(new_name)
         cid, _ = self._resolve_id(concept)
         old_name = self._resolve_concept_name(cid)
+
+        if new_name == old_name:
+            return MutationResult(
+                message=f"Name is already '{new_name}'.",
+                concept_id=cid, concept_name=new_name,
+            )
+
         label = f"'{concept}' ('{old_name}', id={cid})"
         self._check_name_available(new_name, exclude_concept_id=cid)
+
+        is_tag_source = self.conn.execute(
+            "SELECT 1 FROM tags WHERE name = ? AND source_concept_id = ?",
+            (old_name, cid),
+        ).fetchone()
+        if is_tag_source:
+            collision = self.conn.execute(
+                "SELECT 1 FROM tags WHERE name = ?", (new_name,),
+            ).fetchone()
+            if collision:
+                raise ValueError(
+                    f"Cannot rename: '{new_name}' is already a "
+                    f"registered tag name.")
+
         self.conn.execute(
             "UPDATE concepts SET name=?, updated_at=? WHERE id=?",
             (new_name, _now(), cid),
@@ -1155,8 +1451,17 @@ class HoronDB:
                 "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
                 (new_name, cid),
             )
+
+        tag_msg = ""
+        if is_tag_source:
+            self.conn.execute(
+                "UPDATE tags SET name = ? WHERE name = ?",
+                (new_name, old_name),
+            )
+            tag_msg = f" Tag '{old_name}' renamed to '{new_name}'."
+
         return MutationResult(
-            message=f"Success. Renamed {label} to '{new_name}'.",
+            message=f"Success. Renamed {label} to '{new_name}'.{tag_msg}",
             concept_id=cid, concept_name=new_name,
         )
 
@@ -1573,6 +1878,22 @@ class HoronDB:
             ).fetchall()
         ]
 
+        # tag source info
+        tag_source_info = None
+        ts_row = self.conn.execute(
+            "SELECT t.name, COUNT(ct.concept_id) AS cnt "
+            "FROM tags t "
+            "LEFT JOIN concept_tags ct ON t.name = ct.tag AND ct.concept_id != ? "
+            "WHERE t.source_concept_id = ? "
+            "GROUP BY t.name",
+            (cid, cid),
+        ).fetchone()
+        if ts_row:
+            tag_source_info = (
+                f"This concept's name is registered as tag "
+                f"'{ts_row['name']}'. "
+                f"Currently used by {ts_row['cnt']} other concept(s).")
+
         # 入边 / 出边
         inbound = self._query_inbound_relations(cid)
         outbound = self._query_outbound_relations(cid)
@@ -1593,6 +1914,7 @@ class HoronDB:
             disclosure=row["disclosure"],
             aliases=aliases,
             tags=tags,
+            tag_source_info=tag_source_info,
             variations=variations,
             inbound_confirmed=inbound["confirmed"],
             inbound_negated=inbound["negated"],

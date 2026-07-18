@@ -131,6 +131,20 @@ def test_rename_tag_source_to_same_name(horon_db):
     assert "Name is already" in result.message
 
 
+def test_rename_tag_source_cascades_to_tagged_concepts(horon_db):
+    horon_db.create_concept("旧标签名")
+    horon_db.create_concept("被分类概念")
+    horon_db.create_tag("旧标签名")
+    horon_db.add("被分类概念", "tag", "旧标签名")
+
+    horon_db.set("旧标签名", "name", "新标签名")
+
+    assert horon_db.read_concept("被分类概念").tags == ["新标签名"]
+    assert horon_db.conn.execute(
+        "SELECT 1 FROM tags WHERE name = '旧标签名'"
+    ).fetchone() is None
+
+
 # ── audit_plans ──────────────────────────────────────────────
 
 
