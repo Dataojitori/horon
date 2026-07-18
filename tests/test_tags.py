@@ -85,6 +85,23 @@ def test_delete_absent_tag_is_rejected(horon_db):
         horon_db.delete("部署新版本", "tag", "plan")
     assert "does not have tag" in str(excinfo.value)
 
+def test_delete_system_tag_is_rejected(horon_db):
+    with pytest.raises(ValueError) as excinfo:
+        horon_db.delete_tag("plan")
+    assert "system-reserved tag and cannot be deleted" in str(excinfo.value)
+
+def test_delete_system_concept_is_rejected(horon_db):
+    horon_db.create_concept("plan")
+    with pytest.raises(ValueError) as excinfo:
+        horon_db.delete("plan")
+    assert "system-reserved concept and cannot be deleted" in str(excinfo.value)
+
+def test_rename_system_concept_is_rejected(horon_db):
+    horon_db.create_concept("plan")
+    with pytest.raises(ValueError) as excinfo:
+        horon_db.set("plan", "name", "plan2")
+    assert "system-reserved concept" in str(excinfo.value)
+
 
 def test_search_by_tag_only(horon_db):
     horon_db.create_concept("部署新版本")

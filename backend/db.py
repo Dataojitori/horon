@@ -36,6 +36,7 @@ _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 # 注册新 tag 走 create_tag；给概念盖未注册的 tag 会被外键拒绝。
 _TAG_PLAN = "plan"
 _TAG_RESULT = "result"
+SYSTEM_TAGS = {_TAG_PLAN, _TAG_RESULT}
 
 
 def _validate_name(name: str) -> str:
@@ -397,7 +398,7 @@ class HoronDB:
     def delete_tag(self, tag_name: str) -> MutationResult:
         """Unregister a user-created tag from the vocabulary.
 
-        System tags (source_concept_id IS NULL) cannot be deleted.
+        System tags (in SYSTEM_TAGS) cannot be deleted.
         Tags still carried by concepts other than the source are blocked.
         """
         tag_name = tag_name.strip()
@@ -409,7 +410,7 @@ class HoronDB:
         ).fetchone()
         if not row:
             raise ValueError(f"Tag '{tag_name}' is not registered.")
-        if row["source_concept_id"] is None:
+        if tag_name in SYSTEM_TAGS:
             raise ValueError(
                 f"Tag '{tag_name}' is a system-reserved tag "
                 f"and cannot be deleted.")
@@ -1068,6 +1069,11 @@ class HoronDB:
 
         tag_row = None
         if var_count == 1:
+            if cname in SYSTEM_TAGS:
+                raise ValueError(
+                    f"Cannot delete {label}: it is a system-reserved concept "
+                    f"and cannot be deleted.")
+
             refs = self.conn.execute(
                 "SELECT DISTINCT cm.concept_id, cm.short_code, "
                 "  c.name "
@@ -1416,6 +1422,11 @@ class HoronDB:
         new_name = _validate_name(new_name)
         cid, _ = self._resolve_id(concept)
         old_name = self._resolve_concept_name(cid)
+
+        if old_name in SYSTEM_TAGS:
+            raise ValueError(
+                f"Cannot rename '{old_name}': it is a system-reserved concept."
+            )
 
         if new_name == old_name:
             return MutationResult(
