@@ -4,4 +4,8 @@ __pycache__/
 *.db
 .pytest_cache/
 .claude/
-.agents/
+# Agents & Skills whitelist
+.agents/*
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/horon-cli/

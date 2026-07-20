@@ -1,3 +1,7 @@
+---
+name: horon-cli
+description: 当你准备操作 Horon CLI、进行状态推演、或修改概念图之前，必须阅读此说明书。它包含了工具语法与必须遵守的行动纪律。
+---
 # Horon 使用说明书
 
 本文件是 Horon (Inference Language for Intelligent Agents) 的操作与认知基准。
