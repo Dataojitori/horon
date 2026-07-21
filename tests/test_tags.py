@@ -7,7 +7,7 @@
   - read_concept 返回 tags
   - search_concepts 的 tag 过滤（goal 选单查询）
   - 外键兜底：绕过应用层直插未注册 tag 被数据库拒绝
-  - audit_plans 两条 lint（库层逻辑；投放渠道未定，无 CLI 入口）
+  - audit_cluster('plan') 两条 lint（库层逻辑；投放渠道未定，无 CLI 入口）
 """
 import sqlite3
 
@@ -67,7 +67,7 @@ def test_plan_tag_rejects_existing_non_chain_expression(horon_db, operator):
     with pytest.raises(ValueError) as excinfo:
         horon_db.add("无序组合", "tag", "plan")
 
-    assert "plans can only contain CHAIN expressions" in str(excinfo.value)
+    assert "non-CHAIN expression" in str(excinfo.value)
     assert horon_db.read_concept("无序组合").tags == []
 
 
@@ -162,36 +162,38 @@ def test_rename_tag_source_cascades_to_tagged_concepts(horon_db):
     ).fetchone() is None
 
 
-# ── audit_plans ──────────────────────────────────────────────
+# ── audit_cluster("plan") ──────────────────────────────────────────────
 
 
-def test_audit_plans_flags_plan_without_expectation(horon_db):
+def test_audit_cluster_plan_flags_plan_without_expectation(horon_db):
     horon_db.create_concept("计划部署")
     horon_db.add("计划部署", "tag", "plan")
 
-    findings = horon_db.audit_plans()
+    findings = horon_db.audit_cluster("plan")
     assert len(findings) == 1
     assert findings[0].startswith("[malformed]")
     assert "计划部署" in findings[0]
 
 
-def test_audit_plans_flags_unsettled_expectation(horon_db):
+def test_audit_cluster_plan_flags_unsettled_expectation(horon_db):
     horon_db.create_concept("计划部署")
     horon_db.add("计划部署", "tag", "plan")
     horon_db.create_concept("服务恢复")
+    horon_db.add("服务恢复", "tag", "result")
     horon_db.create_concept("部署后服务恢复")
     horon_db.set("部署后服务恢复", "expression", "计划部署 → 服务恢复")
 
-    findings = horon_db.audit_plans()
+    findings = horon_db.audit_cluster("plan")
     assert len(findings) == 1
     assert findings[0].startswith("[open]")
     assert "部署后服务恢复" in findings[0]
 
 
-def test_audit_plans_is_clean_after_expectation_settled(horon_db):
+def test_audit_cluster_plan_is_clean_after_expectation_settled(horon_db):
     horon_db.create_concept("计划部署")
     horon_db.add("计划部署", "tag", "plan")
     horon_db.create_concept("服务恢复")
+    horon_db.add("服务恢复", "tag", "result")
     horon_db.create_concept("部署后服务恢复")
     horon_db.set("部署后服务恢复", "expression", "计划部署 → 服务恢复")
     # 结账：先确认成员原子概念，再确认期待关系本身
@@ -199,16 +201,30 @@ def test_audit_plans_is_clean_after_expectation_settled(horon_db):
     horon_db.set("服务恢复", "status", "confirmed")
     horon_db.set("部署后服务恢复", "status", "confirmed")
 
-    assert horon_db.audit_plans() == []
+    assert horon_db.audit_cluster("plan") == []
 
 
-def test_audit_plans_negated_expectation_is_also_settled(horon_db):
+def test_audit_cluster_plan_negated_expectation_is_also_settled(horon_db):
     """否定同样算结账：现实回答了'不会发生'，计划不再欠账。"""
     horon_db.create_concept("计划部署")
     horon_db.add("计划部署", "tag", "plan")
     horon_db.create_concept("服务恢复")
+    horon_db.add("服务恢复", "tag", "result")
     horon_db.create_concept("部署后服务恢复")
     horon_db.set("部署后服务恢复", "expression", "计划部署 → 服务恢复")
     horon_db.set("部署后服务恢复", "status", "negated")
 
-    assert horon_db.audit_plans() == []
+    assert horon_db.audit_cluster("plan") == []
+
+
+def test_plan_result_rejection_reaction(horon_db):
+    import pytest
+    horon_db.create_concept("起因")
+    horon_db.create_concept("计划部署")
+    horon_db.add("计划部署", "tag", "plan")
+    horon_db.create_concept("服务恢复")
+    horon_db.add("服务恢复", "tag", "result")
+    horon_db.create_concept("长链测试")
+    
+    with pytest.raises(ValueError, match="排异反应"):
+        horon_db.set("长链测试", "expression", "起因 → 计划部署 → 服务恢复")

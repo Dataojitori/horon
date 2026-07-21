@@ -59,7 +59,7 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 
 -- 种子词表（当前有工作流消费者的 tag）：
---   'plan'   — 有序动作序列。消费者：audit_plans 两条 lint
+--   'plan'   — 有序动作序列。消费者：audit_cluster('plan') 两条 lint
 --              （未绑期待=不良构图；期待未结账=续接清单）。
 --   'result' — 曾以结果身份出现的概念。消费者：goal 选单检索
 --              （search_concepts --tag result）。

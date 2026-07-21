@@ -10,6 +10,7 @@ compose_members 的 member 引用 concept_id（hub），不是具体 variation�
 """
 from __future__ import annotations
 
+import logging
 import os
 import re
 import secrets
@@ -25,6 +26,13 @@ from .models import (
     DirectedRelation, RelationMember, ReadResult,
     MutationResult,
 )
+from .tag_sandbox import (
+    load_plugin, TagPluginError, HookRejection,
+    MutationContext, AuditContext,
+    ConceptProxy, VariationProxy, ClusterProxy,
+)
+
+_logger = logging.getLogger(__name__)
 
 
 _CONDITION_RE = re.compile(r'\$\{\s*(.+?)\s+(confirmed|negated)\s*\}')
@@ -32,11 +40,9 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
-# 被代码直接引用的 tag。词表本身在 tags 表里（数据不是 schema），
-# 注册新 tag 走 create_tag；给概念盖未注册的 tag 会被外键拒绝。
-_TAG_PLAN = "plan"
-_TAG_RESULT = "result"
-SYSTEM_TAGS = {_TAG_PLAN, _TAG_RESULT}
+# 系统保留 tag：delete_tag / _delete_variation / _set_name 依赖此集合
+# 阻止对 plan / result 的删除和改名。词表本身在 tags 表里。
+SYSTEM_TAGS = {"plan", "result"}
 
 
 def _validate_name(name: str) -> str:
@@ -85,17 +91,34 @@ def transactional(method):
     def wrapper(self, *args, **kwargs):
         if getattr(self, '_in_transaction', False):
             return method(self, *args, **kwargs)
+        
+        # 事务开始前，先按当前文件 mtime 刷新已有缓存
+        from .tag_sandbox import _PLUGINS_DIR
+        if hasattr(self, '_plugin_cache'):
+            for tag, (cached_plugin, cached_mtime) in self._plugin_cache.items():
+                filepath = _PLUGINS_DIR / f"{tag}.py"
+                current_mtime = filepath.stat().st_mtime if filepath.exists() else None
+                if current_mtime != cached_mtime:
+                    self._plugin_cache[tag] = (load_plugin(tag), current_mtime)
+
         self._in_transaction = True
+        self._txn_plugin_snapshot = {
+            tag: cached_plugin
+            for tag, (cached_plugin, _mtime) in getattr(self, '_plugin_cache', {}).items()
+        }
         try:
             with self.conn:
                 return method(self, *args, **kwargs)
         finally:
             self._in_transaction = False
+            self._txn_plugin_snapshot.clear()
     return wrapper
 
 class HoronDB:
     def __init__(self, *, check_same_thread: bool = True):
         is_new = not _DB_PATH.exists() or _DB_PATH.stat().st_size == 0
+        self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
+        self._txn_plugin_snapshot: dict[str, dict | None] = {}
         self.conn = sqlite3.connect(
             str(_DB_PATH), check_same_thread=check_same_thread)
         self.conn.row_factory = sqlite3.Row
@@ -113,6 +136,200 @@ class HoronDB:
 
     def close(self):
         self.conn.close()
+
+    # ── Plugin infrastructure ────────────────────────────────────────────────
+
+    def _get_plugin(self, tag_name: str) -> dict | None:
+        """Load plugin with mtime-based hot-reload. Returns None for pure tags."""
+        from .tag_sandbox import _PLUGINS_DIR
+
+        filepath = _PLUGINS_DIR / f"{tag_name}.py"
+
+        in_txn = getattr(self, '_in_transaction', False)
+        if in_txn and tag_name in self._txn_plugin_snapshot:
+            return self._txn_plugin_snapshot[tag_name]
+
+        current_exists = filepath.exists()
+        current_mtime = filepath.stat().st_mtime if current_exists else None
+
+        if tag_name in self._plugin_cache:
+            cached_plugin, cached_mtime = self._plugin_cache[tag_name]
+            if current_mtime == cached_mtime:
+                plugin = cached_plugin
+            else:
+                plugin = load_plugin(tag_name)
+                self._plugin_cache[tag_name] = (plugin, current_mtime)
+        else:
+            plugin = load_plugin(tag_name)
+            self._plugin_cache[tag_name] = (plugin, current_mtime)
+
+        if in_txn:
+            self._txn_plugin_snapshot[tag_name] = plugin
+
+        return plugin
+
+    def _make_concept_proxy(self, concept_id: int) -> ConceptProxy:
+        """Factory: build a ConceptProxy with fetcher closures capturing self.conn."""
+        conn = self.conn
+
+        def fetch_name():
+            row = conn.execute(
+                "SELECT name FROM concepts WHERE id=?", (concept_id,)
+            ).fetchone()
+            return row["name"] if row else ""
+
+        def fetch_disclosure():
+            row = conn.execute(
+                "SELECT disclosure FROM concepts WHERE id=?", (concept_id,)
+            ).fetchone()
+            return row["disclosure"] if row else None
+
+        def fetch_tags():
+            rows = conn.execute(
+                "SELECT tag FROM concept_tags WHERE concept_id=? ORDER BY tag",
+                (concept_id,)
+            ).fetchall()
+            return [r["tag"] for r in rows]
+
+        def fetch_variations():
+            rows = conn.execute(
+                "SELECT concept_id, short_code FROM variations "
+                "WHERE concept_id=? ORDER BY short_code",
+                (concept_id,)
+            ).fetchall()
+            return [self._make_variation_proxy(r["concept_id"], r["short_code"]) for r in rows]
+
+        def fetch_used_in_variations():
+            rows = conn.execute(
+                "SELECT DISTINCT cm.concept_id, cm.short_code "
+                "FROM compose_members cm "
+                "WHERE cm.member_concept_id=? AND cm.concept_id != ?",
+                (concept_id, concept_id)
+            ).fetchall()
+            return [self._make_variation_proxy(r["concept_id"], r["short_code"]) for r in rows]
+
+        return ConceptProxy(
+            concept_id,
+            fetch_name=fetch_name,
+            fetch_disclosure=fetch_disclosure,
+            fetch_tags=fetch_tags,
+            fetch_variations=fetch_variations,
+            fetch_used_in_variations=fetch_used_in_variations,
+        )
+
+    def _make_variation_proxy(self, concept_id: int, short_code: str) -> VariationProxy:
+        """Factory: build a VariationProxy with fetcher closures."""
+        conn = self.conn
+
+        def fetch_concept_name():
+            row = conn.execute(
+                "SELECT name FROM concepts WHERE id=?", (concept_id,)
+            ).fetchone()
+            return row["name"] if row else ""
+
+        def fetch_type():
+            row = conn.execute(
+                "SELECT type FROM variations WHERE concept_id=? AND short_code=?",
+                (concept_id, short_code)
+            ).fetchone()
+            return row["type"] if row else None
+
+        def fetch_status():
+            row = conn.execute(
+                "SELECT status FROM variations WHERE concept_id=? AND short_code=?",
+                (concept_id, short_code)
+            ).fetchone()
+            return row["status"] if row else None
+
+        def fetch_content():
+            row = conn.execute(
+                "SELECT content FROM variations WHERE concept_id=? AND short_code=?",
+                (concept_id, short_code)
+            ).fetchone()
+            return row["content"] if row else None
+
+        def fetch_valence():
+            row = conn.execute(
+                "SELECT valence FROM variations WHERE concept_id=? AND short_code=?",
+                (concept_id, short_code)
+            ).fetchone()
+            return row["valence"] if row else None
+
+        def fetch_members():
+            rows = conn.execute(
+                "SELECT member_concept_id FROM compose_members "
+                "WHERE concept_id=? AND short_code=? ORDER BY order_index",
+                (concept_id, short_code)
+            ).fetchall()
+            return [self._make_concept_proxy(r["member_concept_id"]) for r in rows]
+
+        return VariationProxy(
+            concept_id, short_code,
+            fetch_concept_name=fetch_concept_name,
+            fetch_type=fetch_type,
+            fetch_status=fetch_status,
+            fetch_content=fetch_content,
+            fetch_valence=fetch_valence,
+            fetch_members=fetch_members,
+        )
+
+    def _make_cluster_proxy(self, tag_name: str) -> ClusterProxy:
+        """Factory: build a ClusterProxy for all concepts carrying tag_name."""
+        conn = self.conn
+
+        def fetch_concepts():
+            rows = conn.execute(
+                "SELECT concept_id FROM concept_tags WHERE tag=? ORDER BY concept_id",
+                (tag_name,)
+            ).fetchall()
+            return [self._make_concept_proxy(r["concept_id"]) for r in rows]
+
+        def fetch_count():
+            row = conn.execute(
+                "SELECT COUNT(*) AS cnt FROM concept_tags WHERE tag=?",
+                (tag_name,)
+            ).fetchone()
+            return row["cnt"]
+
+        return ClusterProxy(fetch_concepts=fetch_concepts, fetch_count=fetch_count)
+
+    def _run_mutation_hook_for_tag(self, concept_id: int, tag: str,
+                                   changed: dict | None = None) -> list[str]:
+        """Run on_mutation for a specific tag on a concept."""
+        plugin = self._get_plugin(tag)
+        if plugin is None:
+            return []
+        proxy = self._make_concept_proxy(concept_id)
+        ctx = MutationContext(tag, proxy, changed)
+        try:
+            plugin["on_mutation"](ctx)
+        except HookRejection as e:
+            raise ValueError(f"[Plugin '{tag}'] {e}")
+        return ctx._infos
+
+    def _run_mutation_hooks(self, concept_id: int,
+                           changed: dict | None = None) -> list[str]:
+        """Run on_mutation for all tags on concept_id. Returns collected infos.
+
+        Raises ValueError (converted from HookRejection) if any plugin rejects.
+        """
+        tag_rows = self.conn.execute(
+            "SELECT tag FROM concept_tags WHERE concept_id=?", (concept_id,)
+        ).fetchall()
+        all_infos: list[str] = []
+        for row in tag_rows:
+            all_infos.extend(self._run_mutation_hook_for_tag(concept_id, row["tag"], changed))
+        return all_infos
+
+    def audit_cluster(self, tag_name: str) -> list[str]:
+        """Run audit_cluster for a tag's plugin. Returns warnings list."""
+        plugin = self._get_plugin(tag_name)
+        if plugin is None:
+            return []
+        cluster = self._make_cluster_proxy(tag_name)
+        ctx = AuditContext(tag_name, cluster)
+        plugin["audit_cluster"](ctx)
+        return ctx._warnings
 
     # ── Schema migrations ────────────────────────────────────────────────────
 
@@ -325,7 +542,7 @@ class HoronDB:
     def init_plan(self, name: str) -> MutationResult:
         """创建计划概念并原子化盖上 plan tag，返回引导性提示词。"""
         res = self.create_concept(name)
-        self._add_tag(res.concept_id, _TAG_PLAN)
+        self._add_tag(res.concept_id, "plan")
         res.message = (
             f"[OK] Concept '{name}' created with tag 'plan'.\n\n"
             f"[ACTION REQUIRED]\n"
@@ -387,6 +604,8 @@ class HoronDB:
             "VALUES (?,?)",
             (cid, concept_name),
         )
+        diff = {"tags": {"added": [{"concept_id": cid, "tag": concept_name}], "removed": []}}
+        self._run_mutation_hooks(cid, diff)
         return MutationResult(
             message=(f"Success. Registered tag '{concept_name}' "
                      f"(source concept id={cid}). "
@@ -428,6 +647,11 @@ class HoronDB:
                 f"Cannot delete tag '{tag_name}': still carried by "
                 f"{names}.")
 
+        has_tag = self.conn.execute(
+            "SELECT 1 FROM concept_tags WHERE tag = ? AND concept_id = ?",
+            (tag_name, source_cid)
+        ).fetchone() is not None
+
         self.conn.execute(
             "DELETE FROM concept_tags WHERE tag = ? AND concept_id = ?",
             (tag_name, source_cid),
@@ -435,6 +659,25 @@ class HoronDB:
         self.conn.execute(
             "DELETE FROM tags WHERE name = ?", (tag_name,),
         )
+
+        if has_tag:
+            diff = {
+                "tags": {
+                    "added": [],
+                    "removed": [{
+                        "concept_id": source_cid,
+                        "tag": tag_name,
+                    }],
+                },
+            }
+            self._run_mutation_hooks(source_cid, diff)
+            self._run_mutation_hook_for_tag(source_cid, tag_name, diff)
+
+        # 注：此处不删除对应的 plugin 文件。因为 tag 名字必须与源概念同名，
+        # 只要源概念还在，该名字就被占用，不会被其他概念复用。
+        # plugin 文件的物理删除被延后到源概念被删除时（delete_concept）执行。
+        self._plugin_cache.pop(tag_name, None)
+
         return MutationResult(
             message=f"Success. Tag '{tag_name}' unregistered.",
             concept_id=source_cid,
@@ -499,27 +742,11 @@ class HoronDB:
         res = self.create_concept(final_name)
         set_res = self._set_expression(final_name, expression)
 
-        msg = (
+        set_res.message = (
             f"Success. Created concept '{final_name}' (id={res.concept_id}) "
             f"to represent this relation.\n"
             f"Variation {set_res.short_code} expression: {expression}"
         )
-        
-        if vtype == "CHAIN" and len(member_ids) == 2:
-            cursor = self.conn.execute("SELECT concept_id, tag FROM concept_tags WHERE concept_id IN (?, ?)", (member_ids[0], member_ids[1]))
-            rows = cursor.fetchall()
-            tags_a = {r["tag"] for r in rows if r["concept_id"] == member_ids[0]}
-            tags_b = {r["tag"] for r in rows if r["concept_id"] == member_ids[1]}
-
-            if _TAG_PLAN in tags_a and "result" in tags_b:
-                msg += (
-                    f"\n\n[ACTION REQUIRED]\n"
-                    f"你刚刚建立了一个 Plan → Result 的预期链路。\n"
-                    f"注意：此连接当前处于 hypothesis (假设) 状态。\n"
-                    f"验证有了结果后，把验证过程和凭据 update 进该概念（id={res.concept_id}）的 content。"
-                )
-        
-        set_res.message = msg
         return set_res
 
     @staticmethod
@@ -787,34 +1014,6 @@ class HoronDB:
                 return sc
         raise RuntimeError("short_code collision limit reached")
 
-    def _check_plan_chain(self, cid: int, vtype: str) -> tuple[bool, bool]:
-        """plan tag 的表达式约束：只能是 CHAIN。返回 (is_plan, is_first_chain)。"""
-        cursor = self.conn.execute(
-            "SELECT tag FROM concept_tags WHERE concept_id = ?", (cid,))
-        tags = {row["tag"] for row in cursor.fetchall()}
-        is_plan = _TAG_PLAN in tags
-
-        if is_plan and vtype != "CHAIN":
-            raise ValueError(
-                f"Concept has '{_TAG_PLAN}' tag and can only accept "
-                f"CHAIN expressions (got {vtype})."
-            )
-
-        cursor = self.conn.execute(
-            "SELECT COUNT(*) as c FROM variations "
-            "WHERE concept_id = ? AND type = 'CHAIN'", (cid,))
-        is_first_chain = cursor.fetchone()["c"] == 0
-        return is_plan, is_first_chain
-
-    def _plan_first_chain_hint(self, cname: str) -> str:
-        """计划首次建立 CHAIN 后的下一步引导文案。"""
-        return (
-            f"\n\n[ACTION REQUIRED]\n"
-            f"你已经为计划确立了执行步骤。下一步是将它连接到预期结果：\n"
-            f"`horon suppose \"{cname} → 预期结果概念\"`\n"
-            f"（预期结果概念应带有 result 标签。如果还没有，先用 `horon init_result` 创建。）"
-        )
-
     # ── Add ──────────────────────────────────────────────────────────────────
 
     def add(self, concept, kind: str, value: str) -> MutationResult:
@@ -851,6 +1050,8 @@ class HoronDB:
             "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
             (name, cid),
         )
+        diff = {"names": {"added": [{"concept_id": cid, "name": name}], "removed": []}}
+        self._run_mutation_hooks(cid, diff)
         return MutationResult(
             message=f"Success. Added alias '{name}' to {label}.",
             concept_id=cid, concept_name=cname,
@@ -866,8 +1067,6 @@ class HoronDB:
         label = f"'{concept}' ('{cname}', id={cid})"
 
         vtype, member_ids = self._parse_expression(expression)
-
-        is_plan, is_first_chain = self._check_plan_chain(cid, vtype)
 
         if cid in member_ids:
             raise ValueError(
@@ -896,9 +1095,18 @@ class HoronDB:
                 "VALUES (?,?,?,?)",
                 (cid, sc, member_cid, idx),
             )
+
+        diff = {"variations": {"added": [
+            {"concept_id": cid, "short_code": sc, "type": vtype, "members": member_ids}
+        ], "removed": []}}
+        all_infos: list[str] = []
+        all_infos.extend(self._run_mutation_hooks(cid, diff))
+        for mid in set(member_ids):
+            all_infos.extend(self._run_mutation_hooks(mid, diff))
+
         msg = f"Success. Added variation {sc} to {label}."
-        if is_plan and is_first_chain:
-            msg += self._plan_first_chain_hint(cname)
+        if all_infos:
+            msg += "\n".join([""] + all_infos)
 
         return MutationResult(
             message=msg,
@@ -919,18 +1127,6 @@ class HoronDB:
         cid, _ = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
-        if tag == _TAG_PLAN:
-            invalid = self.conn.execute(
-                "SELECT type FROM variations "
-                "WHERE concept_id = ? AND type IN ('AND', 'OR') LIMIT 1",
-                (cid,),
-            ).fetchone()
-            if invalid:
-                raise ValueError(
-                    f"Cannot tag {label} as '{_TAG_PLAN}': "
-                    f"plans can only contain CHAIN expressions "
-                    f"(found {invalid['type']})."
-                )
         registered = self.conn.execute(
             "SELECT 1 FROM tags WHERE name = ?", (tag,)
         ).fetchone()
@@ -954,8 +1150,13 @@ class HoronDB:
             "INSERT INTO concept_tags (concept_id, tag) VALUES (?,?)",
             (cid, tag),
         )
+        diff = {"tags": {"added": [{"concept_id": cid, "tag": tag}], "removed": []}}
+        infos = self._run_mutation_hooks(cid, diff)
+        msg = f"Success. Tagged {label} as '{tag}'."
+        if infos:
+            msg += "\n".join([""] + infos)
         return MutationResult(
-            message=f"Success. Tagged {label} as '{tag}'.",
+            message=msg,
             concept_id=cid, concept_name=cname,
         )
 
@@ -1011,6 +1212,8 @@ class HoronDB:
                 f"Use 'set name' to change it first.")
         self.conn.execute(
             "DELETE FROM aliases WHERE alias=?", (name,))
+        diff = {"names": {"added": [], "removed": [{"concept_id": cid, "name": name}]}}
+        self._run_mutation_hooks(cid, diff)
         return MutationResult(
             message=f"Success. Removed alias '{name}' from {label}.",
             concept_id=cid, concept_name=cname,
@@ -1040,6 +1243,11 @@ class HoronDB:
             "DELETE FROM concept_tags WHERE concept_id = ? AND tag = ?",
             (cid, tag),
         )
+        diff = {"tags": {"added": [], "removed": [{"concept_id": cid, "tag": tag}]}}
+        # Remaining tags' hooks via normal broadcast
+        self._run_mutation_hooks(cid, diff)
+        # Removed tag's plugin gets a last say (post-DELETE it's no longer in concept_tags)
+        self._run_mutation_hook_for_tag(cid, tag, diff)
         return MutationResult(
             message=f"Success. Removed tag '{tag}' from {label}.",
             concept_id=cid, concept_name=cname,
@@ -1053,14 +1261,12 @@ class HoronDB:
         删除前检查是否有其他 concept 的 variation 引用该 concept
         作为 compose_member；有则拒绝，防止产生残缺的死组合。
         """
+        from .tag_sandbox import _PLUGINS_DIR
+
         cid, sc = self._resolve_single_variation(node)
         cname = self._resolve_concept_name(cid)
         label = f"'{node}' ('{cname}', id={cid})"
 
-        # 如果这是最后一个 variation，删它 = 删 concept 本体。
-        # 先检查外部引用：别的 concept 的 variation 是否把该 concept
-        # 当作 compose_member。有则拒绝，因为 CASCADE 会静默删掉
-        # 那些 compose_members 行，把别人的 variation 变成死代码。
         var_count = self.conn.execute(
             "SELECT COUNT(*) AS cnt FROM variations "
             "WHERE concept_id=?",
@@ -1120,11 +1326,35 @@ class HoronDB:
                         f"'{tag_name}' is a registered tag still "
                         f"carried by: {names}.")
 
+        # Capture members before deletion for diff
+        member_rows = self.conn.execute(
+            "SELECT member_concept_id FROM compose_members "
+            "WHERE concept_id=? AND short_code=? ORDER BY order_index",
+            (cid, sc)
+        ).fetchall()
+        del_member_ids = [r["member_concept_id"] for r in member_rows]
+        del_type_row = self.conn.execute(
+            "SELECT type FROM variations WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchone()
+        del_type = del_type_row["type"] if del_type_row else None
+
         self.conn.execute(
             "DELETE FROM variations "
             "WHERE concept_id=? AND short_code=?",
             (cid, sc),
         )
+
+        # Run variation-removed hooks
+        diff = {"variations": {"added": [], "removed": [
+            {"concept_id": cid, "short_code": sc, "type": del_type,
+             "members": del_member_ids}
+        ]}}
+        self._run_mutation_hooks(cid, diff)
+        
+        if del_member_ids:
+            for mid in set(del_member_ids):
+                self._run_mutation_hooks(mid, diff)
 
         downgraded = self.audit_status_integrity()
 
@@ -1137,9 +1367,20 @@ class HoronDB:
             self.conn.execute(
                 "DELETE FROM concepts WHERE id=?", (cid,))
             if tag_row:
+                tag_name_del = tag_row["name"]
                 self.conn.execute(
                     "DELETE FROM tags WHERE name = ?",
-                    (tag_row["name"],))
+                    (tag_name_del,))
+                # Clean up plugin file for the removed tag
+                plugin_path = _PLUGINS_DIR / f"{tag_name_del}.py"
+                if tag_name_del not in SYSTEM_TAGS and plugin_path.exists():
+                    try:
+                        plugin_path.unlink()
+                    except Exception as e:
+                        raise RuntimeError(
+                            f"Failed to delete plugin file '{plugin_path}' "
+                            f"for removed tag '{tag_name_del}': {e}") from e
+                    self._plugin_cache.pop(tag_name_del, None)
             msg = f"Success. Deleted concept {label} (last variation {sc} removed)."
             if tag_row:
                 msg += f" Tag '{tag_row['name']}' auto-removed."
@@ -1186,6 +1427,18 @@ class HoronDB:
                 f"per concept, because two would be logically "
                 f"identical.")
 
+        del_member_rows = self.conn.execute(
+            "SELECT member_concept_id FROM compose_members "
+            "WHERE concept_id=? AND short_code=? ORDER BY order_index",
+            (cid, sc)
+        ).fetchall()
+        del_member_ids = [r["member_concept_id"] for r in del_member_rows]
+        del_type_row = self.conn.execute(
+            "SELECT type FROM variations WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchone()
+        del_type = del_type_row["type"] if del_type_row else None
+
         self.conn.execute(
             "DELETE FROM compose_members "
             "WHERE concept_id=? AND short_code=?",
@@ -1196,6 +1449,15 @@ class HoronDB:
             "WHERE concept_id=? AND short_code=?",
             (_now(), cid, sc),
         )
+
+        if del_member_ids:
+            diff = {"variations": {"added": [], "removed": [
+                {"concept_id": cid, "short_code": sc, "type": del_type,
+                 "members": del_member_ids}
+            ]}}
+            self._run_mutation_hooks(cid, diff)
+            for mid in set(del_member_ids):
+                self._run_mutation_hooks(mid, diff)
 
         downgraded = self.audit_status_integrity()
         msg = (f"Success. Cleared expression and status for "
@@ -1232,10 +1494,16 @@ class HoronDB:
         text = text.strip()
         if not text:
             raise ValueError("Disclosure cannot be empty.")
+        old_row = self.conn.execute(
+            "SELECT disclosure FROM concepts WHERE id=?", (cid,)
+        ).fetchone()
+        old_val = old_row["disclosure"] if old_row else None
         self.conn.execute(
             "UPDATE concepts SET disclosure=?, updated_at=? WHERE id=?",
             (text, _now(), cid),
         )
+        diff = {"disclosure": {"concept_id": cid, "old": old_val, "new": text}}
+        self._run_mutation_hooks(cid, diff)
         return MutationResult(
             message=f"Success. Disclosure for {label} set to: {text}",
             concept_id=cid, concept_name=cname,
@@ -1293,6 +1561,12 @@ class HoronDB:
                                 f"'{member_name}' (id={mid}) has no confirmed "
                                 f"variations.")
 
+        old_status_row = self.conn.execute(
+            "SELECT status FROM variations WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchone()
+        old_status = old_status_row["status"] if old_status_row else None
+
         self.conn.execute(
             "UPDATE variations SET status=?, updated_at=? "
             "WHERE concept_id=? AND short_code=?",
@@ -1302,7 +1576,19 @@ class HoronDB:
         downgraded = []
         if value != "confirmed":
             downgraded = self.audit_status_integrity()
-            
+
+        diff = {"status": {"concept_id": cid, "short_code": sc,
+                           "old": old_status, "new": value}}
+        status_member_rows = self.conn.execute(
+            "SELECT member_concept_id FROM compose_members "
+            "WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchall()
+        self._run_mutation_hooks(cid, diff)
+        member_ids_to_notify = set(r["member_concept_id"] for r in status_member_rows)
+        for mid in member_ids_to_notify:
+            self._run_mutation_hooks(mid, diff)
+
         msg = f"Success. Status of {label} variation {sc} set to: {value}"
         if downgraded:
             msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
@@ -1378,47 +1664,14 @@ class HoronDB:
 
         return downgraded_logs
 
-    def audit_plans(self) -> list[str]:
-        """计划卫生检查：'plan' tag 的两条 lint。
-
-        输入：无（扫描全库带 plan tag 的概念）。
-        输出：问题行列表，全部合规时为空。两类问题：
-          [malformed] 计划没有任何 CHAIN 出边 —— 违反"建计划必须绑定
-                      期待结果"（计划之后必须 → 到你猜会发生的事）。
-          [open]      计划的某条出边 status 仍是假设 —— 期待还没跟现实
-                      碰撞结账，欠一次 confirm/negate。这是跨会话
-                      "接着上次的活继续干"的入口清单。
-        只读，不修改任何数据。
-        """
-        findings: list[str] = []
-        plan_rows = self.conn.execute(
-            "SELECT ct.concept_id, c.name FROM concept_tags ct "
-            "JOIN concepts c ON c.id = ct.concept_id "
-            "WHERE ct.tag = ? ORDER BY c.name",
-            (_TAG_PLAN,),
-        ).fetchall()
-        for plan in plan_rows:
-            outbound = self._query_outbound_relations(plan["concept_id"])
-            outbound_total = sum(len(group) for group in outbound.values())
-            if outbound_total == 0:
-                findings.append(
-                    f"[malformed] plan '{plan['name']}' "
-                    f"(id={plan['concept_id']}) has no outbound expectation. "
-                    f"A plan must chain into the result you expect from it.")
-                continue
-            for relation in outbound["hypothesis"]:
-                findings.append(
-                    f"[open] plan '{plan['name']}' (id={plan['concept_id']}): "
-                    f"expectation '{relation.expression}' "
-                    f"(see \"{relation.concept_name}\") is still a hypothesis. "
-                    f"Settle it against reality: confirm or negate.")
-        return findings
-
     @transactional
     def _set_name(self, concept, new_name: str) -> MutationResult:
         """改显示名。旧显示名降级为 alias，保留在名字集合里。
         If old name was a registered tag source, the tag is auto-renamed
-        (ON UPDATE CASCADE propagates to concept_tags)."""
+        (ON UPDATE CASCADE propagates to concept_tags).
+        Also renames the plugin file if present."""
+        from .tag_sandbox import _PLUGINS_DIR
+
         new_name = _validate_name(new_name)
         cid, _ = self._resolve_id(concept)
         old_name = self._resolve_concept_name(cid)
@@ -1438,38 +1691,85 @@ class HoronDB:
         self._check_name_available(new_name, exclude_concept_id=cid)
 
         is_tag_source = self.conn.execute(
-            "SELECT 1 FROM tags WHERE name = ? AND source_concept_id = ?",
-            (old_name, cid),
+            "SELECT 1 FROM tags WHERE source_concept_id=?", (cid,)
+        ).fetchone() is not None
+
+        collision = self.conn.execute(
+            "SELECT 1 FROM tags WHERE name = ?", (new_name,),
         ).fetchone()
-        if is_tag_source:
-            collision = self.conn.execute(
-                "SELECT 1 FROM tags WHERE name = ?", (new_name,),
-            ).fetchone()
-            if collision:
-                raise ValueError(
-                    f"Cannot rename: '{new_name}' is already a "
+        if collision:
+            raise ValueError(
+                f"Cannot rename: '{new_name}' is already a "
                     f"registered tag name.")
 
-        self.conn.execute(
-            "UPDATE concepts SET name=?, updated_at=? WHERE id=?",
-            (new_name, _now(), cid),
-        )
-        existing = self.conn.execute(
-            "SELECT concept_id FROM aliases WHERE alias=?", (new_name,)
-        ).fetchone()
-        if not existing:
-            self.conn.execute(
-                "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
-                (new_name, cid),
-            )
+        # Plugin file rename (before DB write — rename is reversible)
+        plugin_renamed = False
+        old_plugin_path = _PLUGINS_DIR / f"{old_name}.py"
+        new_plugin_path = _PLUGINS_DIR / f"{new_name}.py"
+        if is_tag_source and old_plugin_path.exists():
+            if new_plugin_path.exists() and not os.path.samefile(
+                    str(old_plugin_path), str(new_plugin_path)):
+                raise ValueError(
+                    f"Cannot rename plugin: '{new_name}.py' already exists "
+                    f"and is a different file.")
+            os.rename(str(old_plugin_path), str(new_plugin_path))
+            plugin_renamed = True
 
-        tag_msg = ""
-        if is_tag_source:
+        try:
             self.conn.execute(
-                "UPDATE tags SET name = ? WHERE name = ?",
-                (new_name, old_name),
+                "UPDATE concepts SET name=?, updated_at=? WHERE id=?",
+                (new_name, _now(), cid),
             )
-            tag_msg = f" Tag '{old_name}' renamed to '{new_name}'."
+            existing = self.conn.execute(
+                "SELECT concept_id FROM aliases WHERE alias=?", (new_name,)
+            ).fetchone()
+            added_aliases = []
+            if not existing:
+                self.conn.execute(
+                    "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
+                    (new_name, cid),
+                )
+                added_aliases.append({"concept_id": cid, "name": new_name})
+
+            tag_msg = ""
+            if is_tag_source:
+                self.conn.execute(
+                    "UPDATE tags SET name = ? WHERE name = ?",
+                    (new_name, old_name),
+                )
+                tag_msg = f" Tag '{old_name}' renamed to '{new_name}'."
+
+            # Invalidate plugin cache for both old and new names
+            if plugin_renamed:
+                self._plugin_cache.pop(old_name, None)
+                self._plugin_cache.pop(new_name, None)
+
+            # Run hooks for alias change
+            diff = {}
+            if added_aliases:
+                diff["names"] = {"added": added_aliases, "removed": []}
+            
+            # Even if no aliases were added, the concept's display name changed,
+            # so we still trigger the hooks (with an empty diff or just the names diff).
+            # The plan says "没被改的键不出现", so if added_aliases is empty, we can omit "names".
+            self._run_mutation_hooks(cid, diff)
+
+        except Exception as db_err:
+            if plugin_renamed:
+                try:
+                    os.rename(str(new_plugin_path), str(old_plugin_path))
+                except Exception as rollback_err:
+                    _logger.error(
+                        "PLUGIN FILE INCONSISTENCY: failed to rollback "
+                        "rename %s -> %s: %s",
+                        old_plugin_path, new_plugin_path, rollback_err)
+                    raise type(db_err)(
+                        f"{db_err} | PLUGIN FILE INCONSISTENCY: database "
+                        f"rolled back but file rename could not be reverted. "
+                        f"Manual fix needed: rename '{new_plugin_path}' back "
+                        f"to '{old_plugin_path}'."
+                    ) from db_err
+            raise
 
         return MutationResult(
             message=f"Success. Renamed {label} to '{new_name}'.{tag_msg}",
@@ -1487,8 +1787,6 @@ class HoronDB:
 
         vtype, member_ids = self._parse_expression(expression)
 
-        is_plan, is_first_chain = self._check_plan_chain(cid, vtype)
-
         if cid in member_ids:
             raise ValueError(
                 "A concept cannot appear in its own expression.")
@@ -1501,6 +1799,19 @@ class HoronDB:
                 raise ValueError(
                     f"Variation '{exist_name}:{exist_sc}' already "
                     f"has the same composition: {expression}")
+
+        # Capture old members for removed diff
+        old_member_rows = self.conn.execute(
+            "SELECT member_concept_id FROM compose_members "
+            "WHERE concept_id=? AND short_code=? ORDER BY order_index",
+            (cid, sc)
+        ).fetchall()
+        old_member_ids = [r["member_concept_id"] for r in old_member_rows]
+        old_type_row = self.conn.execute(
+            "SELECT type FROM variations WHERE concept_id=? AND short_code=?",
+            (cid, sc)
+        ).fetchone()
+        old_type = old_type_row["type"] if old_type_row else None
 
         self.conn.execute(
             "DELETE FROM compose_members "
@@ -1520,14 +1831,28 @@ class HoronDB:
             (vtype, _now(), cid, sc),
         )
 
+        diff: dict = {"variations": {
+            "added": [{"concept_id": cid, "short_code": sc, "type": vtype, "members": member_ids}],
+            "removed": [],
+        }}
+        if old_member_ids:
+            diff["variations"]["removed"].append(
+                {"concept_id": cid, "short_code": sc, "type": old_type, "members": old_member_ids})
+
+        all_infos: list[str] = []
+        all_infos.extend(self._run_mutation_hooks(cid, diff))
+        all_affected = set(member_ids) | set(old_member_ids)
+        for mid in all_affected:
+            all_infos.extend(self._run_mutation_hooks(mid, diff))
+
         downgraded = self.audit_status_integrity()
         msg = (f"Success. Expression of {label} variation {sc} "
                f"set to: {expression}. "
                f"Status was also reset to null.")
         if downgraded:
             msg += "\nCascaded downgrades:\n" + "\n".join(f"  - {log}" for log in downgraded)
-        if is_plan and is_first_chain:
-            msg += self._plan_first_chain_hint(cname)
+        if all_infos:
+            msg += "\n".join([""] + all_infos)
 
         return MutationResult(
             message=msg,
@@ -1565,11 +1890,23 @@ class HoronDB:
         concept_id, sc = self._resolve_single_variation(node)
         cname = self._resolve_concept_name(concept_id)
         label = f"'{node}' ('{cname}', id={concept_id})"
+        old_val = None
+        if field == "content":
+            old_row = self.conn.execute(
+                "SELECT content FROM variations "
+                "WHERE concept_id=? AND short_code=?",
+                (concept_id, sc)
+            ).fetchone()
+            old_val = old_row["content"] if old_row else None
         self.conn.execute(
             f"UPDATE variations SET {field}=?, updated_at=? "
             f"WHERE concept_id=? AND short_code=?",
             (value, _now(), concept_id, sc),
         )
+        if field == "content":
+            diff = {"content": {"concept_id": concept_id, "short_code": sc,
+                                "old": old_val, "new": value}}
+            self._run_mutation_hooks(concept_id, diff)
         return MutationResult(
             message=f"Success. Updated {field} of variation {sc} of {label}.",
             concept_id=concept_id, concept_name=cname, short_code=sc,
