@@ -10,6 +10,7 @@ NOT hardened against deliberate CPython-level escapes.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,6 +22,7 @@ _SAFE_BUILTINS = {
     "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple,
     "range": range, "enumerate": enumerate, "zip": zip,
     "any": any, "all": all, "min": min, "max": max, "sorted": sorted,
+    "sum": sum, "abs": abs, "round": round, "float": float,
     "True": True, "False": False, "None": None,
     "Exception": Exception, "ValueError": ValueError,
     "TypeError": TypeError, "KeyError": KeyError,
@@ -118,6 +120,15 @@ def load_plugin(tag_name: str) -> dict | None:
     namespace: dict[str, Any] = {
         "__builtins__": _SAFE_BUILTINS,
         "__name__": f"tag_plugins.{tag_name}",
+        # Injected: plugins can't `import re` (AST-banned), so hand it in.
+        # Safe: re has no IO/reflection; the only escape path (re.__class__…)
+        # is already killed by the dunder-access AST ban.
+        # Wart: re.compile() collides with the _BANNED_CALLS name check —
+        # use re.search/match/sub/findall directly, not compile-then-use.
+        # ReDoS is possible but self-inflicted (no external input reaches here);
+        # if bounded matching is ever needed, upgrade to a ctx.match() host
+        # helper with a timeout (hooks run inside DB transactions).
+        "re": re,
     }
     try:
         exec(compile(source, filepath_str, "exec"), namespace)  # noqa: S102
@@ -130,9 +141,20 @@ def load_plugin(tag_name: str) -> dict | None:
             raise TagPluginError(
                 f"{filepath_str}: missing required function '{fn_name}'")
 
+    # Optional human description shown in `list_tags`. ONE place, natural
+    # language, covering BOTH hooks (what on_mutation does at write time +
+    # what an audit reports). Not split per-hook: a reader always needs the
+    # whole effect before relying on the tag, so half of it is never useful.
+    # Convention: module-level `DESCRIPTION = "..."` (multi-line allowed).
+    description = namespace.get("DESCRIPTION")
+    if description is not None and not isinstance(description, str):
+        raise TagPluginError(
+            f"{filepath_str}: DESCRIPTION must be a string if defined")
+
     return {
         "on_mutation": namespace["on_mutation"],
         "audit_cluster": namespace["audit_cluster"],
+        "description": description,
     }
 
 

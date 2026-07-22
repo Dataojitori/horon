@@ -14,6 +14,11 @@ description: 当你准备操作 Horon CLI、进行状态推演、或修改概念
 
 # Part 1 · 机制与原语
 
+## 0. 物理调用入口
+所有命令经由 CLI 执行（仓库根目录下）：
+`cd C:/Users/niwatori/OneDrive/code/horon && python frontend/cli.py <命令> [参数]`
+例：`python frontend/cli.py read_concept 候选适格`。**入口只此一处，无需翻 README/backend 寻找。**
+
 ## 1. 世界观（够用就停）
 
 - **一切皆概念。** 节点存在的理由有两种，满足任一即可：

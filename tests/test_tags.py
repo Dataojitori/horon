@@ -228,3 +228,19 @@ def test_plan_result_rejection_reaction(horon_db):
     
     with pytest.raises(ValueError, match="排异反应"):
         horon_db.set("长链测试", "expression", "起因 → 计划部署 → 服务恢复")
+
+
+def test_sourced_tag_rejects_content_mutation_without_source(horon_db):
+    import pytest
+    horon_db.create_concept("有出处")
+    horon_db.create_tag("有出处")
+    horon_db.create_concept("事实节点")
+    horon_db.add("事实节点", "tag", "有出处")
+    
+    # 带 URL 的正文，可以正常盖章 confirmed
+    horon_db.update("事实节点", "content", "参考出处: https://example.com/source")
+    horon_db.set("事实节点", "status", "confirmed")
+
+    # 尝试改正文并擦除 URL，必须被 reject
+    with pytest.raises(ValueError, match="『有出处』的节点处于 confirmed 状态时必须包含可核实的出处"):
+        horon_db.update("事实节点", "content", "擦除出处（无URL）")

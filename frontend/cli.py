@@ -521,6 +521,11 @@ def _build_parser():
     # list_tags
     sub.add_parser("list_tags", allow_abbrev=False)
 
+    # audit (sweep tag plugin's audit_cluster lint)
+    p = sub.add_parser("audit", allow_abbrev=False)
+    p.add_argument("tag", nargs="?", default=None, help="Tag name to audit")
+    p.add_argument("--all", action="store_true", help="Audit all tag clusters")
+
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
     p.add_argument("query", nargs="?", default=None)
@@ -627,7 +632,22 @@ def _dispatch(args, db):
                 else f"(source: id={r['source_concept_id']})"
             lines.append(
                 f"  {r['name']}  — {r['usage_count']} concept(s)  {src}")
+            desc = r.get("plugin_description")
+            if desc:
+                for i, dl in enumerate(desc.splitlines()):
+                    prefix = "        ↳ [插件] " if i == 0 else "                "
+                    lines.append(prefix + dl)
         return RawOutput("\n".join(lines))
+
+    elif args.command == "audit":
+        if args.all and args.tag:
+            raise ValueError("cannot specify both a tag name and --all")
+        if args.all:
+            return RawOutput(db.audit_clusters_report())
+        elif args.tag:
+            return RawOutput(db.audit_clusters_report(args.tag))
+        else:
+            raise ValueError("specify a tag name or use --all to audit all clusters")
 
     elif args.command == "search_concepts":
         return db.search_concepts(args.query, tag_expr=args.tag)

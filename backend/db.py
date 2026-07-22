@@ -322,14 +322,71 @@ class HoronDB:
         return all_infos
 
     def audit_cluster(self, tag_name: str) -> list[str]:
-        """Run audit_cluster for a tag's plugin. Returns warnings list."""
+        """Run one tag's audit_cluster hook over its concept cluster.
+
+        Input: a tag name. Returns the warning strings the plugin emitted via
+        ctx.warn; [] when the cluster is clean or the tag has no plugin. This is
+        the executor; audit_all_clusters() renders these into a human report.
+        """
         plugin = self._get_plugin(tag_name)
         if plugin is None:
             return []
-        cluster = self._make_cluster_proxy(tag_name)
-        ctx = AuditContext(tag_name, cluster)
+        ctx = AuditContext(tag_name, self._make_cluster_proxy(tag_name))
         plugin["audit_cluster"](ctx)
         return ctx._warnings
+
+    def audit_clusters_report(self, tag_name: str | None = None) -> str:
+        """Audit tag clusters and return a formatted human report.
+
+        Input: optional tag_name. If provided, audits only that cluster;
+        if None, sweeps all plugin-bearing clusters with a coverage footer.
+        """
+        if tag_name is not None:
+            registered = self.conn.execute(
+                "SELECT 1 FROM tags WHERE name=?", (tag_name,)
+            ).fetchone()
+            if registered is None:
+                raise ValueError(f"Tag '{tag_name}' is not registered.")
+            try:
+                plugin = self._get_plugin(tag_name)
+                if plugin is None:
+                    return f"## {tag_name}\n  (无插件)"
+                warnings = self.audit_cluster(tag_name)
+            except TagPluginError as e:
+                return f"## {tag_name}\n  [插件加载失败] {e}"
+            except Exception as e:
+                return f"## {tag_name}\n  [审计失败] {e}"
+            if not warnings:
+                return f"## {tag_name}\n  {tag_name} ✓"
+            lines = [f"## {tag_name}"] + [f"  - {w}" for w in warnings]
+            return "\n".join(lines)
+
+        from .tag_sandbox import _PLUGINS_DIR
+        rows = self.conn.execute("SELECT name FROM tags").fetchall()
+        tags = sorted(r["name"] for r in rows
+                      if (_PLUGINS_DIR / f"{r['name']}.py").exists())
+        if not tags:
+            return "(没有插件可审计)"
+        blocks, summary = [], []
+        for tag in tags:
+            try:
+                warnings = self.audit_cluster(tag)
+            except TagPluginError as e:
+                blocks.append(f"## {tag}\n  [插件加载失败] {e}")
+                summary.append(f"{tag} ⚠load")
+                continue
+            except Exception as e:
+                blocks.append(f"## {tag}\n  [审计失败] {e}")
+                summary.append(f"{tag} ⚠err")
+                continue
+            if warnings:
+                blocks.append("\n".join(
+                    [f"## {tag}"] + [f"  - {w}" for w in warnings]))
+                summary.append(f"{tag} ⚠{len(warnings)}")
+            else:
+                summary.append(f"{tag} ✓")
+        footer = f"— 扫了 {len(tags)} 个带插件的 tag：" + " / ".join(summary) + " —"
+        return ("\n\n".join(blocks) + "\n\n" + footer) if blocks else footer
 
     # ── Schema migrations ────────────────────────────────────────────────────
 
@@ -696,7 +753,15 @@ class HoronDB:
             "GROUP BY t.name "
             "ORDER BY t.name"
         ).fetchall()
-        return [dict(r) for r in rows]
+        result = [dict(r) for r in rows]
+        for r in result:
+            try:
+                plugin = self._get_plugin(r["name"])
+            except TagPluginError as e:
+                r["plugin_description"] = f"[插件加载失败] {e}"
+                continue
+            r["plugin_description"] = (plugin or {}).get("description")
+        return result
 
     @transactional
     def suppose(self, expression: str) -> MutationResult:

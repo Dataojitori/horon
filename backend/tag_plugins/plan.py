@@ -1,6 +1,18 @@
 # System tag plugin: plan
 # Protected by SYSTEM_TAGS in db.py — cannot be deleted or renamed via normal operations.
 
+DESCRIPTION = (
+    "on_mutation（被任何涉及本概念的变更唤醒，自行决定管不管）："
+    "① 本概念只要存在 AND/OR 变体就 reject——plan 只能是 CHAIN（违规不是本次造成的也照拦）。"
+    "② 本概念新建 CHAIN 且还没连到 result 时，提示去连 result。"
+    "③ 本概念紧邻其后是一个 result、被一起链进某条 CHAIN 时被唤醒："
+    "这条链正好是 plan→result 两节 → 提示假设待验证；"
+    "plan→result 这对相邻被裹进更长的链（>2 节）→ reject"
+    "（不许把验证闭环包进更长序列，会造成同一逻辑状态分叉）。\n"
+    "audit：lint 出 [malformed] 没有指向 result 出边的 plan、"
+    "[open] 出边仍是 hypothesis（未对现实结算）的 plan。"
+)
+
 
 def on_mutation(ctx):
     """Enforce plan constraints and provide guidance hints.
@@ -113,7 +125,7 @@ def audit_cluster(ctx):
                 outbound_result_edges.append(uv)
                 if uv.status is None or uv.status == "hypothesis":
                     # Get the expression for reporting
-                    member_names = [mem.name for m in members]
+                    member_names = [m.name for m in members]
                     expr = " → ".join(member_names)
                     hypothesis_edges.append((uv, expr))
 

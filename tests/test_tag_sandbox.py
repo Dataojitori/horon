@@ -700,3 +700,65 @@ def test_case_only_rename_allowed(horon_db, plugin_dir, monkeypatch):
 
     # Old name cache should be invalidated
     assert "mytag2" not in horon_db._plugin_cache
+
+
+def test_audit_clusters_report_catches_plugin_load_error(horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    # 先写入合法插件完成建 tag
+    (plugin_dir / "brokentag.py").write_text(
+        "def on_mutation(ctx): pass\ndef audit_cluster(ctx): pass\n"
+    )
+    horon_db.create_concept("brokentag")
+    horon_db.create_tag("brokentag")
+
+    # 模拟后续修改插件文件时写入语法错误
+    (plugin_dir / "brokentag.py").write_text("def invalid python syntax !!!")
+
+    report = horon_db.audit_clusters_report("brokentag")
+    assert "## brokentag" in report
+    assert "[插件加载失败]" in report
+
+
+def test_audit_clusters_report_rejects_unregistered_tag_with_plugin(
+        horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    (plugin_dir / "orphan.py").write_text(
+        "def on_mutation(ctx): pass\ndef audit_cluster(ctx): pass\n"
+    )
+
+    with pytest.raises(ValueError, match="Tag 'orphan' is not registered"):
+        horon_db.audit_clusters_report("orphan")
+
+
+def test_audit_clusters_report_sweep_catches_runtime_error(horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    # 写入一个加载正常但运行时 raise 的插件
+    (plugin_dir / "errortag.py").write_text(
+        "def on_mutation(ctx): pass\ndef audit_cluster(ctx): raise RuntimeError('boom')\n"
+    )
+    horon_db.create_concept("errortag")
+    horon_db.create_tag("errortag")
+
+    report = horon_db.audit_clusters_report()
+    assert "## errortag" in report
+    assert "[审计失败]" in report
+    assert "errortag ⚠err" in report
+
+
+def test_audit_clusters_report_sweep_ignores_unregistered_tags(horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    # 建立一个 tag 及插件，然后注销该 tag
+    (plugin_dir / "deletedtag.py").write_text(
+        "def on_mutation(ctx): pass\ndef audit_cluster(ctx): pass\n"
+    )
+    horon_db.create_concept("deletedtag")
+    horon_db.create_tag("deletedtag")
+    horon_db.delete_tag("deletedtag")
+
+    # 全量审计不应出现已注销的 tag
+    report = horon_db.audit_clusters_report()
+    assert "deletedtag" not in report
