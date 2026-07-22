@@ -9,3 +9,9 @@ __pycache__/
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/horon-cli/
+!.agents/skills/horon-plugin/
+
+# Tag plugins whitelist: keep personal plugins local.
+backend/tag_plugins/*
+!backend/tag_plugins/plan.py
+!backend/tag_plugins/result.py

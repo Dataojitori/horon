@@ -92,12 +92,14 @@ description: 当你准备操作 Horon CLI、进行状态推演、或修改概念
   - **严禁的写法**：`${A & B ...}`（强绑定应建实体节点，不要写在 unless 文本里）；也不支持单节点/OR容器的 negated 追踪。
   - **unless 触发后果**：命中不自动改任何 status，compile 也不看它；只在 `read_concept` 读到相关概念时浮出 `[ALERT]`，之后怎么处置由你定。
 
-### Tag 词表管理
+### Tag 词表管理与标签插件 (Tag Plugins)
 Tag 是给概念贴的分类元数据，编译器对其全盲。Tag 的名字必须是某个概念的**显示名（display name）**，alias 不算。
 - **担 tag 即担解释责任**：一个概念被注册为 tag 后，它的正文必须能解释整个族群——这些成员概念为何存在、结构为何如此（result/plan/规则/实体各是什么角色）、negated 边意味着什么、行动铁律与入口在哪。判据：失忆者 `list_concepts --tag X` 之后**只读源概念正文就该看懂全簇**，而不是被一堆名字困住、逐个翻成员反推族群逻辑。给概念挂新 tag 时，同步检查源概念正文是否已覆盖新成员的存在理由。
 - `create_tag(name)` —— 注册一个概念的显示名为 tag。源概念自动成为该 tag 的首位成员。
 - `delete_tag(name)` —— 注销一个 tag。如果还有其他概念在用这个 tag，必须先把 tag 从它们身上摘掉才能删。系统保留 tag（`plan`、`result`）不可删；它们虽为系统注入，其族群纪律同样由同名概念（`plan`、`result`）的正文承担解释责任。
-- `list_tags()` —— 列出所有已注册的 tag 及其使用概念数。
+- `list_tags()` —— 列出所有已注册的 tag 及其使用概念数，并显示对应插件的 `DESCRIPTION` 自述。
+- `audit --all` (或 `audit <tag_name>`) —— 运行标签插件的离线集群审计。`audit --all` 遍历所有有插件的 tag 簇，搜寻并汇总存量违规账目（如 `plan ⚠3 / result ✓ / 有出处 ⚠1`）。
+- **标签插件 (Tag Plugin System)**：Tag 不仅是分类标签，更可以在 `backend/tag_plugins/<tag_name>.py` 编写插件脚本。利用 `on_mutation`（事务内变动响应与否决权及导航指引）与 `audit_cluster`（离线集群审计），将已知翻车模式与领域死线编译成强制活闸与架构支架。制作与使用规范详见 [horon-plugin](file:///c:/Users/niwatori/OneDrive/code/horon/.agents/skills/horon-plugin/SKILL.md) Skill。
 
 **自动行为：**
 - **改名跟随**：对注册为 tag 的概念 set name 会把所有使用该 tag 的概念同步绑定到新名字。

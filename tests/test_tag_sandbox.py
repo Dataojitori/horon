@@ -47,6 +47,17 @@ def test_ast_rejects_import(plugin_dir):
     assert "import" in str(exc.value).lower()
 
 
+def test_allowed_import_re(plugin_dir):
+    (plugin_dir / "good_import.py").write_text(
+        "import re\n"
+        "def on_mutation(ctx): re.search(r'a', 'abc')\n"
+        "def audit_cluster(ctx): pass\n"
+    )
+    plugin = load_plugin("good_import")
+    assert plugin is not None
+    assert callable(plugin["on_mutation"])
+
+
 def test_ast_rejects_eval_call(plugin_dir):
     (plugin_dir / "bad2.py").write_text(
         "def on_mutation(ctx): eval('1+1')\ndef audit_cluster(ctx): pass\n")

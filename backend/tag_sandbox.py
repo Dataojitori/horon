@@ -17,6 +17,18 @@ from typing import Any, Callable
 
 _PLUGINS_DIR = Path(__file__).parent / "tag_plugins"
 
+_ALLOWED_IMPORTS: dict[str, Any] = {
+    "re": re,
+}
+
+
+def _safe_import(name: str, globals: dict[str, Any] | None = None, locals: dict[str, Any] | None = None, fromlist: tuple[str, ...] = (), level: int = 0) -> Any:
+    base_name = name.split('.')[0] if name else ""
+    if base_name in _ALLOWED_IMPORTS:
+        return _ALLOWED_IMPORTS[base_name]
+    raise ImportError(f"import of '{name}' is forbidden in sandbox")
+
+
 _SAFE_BUILTINS = {
     "len": len, "isinstance": isinstance, "str": str, "int": int,
     "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple,
@@ -29,13 +41,14 @@ _SAFE_BUILTINS = {
     "IndexError": IndexError, "AttributeError": AttributeError,
     "RuntimeError": RuntimeError, "ZeroDivisionError": ZeroDivisionError,
     "StopIteration": StopIteration,
+    "__import__": _safe_import,
     "__build_class__": __builtins__["__build_class__"]
     if isinstance(__builtins__, dict)
     else getattr(__builtins__, "__build_class__"),
 }
 
 _BANNED_CALLS = frozenset({
-    "eval", "exec", "open", "__import__", "compile",
+    "eval", "exec", "open", "compile",
     "globals", "locals", "getattr", "setattr", "delattr",
 })
 
@@ -58,15 +71,21 @@ class _ASTValidator(ast.NodeVisitor):
         self.errors: list[str] = []
 
     def visit_Import(self, node: ast.Import):
-        self.errors.append(
-            f"{self.filepath}:{node.lineno}: "
-            f"import statements are forbidden")
+        for alias in node.names:
+            base_name = alias.name.split('.')[0]
+            if base_name not in _ALLOWED_IMPORTS:
+                self.errors.append(
+                    f"{self.filepath}:{node.lineno}: "
+                    f"import of '{alias.name}' is forbidden")
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom):
-        self.errors.append(
-            f"{self.filepath}:{node.lineno}: "
-            f"import statements are forbidden")
+        mod = node.module or ""
+        base_name = mod.split('.')[0]
+        if base_name not in _ALLOWED_IMPORTS:
+            self.errors.append(
+                f"{self.filepath}:{node.lineno}: "
+                f"import from '{mod}' is forbidden")
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute):
@@ -120,15 +139,6 @@ def load_plugin(tag_name: str) -> dict | None:
     namespace: dict[str, Any] = {
         "__builtins__": _SAFE_BUILTINS,
         "__name__": f"tag_plugins.{tag_name}",
-        # Injected: plugins can't `import re` (AST-banned), so hand it in.
-        # Safe: re has no IO/reflection; the only escape path (re.__class__…)
-        # is already killed by the dunder-access AST ban.
-        # Wart: re.compile() collides with the _BANNED_CALLS name check —
-        # use re.search/match/sub/findall directly, not compile-then-use.
-        # ReDoS is possible but self-inflicted (no external input reaches here);
-        # if bounded matching is ever needed, upgrade to a ctx.match() host
-        # helper with a timeout (hooks run inside DB transactions).
-        "re": re,
     }
     try:
         exec(compile(source, filepath_str, "exec"), namespace)  # noqa: S102
