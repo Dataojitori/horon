@@ -56,7 +56,7 @@ def on_mutation(ctx):
                 f"\n\n[ACTION REQUIRED]\n"
                 f"你已经为计划确立了执行步骤。下一步是将它连接到预期结果：\n"
                 f"`horon suppose \"{ctx.this.name} → 预期结果概念\"`\n"
-                f"（预期结果概念应带有 result 标签。如果还没有，先用 `horon init_result` 创建。）"
+                f"（预期结果概念应带有 result 标签。如果还没有，先用 `horon init_result <name> --content \"...\"` 创建。）"
             )
 
     # Rule 3: plan→result link detection

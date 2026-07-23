@@ -497,14 +497,20 @@ def _build_parser():
     p = sub.add_parser("create_concept", allow_abbrev=False)
     p.add_argument("name")
     p.add_argument("--disclosure", default=None)
+    p.add_argument("--content", required=True,
+                   help="Why this concept exists and what observation prompted it.")
 
     # init_plan
     p = sub.add_parser("init_plan", allow_abbrev=False)
     p.add_argument("name")
+    p.add_argument("--content", required=True,
+                   help="What this plan is for and why it was conceived.")
 
     # init_result
     p = sub.add_parser("init_result", allow_abbrev=False)
     p.add_argument("name")
+    p.add_argument("--content", required=True,
+                   help="What achieving this result looks like (physical evidence).")
 
     # suppose
     p = sub.add_parser("suppose", allow_abbrev=False)
@@ -605,13 +611,16 @@ def _build_parser():
 def _dispatch(args, db):
     """Execute a single command, return result object."""
     if args.command == "create_concept":
-        return db.create_concept(args.name, args.disclosure)
+        if args.content is None or not args.content.strip():
+            raise ValueError("create_concept requires non-empty --content.")
+        return db.create_concept(args.name, args.disclosure,
+                                 content=args.content)
 
     elif args.command == "init_plan":
-        return db.init_plan(args.name)
+        return db.init_plan(args.name, content=args.content)
 
     elif args.command == "init_result":
-        return db.init_result(args.name)
+        return db.init_result(args.name, content=args.content)
 
     elif args.command == "suppose":
         return db.suppose(args.expression)

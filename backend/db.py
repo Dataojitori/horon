@@ -566,8 +566,15 @@ class HoronDB:
 
     @transactional
     def create_concept(self, name: str,
-                       disclosure: str | None = None) -> MutationResult:
-        """创建概念 concept + 默认 variation + 同名 alias。"""
+                       disclosure: str | None = None,
+                       content: str | None = None) -> MutationResult:
+        """创建概念 concept + 默认 variation + 同名 alias。
+
+        Args:
+            name: 概念名（自动注册为 alias）。
+            disclosure: 一句话触发条件。
+            content: 初始正文。
+        """
         name = _validate_name(name)
         self._check_name_available(name)
         now = _now()
@@ -580,9 +587,9 @@ class HoronDB:
         sc = secrets.token_hex(2)
         self.conn.execute(
             "INSERT INTO variations "
-            "(concept_id, short_code, created_at, updated_at) "
-            "VALUES (?,?,?,?)",
-            (concept_id, sc, now, now),
+            "(concept_id, short_code, content, created_at, updated_at) "
+            "VALUES (?,?,?,?,?)",
+            (concept_id, sc, content.strip() if content else None, now, now),
         )
         self.conn.execute(
             "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
@@ -596,9 +603,12 @@ class HoronDB:
         )
 
     @transactional
-    def init_plan(self, name: str) -> MutationResult:
+    def init_plan(self, name: str,
+                  content: str | None = None) -> MutationResult:
         """创建计划概念并原子化盖上 plan tag，返回引导性提示词。"""
-        res = self.create_concept(name)
+        if not content or not content.strip():
+            raise ValueError("init_plan requires non-empty --content.")
+        res = self.create_concept(name, content=content)
         self._add_tag(res.concept_id, "plan")
         res.message = (
             f"[OK] Concept '{name}' created with tag 'plan'.\n\n"
@@ -609,9 +619,12 @@ class HoronDB:
         return res
 
     @transactional
-    def init_result(self, name: str) -> MutationResult:
+    def init_result(self, name: str,
+                    content: str | None = None) -> MutationResult:
         """创建结果概念并原子化盖上 result tag，纯快捷方式，无多余引导。"""
-        res = self.create_concept(name)
+        if not content or not content.strip():
+            raise ValueError("init_result requires non-empty --content.")
+        res = self.create_concept(name, content=content)
         self._add_tag(res.concept_id, "result")
         res.message = f"[OK] Concept '{name}' created with tag 'result'."
         return res
@@ -799,7 +812,7 @@ class HoronDB:
             raise ValueError(
                 f"Auto-naming failed for '{expression}': {e}. "
                 f"Please fall back to manual creation: "
-                f"use `horon create_concept <custom_name>` then `horon add <custom_name> variation \"{expression}\"`."
+                f"use `horon create_concept <custom_name> --content \"...\"` then `horon add <custom_name> variation \"{expression}\"`."
             )
 
         final_name = base_name

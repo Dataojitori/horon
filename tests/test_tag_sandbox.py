@@ -267,14 +267,14 @@ def test_diff_passed_on_set_expression(horon_db, plugin_dir, monkeypatch):
 # ── 17: One-time hint doesn't repeat ────────────────────────────────────────
 
 def test_plan_first_chain_hint_only_once(horon_db):
-    horon_db.create_concept("步骤1")
-    horon_db.create_concept("步骤2")
-    horon_db.create_concept("步骤3")
-    res1 = horon_db.init_plan("我的计划")
+    horon_db.create_concept("步骤1", content="test")
+    horon_db.create_concept("步骤2", content="test")
+    horon_db.create_concept("步骤3", content="test")
+    res1 = horon_db.init_plan("我的计划", content="测试计划")
     res2 = horon_db._set_expression("我的计划", "步骤1 → 步骤2")
     assert "ACTION REQUIRED" in res2.message
 
-    horon_db.create_concept("extra_relation")
+    horon_db.create_concept("extra_relation", content="test")
     res3 = horon_db._set_expression("extra_relation", "我的计划 → 步骤3")
     # The first-chain hint should NOT appear again
     assert "你已经为计划确立了执行步骤" not in res3.message
