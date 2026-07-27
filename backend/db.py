@@ -42,7 +42,7 @@ _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 # 系统保留 tag：delete_tag / _delete_variation / _set_name 依赖此集合
 # 阻止对 plan / result 的删除和改名。词表本身在 tags 表里。
-SYSTEM_TAGS = {"plan", "result"}
+SYSTEM_TAGS = {"plan", "result", "exit"}
 
 
 def _validate_name(name: str) -> str:
