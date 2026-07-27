@@ -21,8 +21,7 @@ CREATE TABLE IF NOT EXISTS variations (
     type        TEXT    CHECK(type IN ('CHAIN', 'AND', 'OR')),
     status      TEXT    CHECK(status IN ('hypothesis', 'confirmed', 'negated')),
     content    TEXT,
-    unless      TEXT,
-    -- 价值通道（与因果内容正交，编译器对此列全盲）：
+    -- 価値通道（与因果内容正交，编译器対此列全盲）：
     -- 这条 variation 被现实碰撞后对我的利害。NULL=从未审视，
     -- -1.0=harmful, 0.0=neutral, +1.0=beneficial。
     -- 列用 REAL 保持存储通用；写入口（CLI）只接受符号标签、不接受裸数字，

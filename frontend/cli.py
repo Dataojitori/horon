@@ -262,12 +262,6 @@ def _format_read_concept(result: ReadResult) -> str:
                 f"    last fired: {fired}")
         lines.append("=" * 60)
 
-    if result.alerts:
-        lines.append("[!] ALERTS (Requires Attention)")
-        for alert in result.alerts:
-            lines.append(f"- {alert}")
-        lines.append("=" * 60)
-
     lines.append(f"VARIATIONS ({len(result.variations)})")
     multi = len(result.variations) > 1
     for v in result.variations:
@@ -280,7 +274,6 @@ def _format_read_concept(result: ReadResult) -> str:
         else:
             lines.append(f"Expression: (Atomic / Not yet decomposed) (status: {v.status or 'not set'})")
         lines.append(f"Content:\n{v.content}" if v.content else "Content: (empty)")
-        lines.append(f"Unless:\n{v.unless}" if v.unless else "Unless: (empty)")
     lines.append("")
     lines.append("=" * 60)
 
@@ -575,10 +568,10 @@ def _build_parser():
                                      "expression"])
     p.add_argument("value")
 
-    # update (content / unless — patch or append)
+    # update (content — patch or append)
     p = sub.add_parser("update", allow_abbrev=False)
     p.add_argument("node")
-    p.add_argument("field", choices=["content", "unless"])
+    p.add_argument("field", choices=["content"])
     # patch
     p.add_argument("--old", default=None)
     p.add_argument("--old-file", default=None)

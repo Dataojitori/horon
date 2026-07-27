@@ -4,7 +4,7 @@ Horon v2 data models (Pydantic)
 Concept → Variation 分层结构：
   Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
   Variation: 同一概念的不同解释（concept_id + short_code），
-             每个 variation 有独立的 status / content / unless / compose_members。
+             每个 variation 有独立的 status / content / compose_members。
 """
 
 from typing import Literal
@@ -31,7 +31,6 @@ class Variation(BaseModel):
     type: VariationType | None = None
     status: Status | None = None
     content: str | None = None
-    unless: str | None = None
     # 价值通道：这条 variation 与现实碰撞后对我的利害。
     # NULL=从未审视，-1.0=harmful，0.0=neutral，+1.0=beneficial。
     # 写入只经 set valence 的符号标签，库里不存在手写数值。
@@ -108,7 +107,6 @@ class ReadResult(BaseModel):
     outbound_confirmed: list[DirectedRelation] = []
     outbound_negated: list[DirectedRelation] = []
     outbound_hypotheses: list[DirectedRelation] = []
-    alerts: list[str] = []
 
 
 # 注：compile 的输出不在这里建模。

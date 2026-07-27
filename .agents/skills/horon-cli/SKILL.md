@@ -33,7 +33,7 @@ CLI 是专门为你打造的**有限且安全的操作边界**。如果本意是
 - **每个节点三件套：封面、书腰、正文。**
   - **封面（name）**：语义范围的承诺。审计按**字面全宽**解读，不看你起名时的意图。
   - **书腰（disclosure）**：一句话，让翻书架的失忆者决定要不要抽这本书。
-  - **正文**：包含 `expression`（结构分解）、`content`（描述/属性/推理凭据）、`unless`（崩溃边界）。想过审（confirmed），正文必须兑现封面的全宽。
+  - **正文**：包含 `expression`（结构分解）、`content`（描述/属性/推理凭据）。想过审（confirmed），正文必须兑现封面的全宽。
 - **名称（Name）即契约：** 封面与内容错位时，`compile` 会拿着虚假放大的概念去接通走不通的路径。起名前先确认你要建的是以下哪一种：
   - **实体枢纽**：名字 = 实体本身（如 `Github`）。content 装该实体的配置、状态、属性。
   - **可操作状态**：名字 = 一个可以被观测、达到或失去的状态（如 `持有发帖权限`、`OpenAI市占率下降`）。主语不限于自己——建世界模型必然要记录外部实体的状态变化。
@@ -85,17 +85,11 @@ CLI 是专门为你打造的**有限且安全的操作边界**。如果本意是
   - **清空表达式（退回原子态）**：`delete concept expression`。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入。
   - **删标签**：`delete Bluesky发帖流程 tag plan`。
   - **注：delete 不是 negated。** 要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
-- `update(concept, "content"|"unless", --append 文本 | --append-file 路径 | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。三种模式互斥：
+- `update(concept, "content", --append 文本 | --append-file 路径 | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。三种模式互斥：
   - `--append 文本`：在末尾追加。
   - `--append-file 路径`：从文件读入内容追加。
   - `--old "旧文本" --new "新文本"`：精确替换已有内容中的一段（patch 模式）。
-  - 两个字段同属正文：`content` 装描述与凭据——失忆后的我只读这段也要能理解节点为何是现在这样；`unless` 是崩溃边界。
-  - **`unless` 的合法写法**：
-    - 精准边：`${A → B negated}` 或 `${A → B confirmed}`（监视表达式恰好为 `A → B` 的关系概念的 status；该概念还没建也能写，等它出现后条件生效；`A → B → C` 中的 A→B 段不命中）。
-    - 逻辑 OR：`${A | B confirmed}`（监控散装警报：只要 A 或 B 旗下任一变体确立就触发）。
-    - 单节点：`${A confirmed}`（特例：只要 A 发生了就报警）。
-  - **严禁的写法**：`${A & B ...}`（强绑定应建实体节点，不要写在 unless 文本里）；也不支持单节点/OR容器的 negated 追踪。
-  - **unless 触发后果**：命中不自动改任何 status，compile 也不看它；只在 `read_concept` 读到相关概念时浮出 `[ALERT]`，之后怎么处置由你定。
+  - `content` 装描述与凭据——失忆后的我只读这段也要能理解节点为何是现在这样。
 
 ### Tag 词表管理与标签插件 (Tag Plugins)
 Tag 是给概念贴的分类元数据，编译器对其全盲。Tag 的名字必须是某个概念的**显示名（display name）**，alias 不算。

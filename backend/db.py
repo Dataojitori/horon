@@ -5,7 +5,7 @@ DB operations (Concept → Variation 分層結構)
 Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
 Variation: 同一概念的不同解释（concept_id + short_code + type），
            type ∈ {CHAIN, AND, OR, NULL(原子)}，
-           每个 variation 有独立的 status / content / unless / compose_members。
+           每个 variation 有独立的 status / content / compose_members。
 compose_members 的 member 引用 concept_id（hub），不是具体 variation。
 """
 from __future__ import annotations
@@ -36,7 +36,6 @@ from .tag_sandbox import (
 _logger = logging.getLogger(__name__)
 
 
-_CONDITION_RE = re.compile(r'\$\{\s*(.+?)\s+(confirmed|negated)\s*\}')
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
@@ -1999,7 +1998,7 @@ class HoronDB:
 
     def get_variation_field(self, node, field: str) -> tuple[int, str, str | None]:
         """获取 variation 指定字段的当前值，供 CLI 层 patch mode 使用。避免 CLI 重复解析。"""
-        valid_fields = ("content", "unless")
+        valid_fields = ("content",)
         if field not in valid_fields:
             raise ValueError(
                 f"Unknown field: '{field}'. "
@@ -2013,12 +2012,12 @@ class HoronDB:
 
     @transactional
     def update(self, node, field: str, value: str) -> MutationResult:
-        """给 variation 写 content 或 unless（patch/append 由 CLI 层处理）。
+        """给 variation 写 content（patch/append 由 CLI 层处理）。
 
         node: concept 名/ID，或 "concept:short_code"。
         sole variation 时自动定位。
         """
-        valid_fields = ("content", "unless")
+        valid_fields = ("content",)
         if field not in valid_fields:
             raise ValueError(
                 f"Unknown field: '{field}'. "
@@ -2215,106 +2214,9 @@ class HoronDB:
     ) -> dict[str, list[DirectedRelation]]:
         return self._query_directed_relations(concept_id, inbound=False)
 
-    def _scan_alerts(self, concept_ids: set[int]) -> list[str]:
-        """检查给定 concept 集的 unless 条件，返回已触发的警报。"""
-        alerts: list[str] = []
-        if not concept_ids:
-            return alerts
-
-        placeholders = ",".join("?" * len(concept_ids))
-        var_rows = self.conn.execute(
-            f"SELECT v.concept_id, v.short_code, v.unless, c.name "
-            f"FROM variations v JOIN concepts c ON v.concept_id = c.id "
-            f"WHERE v.concept_id IN ({placeholders}) AND v.unless IS NOT NULL",
-            tuple(concept_ids),
-        ).fetchall()
-
-        expr_cache = {}
-
-        for vrow in var_rows:
-            source_name = vrow["name"]
-            for match in _CONDITION_RE.finditer(vrow["unless"]):
-                expr = match.group(1).strip()
-                expected = match.group(2)
-
-                cache_key = (expr, expected)
-                if cache_key not in expr_cache:
-                    try:
-                        vtype, member_ids = self._parse_expression(expr, allow_single=True)
-                        if vtype in ("SINGLE", "OR"):
-                            # 动态单节点 / OR 追踪
-                            if expected == "negated":
-                                expr_cache[cache_key] = {"mode": "unsupported_negated", "target": None}
-                            else:
-                                expr_cache[cache_key] = {"mode": "any_confirmed", "member_ids": member_ids}
-                        elif vtype == "AND":
-                            expr_cache[cache_key] = {"mode": "unsupported_and", "target": None}
-                        else:
-                            # CHAIN 实体追踪
-                            target = self._find_composition_variation(vtype, member_ids)
-                            if target:
-                                expr_cache[cache_key] = {"mode": "exact", "target": target}
-                            else:
-                                expr_cache[cache_key] = {"mode": "not_met", "target": None}
-                    except ValueError:
-                        expr_cache[cache_key] = {"mode": "broken", "target": None}
-
-                cache_val = expr_cache[cache_key]
-                mode = cache_val["mode"]
-
-                if mode == "not_met":
-                    continue
-                elif mode == "broken":
-                    alerts.append(
-                        f"Broken reference in '{source_name}': "
-                        f"its unless condition watches '{expr}', "
-                        f"but some concepts in it could not be resolved. "
-                        f"read_concept '{source_name}' and decide whether "
-                        f"to update or remove the unless condition.")
-                    continue
-                elif mode == "unsupported_negated":
-                    alerts.append(
-                        f"Invalid condition in '{source_name}': "
-                        f"'{expr} negated' is not supported. "
-                        f"Single-concept and OR conditions do not support 'negated'.")
-                    continue
-                elif mode == "unsupported_and":
-                    alerts.append(
-                        f"Invalid condition in '{source_name}': "
-                        f"AND conditions such as '{expr} {expected}' are not supported.")
-                    continue
-                elif mode == "exact":
-                    target_cid, _, actual = cache_val["target"]
-                    if actual != expected:
-                        continue
-                    target_name = self._resolve_concept_name(target_cid)
-                    alerts.append(
-                        f"Unless triggered on '{source_name}': "
-                        f"'{target_name}' is now {actual} "
-                        f"(the condition ${{{expr} {expected}}} has been met). "
-                        f"The ground has shifted — review '{source_name}' "
-                        f"and any related concepts.")
-                elif mode == "any_confirmed":
-                    member_ids = cache_val["member_ids"]
-                    placeholders = ",".join("?" * len(member_ids))
-                    row = self.conn.execute(
-                        f"SELECT v.concept_id FROM variations v "
-                        f"WHERE v.concept_id IN ({placeholders}) AND v.status = 'confirmed' LIMIT 1",
-                        tuple(member_ids)
-                    ).fetchone()
-                    if row:
-                        target_cid = row["concept_id"]
-                        target_name = self._resolve_concept_name(target_cid)
-                        alerts.append(
-                            f"Unless triggered on '{source_name}': "
-                            f"'{target_name}' has a confirmed variation "
-                            f"(the condition ${{{expr} confirmed}} has been met). "
-                            f"The ground has shifted — review '{source_name}' "
-                            f"and any related concepts.")
-        return alerts
 
     def read_concept(self, concept) -> ReadResult:
-        """读取概念的完整视图：concept 本体 + 入边 + 出边 + alerts。"""
+        """读取概念的完整视图。"""
         cid, _ = self._resolve_id(concept)
         row = self.conn.execute(
             "SELECT * FROM concepts WHERE id = ?", (cid,)
@@ -2397,16 +2299,6 @@ class HoronDB:
         inbound = self._query_inbound_relations(cid)
         outbound = self._query_outbound_relations(cid)
 
-        # alerts 范围：自身 + 以自身为成员的组合概念
-        related_rows = self.conn.execute(
-            "SELECT DISTINCT concept_id FROM compose_members "
-            "WHERE member_concept_id = ?",
-            (cid,),
-        ).fetchall()
-        visible_ids: set[int] = {cid}
-        visible_ids |= {r["concept_id"] for r in related_rows}
-        alerts = self._scan_alerts(visible_ids)
-
         return ReadResult(
             id=cid,
             name=row["name"],
@@ -2422,7 +2314,6 @@ class HoronDB:
             outbound_confirmed=outbound["confirmed"],
             outbound_negated=outbound["negated"],
             outbound_hypotheses=outbound["hypothesis"],
-            alerts=alerts,
         )
 
     # ── Reminders ─────────────────────────────────────────────────────────────

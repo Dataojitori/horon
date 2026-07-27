@@ -78,7 +78,7 @@ Nocturne发帖                            ← 手动赋予的独立身份（名�
 概念的边界可以从两条路径进入，互不依赖，先后随意：
 
 - **结构路径**：通过 `add`（新增）、`set`（更新）或 `delete`（清除）操作，将概念组合为其他概念的关系，并声明该关系的 status（hypothesis / confirmed / negated）。
-- **文本路径**：通过 `update` 写入 content（内容/理由）和 unless（崩溃边界）。
+- **文本路径**：通过 `update` 写入 content（内容/理由）。
 
 一个概念可以先有文字描述再被拆解为结构，也可以先有结构再补文字解释，也可以只走其中一条。两条路径画的是同一个圈的边界——一个用概念间的关系画，一个用语言画。
 
@@ -108,37 +108,17 @@ Nocturne发帖                            ← 手动赋予的独立身份（名�
 ```
 
 **审批标准：名副其实**
-变体的“实质内容”包含了它的一切构件：**表达式（如果有）、content，以及 unless**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
+变体的“实质内容”包含了它的一切构件：**表达式（如果有）、content**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
 例如，你建了一个组合概念，名字叫“我的史诗级重构”，表达式是“修改文档拼写 → Linux内核开发者”。
 哪怕“改拼写属于开发者工作”这个逻辑推导本身没毛病，但这丁点儿内容和它宏大的名字完全不匹配。所以这个组合概念的 status 无法被设为 confirmed。
-同样，原子概念如果没有表达式，那就拿它的 content 和 unless 去和名字对账。
+同样，原子概念如果没有表达式，那就拿它的 content 去和名字对账。
 
 - **假设**：尚未经过严格验证的试探性节点或关系。
 - **确认**：证据表明该概念确实成立。
 - **否定**：证据表明该概念确实不成立。
 
-content 和 unless 可以写在任何 variation 上。content 记录为什么打上该状态，unless 指定什么条件下需要重新审视。所有确认的状态都保持可证伪性。
+content 可以写在任何 variation 上，记录为什么打上该状态。所有确认的状态都保持可证伪性。
 
-### unless 条件声明
-
-unless 字段支持嵌入**可执行的条件声明**，语法为 `${表达式 状态}`。系统可以自动检查这些条件是否在图中被触发。
-
-```
-unless: ${策略 → 发帖 negated} 如果策略和发帖的关系被推翻，需要重新审视
-unless: ${策略驱动发帖 confirmed} 如果策略驱动发帖被确认则此假设需重审
-```
-
-**语法规则：**
-- `${A → B confirmed}` / `${A → B negated}` — 精确匹配一条 CHAIN 变体，检查其 status 字段。
-- `${A | B confirmed}` — 逻辑聚合判定。这不要求存在一个真实的 OR 变体实体，而是动态检查 A 或 B 的最终状态：只要 A **或** B 旗下有**任意一个**变体是 confirmed，该条件即宣告触发。
-- `${A confirmed}` — （作为上述聚合的特例）支持对简单概念名单点追踪：只要 A 有任意变体走通，即触发。
-- 注意：**目前不支持对简单概念或 OR 聚合使用 negated 判定**（如不支持 `${A negated}` 或 `${A | B negated}`）。因为“一个概念被彻底否定”意味着要穷尽其所有已知与未知的变体，这在当前的开放图谱模型中极易产生歧义。
-- 大括号内空格不敏感
-- 一个 unless 字段可以包含多个 `${...}` 声明，也可以混入自由文本说明
-- `read_concept` 时系统自动扫描视野内所有 variation 的 unless 条件，触发的以 `alerts` 返回，无需手动检查
-
-**为什么不支持 AND 聚合 (`${A & B confirmed}`)：** 
-因为对于“A 和 B 必须同时成立”这种强因果绑定，不应该写在软性的 `unless` 条件里，而应该直接在网络中建立一个真实的 AND 实体节点（即在图谱结构中把它们锁定），然后用指向该实体的 CHAIN 去做常规的断路控制。`unless` 专门用于捕捉那些游离于当前主线之外、随时可能从各个角落冒出来的单一事件（OR）警报。
 
 ### 推理 = 编译
 
@@ -215,7 +195,7 @@ compile --assume A C --block B --constraints D E --goal G
 
 ### variations 表
 
-同一概念的不同解释（variation）。每个 variation 是一种纯粹的推导路径（CHAIN/AND/OR），有独立的 status / content / unless。
+同一概念的不同解释（variation）。每个 variation 是一种纯粹的推导路径（CHAIN/AND/OR），有独立的 status / content。
 
 | 列 | 类型 | 说明 |
 |----|------|------|
@@ -224,7 +204,6 @@ compile --assume A C --block B --constraints D E --goal G
 | type | TEXT | 变体类型，严格限制为：`'CHAIN'`, `'AND'`, `'OR'` |
 | status | TEXT? | hypothesis / confirmed / negated；适用于所有 variation，NULL 等同于 hypothesis |
 | content | TEXT? | 支撑当前状态的理由 |
-| unless | TEXT? | 崩溃边界：什么条件下需要重新审视 |
 | created_at | TEXT | ISO时间戳 |
 | updated_at | TEXT | ISO时间戳 |
 
@@ -272,7 +251,7 @@ compile --assume A C --block B --constraints D E --goal G
 - `add(target, kind, value)` — 给概念添加别名 (`name`) 或组合关系变体 (`variation`)
 - `delete(target, kind?, value?)` — 删除操作。缺省删 variation，也可指定删 `name` 或清除关系组合回到原子态 (`expression`)
 - `set(target, prop, value)` — 设置属性，支持 `disclosure`, `status`, `name` (重命名) 或重写当前 variation 的 `expression`
-- `update(node, field)` — 给 variation 写 `content` 或 `unless`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
+- `update(node, field)` — 给 variation 写 `content`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
   - **patch**（`--old` + `--new`，含 `-file` 变体）：局部修改
   - **append**（`--append`，含 `-file` 变体）：在已有内容末尾换行追加
   - 两种模式互斥

@@ -37,7 +37,6 @@ export interface VariationDetail {
   type: VariationType | null;
   status: string | null;
   content: string | null;
-  unless: string | null;
   expression: string | null;
   created_at: string;
   updated_at: string;
@@ -69,7 +68,6 @@ export interface ConceptDetail {
   outbound_confirmed: DirectedRelation[];
   outbound_negated: DirectedRelation[];
   outbound_hypotheses: DirectedRelation[];
-  alerts: string[];
 }
 
 export interface NeighborNode {

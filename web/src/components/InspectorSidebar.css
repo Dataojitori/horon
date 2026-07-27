@@ -97,27 +97,6 @@
   color: var(--text-secondary);
 }
 
-/* ── Alerts ────────────────────────── */
-
-.alerts-section {
-  background: rgba(255, 85, 102, 0.04);
-}
-
-.alert-label {
-  color: var(--accent-red);
-}
-
-.alert-item {
-  padding: 6px 10px;
-  background: rgba(255, 85, 102, 0.08);
-  border-left: 2px solid var(--accent-red);
-  border-radius: 0 4px 4px 0;
-  font-size: 12px;
-  color: var(--accent-red);
-  margin-bottom: 4px;
-  font-family: var(--font-mono);
-}
-
 /* ── Variation cards ───────────────── */
 
 .variation-card {
@@ -162,7 +141,7 @@
   color: var(--text-secondary);
 }
 
-/* ── Evidence / Unless fields ──────── */
+/* ── Evidence fields ───────────────── */
 
 .var-field {
   margin-top: 8px;
@@ -178,23 +157,10 @@
   margin-bottom: 4px;
 }
 
-.unless-label {
-  color: var(--accent-amber);
-}
-
 .field-content {
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.unless-content {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  padding: 6px 8px;
-  background: rgba(255, 176, 64, 0.04);
-  border-left: 2px solid var(--accent-amber);
-  border-radius: 0 4px 4px 0;
 }

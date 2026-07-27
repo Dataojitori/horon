@@ -43,17 +43,6 @@ export default function InspectorSidebar({ concept, open, onClose }: Props) {
           </div>
         )}
 
-        {concept.alerts.length > 0 && (
-          <div className="inspector-section alerts-section">
-            <h3 className="section-label alert-label">Alerts</h3>
-            {concept.alerts.map((alert, i) => (
-              <div key={i} className="alert-item">
-                {alert}
-              </div>
-            ))}
-          </div>
-        )}
-
         {concept.variations.length > 0 && (
           <div className="inspector-section">
             <h3 className="section-label">Variations</h3>
@@ -80,14 +69,6 @@ export default function InspectorSidebar({ concept, open, onClose }: Props) {
                       <span className="field-label">Content</span>
                       <div className="field-content content-content">
                         {v.content}
-                      </div>
-                    </div>
-                  )}
-                  {v.unless && (
-                    <div className="var-field">
-                      <span className="field-label unless-label">Unless</span>
-                      <div className="field-content unless-content">
-                        {v.unless}
                       </div>
                     </div>
                   )}
