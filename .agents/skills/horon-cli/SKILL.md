@@ -115,6 +115,22 @@ Tag 是给概念贴的分类元数据，编译器对其全盲。Tag 的名字必
 - **改名跟随**：对注册为 tag 的概念 set name 会把所有使用该 tag 的概念同步绑定到新名字。
 - **删概念联动**：删除作为 tag 源的概念时，如果其他概念还在用该 tag，系统拒绝删除；如果没有其他使用者，tag 随概念一起清除。
 
+### 提醒与收件箱 (Reminders & Inbox)
+给概念"插眼"：挂一个触发条件，之后用 `inbox` 查收哪些被激活了。处理完后 `remind --del` 删掉触发器。`read_concept` 时也会显示该概念挂载的触发器。
+
+- **创建**：`remind <概念名> --when <condition> --msg <message>`
+  - condition 是一段 Python 表达式，在安全沙盒内执行。可用的查询函数：
+    - `exists("概念名或表达式")` → 概念/关系是否存在（如 `exists("A")` 或 `exists("A → B")`）
+    - `status("概念名或表达式")` → 返回 status 字符串，不存在则 None
+    - `tags("概念名")` → 该概念的标签集合
+    - `TODAY`、`NOW` → 当前日期/时间字符串，可直接做字符串比较
+    - 支持 `and` / `or` / `not` 及比较运算符自由组合
+  - 可以引用当前还不存在的概念（`not exists("未来概念")` 合法）。非法语法在创建时即被拒绝。
+  - 例：`remind "X" --when "status('A → B') == 'confirmed' and not exists('C')" --msg "条件达成"`
+- **列表**：`remind --list [--limit N] [--offset M]`
+- **删除**：`remind --del <reminder_id>`
+- **查收**：`inbox` —— 检查所有触发器，列出已激活的；如有表达式运行出错也会报出来。
+
 ### 桥接工具
 - `read_memory(uri, --out file)` —— 从 Nocturne Memory 读取记忆正文；配合 `--out` 导出为文件后，可用 `update --append-file` 导入 Horon 概念的 content。
 

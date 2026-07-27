@@ -10,6 +10,7 @@ compose_members 的 member 引用 concept_id（hub），不是具体 variation�
 """
 from __future__ import annotations
 
+import ast
 import logging
 import os
 import re
@@ -24,7 +25,7 @@ from .compiler import Compiler, ExpressionRule, RelationGraph
 from .models import (
     Concept, VariationDetail, ComposeMemberDetail,
     DirectedRelation, RelationMember, ReadResult,
-    MutationResult,
+    MutationResult, ReminderDetail,
 )
 from .tag_sandbox import (
     load_plugin, TagPluginError, HookRejection,
@@ -43,6 +44,63 @@ _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 # 系统保留 tag：delete_tag / _delete_variation / _set_name 依赖此集合
 # 阻止对 plan / result 的删除和改名。词表本身在 tags 表里。
 SYSTEM_TAGS = {"plan", "result", "exit"}
+
+
+_SANDBOX_ALLOWED_CALLS = frozenset({"exists", "status", "tags"})
+_SANDBOX_ALLOWED_NODES = frozenset({
+    ast.Expression, ast.BoolOp, ast.UnaryOp, ast.Not, ast.And, ast.Or,
+    ast.Compare,
+    ast.Eq, ast.NotEq, ast.Lt, ast.Gt, ast.LtE, ast.GtE,
+    ast.In, ast.NotIn, ast.Is, ast.IsNot,
+    ast.Call, ast.Constant, ast.Name, ast.Load,
+    ast.Tuple, ast.List, ast.Set,
+})
+
+
+def _validate_condition_ast(expr: str) -> None:
+    """Validate a reminder condition expression for sandbox safety.
+
+    Whitelist approach: only comparison / boolean / whitelisted-call nodes
+    are permitted.  Everything else (imports, attribute access, assignments,
+    lambdas, comprehensions, subscript, …) is rejected outright.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise ValueError(f"Condition syntax error: {e}") from e
+
+    for node in ast.walk(tree):
+        ntype = type(node)
+        if ntype not in _SANDBOX_ALLOWED_NODES:
+            raise ValueError(
+                f"Forbidden construct in condition: {ntype.__name__}. "
+                f"Only comparisons, boolean logic (and/or/not), and calls "
+                f"to exists/status/tags are allowed.")
+        if ntype is ast.Call:
+            if not isinstance(node.func, ast.Name):
+                raise ValueError(
+                    "Only direct function calls are allowed "
+                    "(exists, status, tags).")
+            if node.func.id not in _SANDBOX_ALLOWED_CALLS:
+                raise ValueError(
+                    f"Function '{node.func.id}' is not allowed. "
+                    f"Allowed: {', '.join(sorted(_SANDBOX_ALLOWED_CALLS))}.")
+            if node.keywords:
+                raise ValueError(
+                    f"Function '{node.func.id}' does not accept keyword arguments.")
+            if len(node.args) != 1:
+                raise ValueError(
+                    f"Function '{node.func.id}' requires exactly 1 argument ({len(node.args)} given).")
+            arg = node.args[0]
+            if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
+                raise ValueError(
+                    f"Function '{node.func.id}' argument must be a string literal.")
+        if ntype is ast.Name and isinstance(node.ctx, ast.Load):
+            allowed_names = _SANDBOX_ALLOWED_CALLS | {"TODAY", "NOW"}
+            if node.id not in allowed_names:
+                raise ValueError(
+                    f"Name '{node.id}' is not available in condition scope. "
+                    f"Available: {', '.join(sorted(allowed_names))}.")
 
 
 def _validate_name(name: str) -> str:
@@ -2320,6 +2378,21 @@ class HoronDB:
                 f"'{ts_row['name']}'. "
                 f"Currently used by {ts_row['cnt']} other concept(s).")
 
+        # reminders
+        reminders = [
+            ReminderDetail(
+                id=r["id"],
+                condition=r["condition"],
+                message=r["message"],
+                created_at=r["created_at"],
+                last_fired_at=r["last_fired_at"],
+            )
+            for r in self.conn.execute(
+                "SELECT * FROM reminders WHERE concept_id = ? ORDER BY id",
+                (cid,),
+            ).fetchall()
+        ]
+
         # 入边 / 出边
         inbound = self._query_inbound_relations(cid)
         outbound = self._query_outbound_relations(cid)
@@ -2341,6 +2414,7 @@ class HoronDB:
             aliases=aliases,
             tags=tags,
             tag_source_info=tag_source_info,
+            reminders=reminders,
             variations=variations,
             inbound_confirmed=inbound["confirmed"],
             inbound_negated=inbound["negated"],
@@ -2350,6 +2424,204 @@ class HoronDB:
             outbound_hypotheses=outbound["hypothesis"],
             alerts=alerts,
         )
+
+    # ── Reminders ─────────────────────────────────────────────────────────────
+
+    @transactional
+    def add_reminder(self, concept: str,
+                     condition: str, message: str) -> MutationResult:
+        """Create a reminder rule attached to a concept.
+
+        Validates the condition expression via AST whitelist before persisting.
+        """
+        condition = condition.strip()
+        message = message.strip()
+        if not condition:
+            raise ValueError("Condition cannot be empty.")
+        if not message:
+            raise ValueError("Message cannot be empty.")
+
+        _validate_condition_ast(condition)
+
+        cid, _ = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        now = _now()
+        cursor = self.conn.execute(
+            "INSERT INTO reminders "
+            "(concept_id, condition, message, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (cid, condition, message, now),
+        )
+        rid = cursor.lastrowid
+        return MutationResult(
+            message=(
+                f"Success. Reminder #{rid} created for "
+                f"'{cname}' (id={cid}).\n"
+                f"  condition: {condition}\n"
+                f"  message: {message}"
+            ),
+            concept_id=cid, concept_name=cname,
+        )
+
+    @transactional
+    def delete_reminder(self, reminder_id: int) -> MutationResult:
+        row = self.conn.execute(
+            "SELECT r.id, r.concept_id, c.name AS concept_name "
+            "FROM reminders r "
+            "JOIN concepts c ON r.concept_id = c.id "
+            "WHERE r.id = ?",
+            (reminder_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"Reminder #{reminder_id} not found.")
+        self.conn.execute("DELETE FROM reminders WHERE id = ?",
+                          (reminder_id,))
+        return MutationResult(
+            message=f"Success. Reminder #{reminder_id} deleted.",
+            concept_id=row["concept_id"],
+            concept_name=row["concept_name"],
+        )
+
+    def list_reminders(self, limit: int = 50,
+                       offset: int = 0) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT r.*, c.name AS concept_name "
+            "FROM reminders r "
+            "JOIN concepts c ON r.concept_id = c.id "
+            "ORDER BY r.id LIMIT ? OFFSET ?",
+            (limit, offset),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _build_sandbox_globals(self) -> dict:
+        """Build the restricted globals dict for reminder condition eval."""
+
+        def _exists(name_or_expr: str) -> bool:
+            name_or_expr = name_or_expr.strip()
+            if any(op in name_or_expr for op in ("\u2192", "&", "|")):
+                try:
+                    vtype, member_ids = self._parse_expression(
+                        name_or_expr, allow_single=False)
+                    return self._find_composition_variation(
+                        vtype, member_ids) is not None
+                except ValueError:
+                    return False
+            try:
+                self._resolve_id(name_or_expr)
+                return True
+            except ValueError:
+                return False
+
+        def _status(name_or_expr: str) -> str | None:
+            name_or_expr = name_or_expr.strip()
+            if any(op in name_or_expr for op in ("\u2192", "&", "|")):
+                try:
+                    vtype, member_ids = self._parse_expression(
+                        name_or_expr, allow_single=False)
+                    result = self._find_composition_variation(
+                        vtype, member_ids)
+                    if result is None:
+                        return None
+                    return result[2] or "hypothesis"
+                except ValueError:
+                    return None
+            try:
+                cid, _ = self._resolve_id(name_or_expr)
+            except ValueError:
+                return None
+            rows = self.conn.execute(
+                "SELECT status FROM variations WHERE concept_id = ?",
+                (cid,),
+            ).fetchall()
+            if not rows:
+                return None
+            statuses = {r["status"] or "hypothesis" for r in rows}
+            if "confirmed" in statuses:
+                return "confirmed"
+            if "hypothesis" in statuses:
+                return "hypothesis"
+            return "negated"
+
+        def _tags(concept_name: str) -> set:
+            concept_name = concept_name.strip()
+            try:
+                cid, _ = self._resolve_id(concept_name)
+            except ValueError:
+                return set()
+            rows = self.conn.execute(
+                "SELECT tag FROM concept_tags WHERE concept_id = ?",
+                (cid,),
+            ).fetchall()
+            return {r["tag"] for r in rows}
+
+        return {
+            "__builtins__": {},
+            "exists": _exists,
+            "status": _status,
+            "tags": _tags,
+            "TODAY": time.strftime("%Y-%m-%d"),
+            "NOW": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "True": True,
+            "False": False,
+            "None": None,
+        }
+
+    @transactional
+    def evaluate_inbox(self) -> dict:
+        """Pull all reminders, eval conditions in sandbox, return inbox.
+
+        Returns dict with keys: triggered (list), errors (list),
+        quiet_count (int).  Triggered reminders get last_fired_at updated.
+        """
+        rows = self.conn.execute(
+            "SELECT r.*, c.name AS concept_name "
+            "FROM reminders r "
+            "JOIN concepts c ON r.concept_id = c.id "
+            "ORDER BY r.id"
+        ).fetchall()
+        if not rows:
+            return {"triggered": [], "errors": [], "quiet_count": 0}
+
+        sandbox_globals = self._build_sandbox_globals()
+        triggered: list[dict] = []
+        errors: list[dict] = []
+        quiet_count = 0
+        fired_ids: list[int] = []
+
+        for row in rows:
+            d = dict(row)
+            condition = d["condition"]
+            try:
+                _validate_condition_ast(condition)
+            except ValueError as e:
+                errors.append({**d, "error": str(e)})
+                continue
+            try:
+                result = eval(
+                    compile(condition, "<reminder>", "eval"),
+                    sandbox_globals,
+                )
+            except Exception as e:
+                errors.append({**d, "error": f"{type(e).__name__}: {e}"})
+                continue
+
+            if result:
+                triggered.append(d)
+                fired_ids.append(d["id"])
+            else:
+                quiet_count += 1
+
+        if fired_ids:
+            now = _now()
+            ph = ",".join("?" * len(fired_ids))
+            self.conn.execute(
+                f"UPDATE reminders SET last_fired_at = ? "
+                f"WHERE id IN ({ph})",
+                [now, *fired_ids],
+            )
+
+        return {"triggered": triggered, "errors": errors,
+                "quiet_count": quiet_count}
 
     # ── Compile (path verification) ─────────────────────────────────────────
 

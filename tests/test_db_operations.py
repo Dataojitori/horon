@@ -355,3 +355,44 @@ def test_unless_cache_separates_same_expression_by_expected_status(horon_db):
     assert "Unless triggered on 'Watcher'" in result.alerts[0]
     assert "Invalid condition in 'Watcher'" in result.alerts[1]
     assert "Single-concept and OR conditions do not support 'negated'" in result.alerts[1]
+
+
+def test_reminder_condition_validation(horon_db):
+    from backend.db import _validate_condition_ast
+
+    # Valid condition calls
+    _validate_condition_ast('exists("A")')
+    _validate_condition_ast('status("A") == "confirmed"')
+    _validate_condition_ast('"tag1" in tags("A")')
+    _validate_condition_ast('exists("A") and status("B") == "hypothesis"')
+
+    # Invalid: no arguments
+    with pytest.raises(ValueError, match="requires exactly 1 argument"):
+        _validate_condition_ast('exists()')
+
+    # Invalid: multiple arguments
+    with pytest.raises(ValueError, match="requires exactly 1 argument"):
+        _validate_condition_ast('status("A", "B")')
+
+    # Invalid: non-string argument
+    with pytest.raises(ValueError, match="argument must be a string literal"):
+        _validate_condition_ast('tags(123)')
+
+    # Invalid: keyword argument
+    with pytest.raises(ValueError, match="does not accept keyword arguments"):
+        _validate_condition_ast('exists(name="A")')
+
+
+def test_add_reminder_validates_condition(horon_db):
+    create_concepts(horon_db, ["A"])
+
+    # Valid reminder creation
+    horon_db.add_reminder("A", 'exists("A")', "Message 1")
+
+    # Invalid reminder creation rejects bad condition
+    with pytest.raises(ValueError, match="requires exactly 1 argument"):
+        horon_db.add_reminder("A", 'exists()', "Message 2")
+
+    with pytest.raises(ValueError, match="argument must be a string literal"):
+        horon_db.add_reminder("A", 'tags(123)', "Message 3")
+

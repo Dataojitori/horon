@@ -88,6 +88,19 @@ CREATE TABLE IF NOT EXISTS cli_audit_log (
     success      INTEGER NOT NULL DEFAULT 1
 );
 
+-- ── Reminder 系统（轻量级提醒与收件箱，编译器全盲）──
+--
+-- 独立记录表，通过 FK 绑定到 concept。concept 删除时级联清理。
+-- condition 存放 sandbox Python 表达式，由 inbox 命令 pull 求值。
+CREATE TABLE IF NOT EXISTS reminders (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    condition     TEXT NOT NULL,
+    message       TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    last_fired_at TEXT
+);
+
 -- 已发布数据库的增量升级记录。新数据库直接按本文件创建最新结构，
 -- 并由 HoronDB 将随代码发布的迁移标记为已包含。
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -102,6 +115,7 @@ CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
+CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS

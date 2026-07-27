@@ -250,6 +250,18 @@ def _format_read_concept(result: ReadResult) -> str:
         lines.append(f"[Tag Source] {result.tag_source_info}")
     lines.append("=" * 60)
 
+    if result.reminders:
+        lines.append("[ Reminders ]")
+        for rem in result.reminders:
+            fired = rem.last_fired_at or "(never)"
+            lines.append(
+                f"  #{rem.id}: {rem.message}")
+            lines.append(
+                f"    when: {rem.condition}")
+            lines.append(
+                f"    last fired: {fired}")
+        lines.append("=" * 60)
+
     if result.alerts:
         lines.append("[!] ALERTS (Requires Attention)")
         for alert in result.alerts:
@@ -596,6 +608,26 @@ def _build_parser():
     p.add_argument("--out", default=None,
         help="Write content to file instead of stdout")
 
+    # remind (create / list / delete)
+    p = sub.add_parser("remind", allow_abbrev=False,
+        help="Manage reminder rules on concepts.")
+    p.add_argument("concept", nargs="?", default=None,
+        help="Concept to attach reminder to (for create mode)")
+    p.add_argument("--when", default=None,
+        help="Sandbox Python expression as trigger condition")
+    p.add_argument("--msg", default=None,
+        help="Message shown when condition fires")
+    p.add_argument("--list", action="store_true",
+        help="List all reminder rules")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--offset", type=int, default=0)
+    p.add_argument("--del", type=int, default=None, dest="del_id",
+        help="Delete a reminder by ID")
+
+    # inbox
+    sub.add_parser("inbox", allow_abbrev=False,
+        help="Evaluate all reminder conditions and show triggered ones.")
+
     # batch
     p = sub.add_parser("batch", allow_abbrev=False,
         help="Run multiple commands. Reads from stdin or --file. "
@@ -720,6 +752,75 @@ def _dispatch(args, db):
             Path(args.out).write_text(content, encoding="utf-8")
             return f"Success. Wrote {len(content)} chars to {args.out}"
         return RawOutput(content)
+
+    elif args.command == "remind":
+        if args.list:
+            reminders = db.list_reminders(args.limit, args.offset)
+            if not reminders:
+                return RawOutput("(no reminders)")
+            lines = []
+            for r in reminders:
+                fired = r.get("last_fired_at") or "(never)"
+                lines.append(
+                    f"#{r['id']} [{r['concept_name']} "
+                    f"(id={r['concept_id']})] {r['message']}")
+                lines.append(f"   when: {r['condition']}")
+                lines.append(
+                    f"   created: {r['created_at']} "
+                    f"| last fired: {fired}")
+            total = db.conn.execute(
+                "SELECT COUNT(*) AS cnt FROM reminders"
+            ).fetchone()["cnt"]
+            shown = len(reminders)
+            if total > args.offset + shown:
+                lines.append(
+                    f"\n(showing {args.offset+1}-{args.offset+shown} "
+                    f"of {total} — use --offset {args.offset+shown} "
+                    f"to see more)")
+            return RawOutput("\n".join(lines))
+
+        elif args.del_id is not None:
+            return db.delete_reminder(args.del_id)
+
+        elif args.concept is not None and args.when is not None and args.msg is not None:
+            return db.add_reminder(args.concept, args.when, args.msg)
+
+        else:
+            raise ValueError(
+                "Usage:\n"
+                '  remind <concept> --when <condition> --msg <message>\n'
+                "  remind --list [--limit N] [--offset M]\n"
+                "  remind --del <id>")
+
+    elif args.command == "inbox":
+        result = db.evaluate_inbox()
+        triggered = result["triggered"]
+        errors = result["errors"]
+        quiet = result["quiet_count"]
+
+        if not triggered and not errors:
+            return RawOutput(
+                f"(empty inbox — {quiet} reminder(s) quiet)")
+
+        lines = []
+        if triggered:
+            for r in triggered:
+                lines.append(
+                    f"#{r['id']} [{r['concept_name']} "
+                    f"(id={r['concept_id']})] {r['message']}")
+                lines.append(f"   condition: {r['condition']}")
+        if errors:
+            lines.append("")
+            lines.append("[Errors]")
+            for r in errors:
+                lines.append(
+                    f"#{r['id']} [{r['concept_name']} "
+                    f"(id={r['concept_id']})] {r['message']}")
+                lines.append(f"   condition: {r['condition']}")
+                lines.append(f"   error: {r['error']}")
+        if quiet > 0:
+            lines.append(f"\n--- {quiet} reminder(s) quiet ---")
+        return RawOutput("\n".join(lines))
 
     elif args.command == "compile":
         result = db.compile(
