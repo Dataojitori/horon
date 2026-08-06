@@ -74,6 +74,25 @@ CREATE TABLE IF NOT EXISTS concept_tags (
 -- 不同 concept 之间不能有任何名字重复（无论主名还是别名）。
 -- 同一 concept 的主名可以同时出现在自己的 alias 中。
 
+-- Multi-Disclosure: 书腰（触发条件），每个 concept 可以有多条。
+-- 帮助 agent 在记忆重置后决定是否需要深入阅读该概念。
+CREATE TABLE IF NOT EXISTS disclosures (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    text        TEXT    NOT NULL,
+    created_at  TEXT    NOT NULL
+);
+
+-- Attention Routing: 概念间的注意力转移突触权重。
+-- 记录 agent 在概念间的阅读跳转模式，用于 surprise-weighted 推荐。
+CREATE TABLE IF NOT EXISTS concept_transitions (
+    from_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    to_concept_id   INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    weight          REAL    NOT NULL DEFAULT 0.0,
+    last_accessed_at TEXT   NOT NULL,
+    PRIMARY KEY (from_concept_id, to_concept_id)
+);
+
 -- CLI 操作审计日志：谁在什么时候对哪个概念做了什么。
 -- 不设 FK —— 概念删除后审计记录仍须保留。
 CREATE TABLE IF NOT EXISTS cli_audit_log (
@@ -115,6 +134,7 @@ CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
 CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
 CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
+CREATE INDEX IF NOT EXISTS idx_disclosures_concept ON disclosures(concept_id);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS

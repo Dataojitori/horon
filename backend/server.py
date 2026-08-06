@@ -88,13 +88,17 @@ def get_graph():
                         degree[b] += 1
                 degree[expression.concept_id] += len(mems)
 
+        all_cids = [c.id for c in concepts]
+        disc_map = db._get_disclosures_batch(all_cids) if all_cids else {}
+
         nodes = []
         for c in concepts:
             cid = c.id
+            discs = disc_map.get(cid, [])
             nodes.append({
                 "id": cid,
                 "name": c.name,
-                "disclosure": c.disclosure,
+                "disclosures": [d.model_dump() for d in discs],
                 "degree": degree.get(cid, 0),
             })
 
@@ -107,7 +111,7 @@ def search_concepts(q: str = Query(..., min_length=1)):
     try:
         with _db_lock:
             results = db.search_concepts(q)
-        return [r.model_dump() for r in results]
+            return [r.model_dump() for r in results]
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -157,21 +161,23 @@ def get_neighborhood(concept_id: int):
 
     neighbors = []
     if neighbor_ids:
-        # 一次性查出所有邻居（含 degree），避免逐个邻居 2 次查询的 N+1。
         placeholders = ",".join("?" * len(neighbor_ids))
         with _db_lock:
             rows = db.conn.execute(
-                f"SELECT c.id, c.name, c.disclosure, "
+                f"SELECT c.id, c.name, "
                 f"       (SELECT COUNT(*) FROM compose_members cm "
                 f"        WHERE cm.member_concept_id = c.id) AS degree "
                 f"FROM concepts c WHERE c.id IN ({placeholders})",
                 tuple(neighbor_ids),
             ).fetchall()
+            neighbor_disc_map = db._get_disclosures_batch(neighbor_ids)
         for row in rows:
+            nid = row["id"]
+            discs = neighbor_disc_map.get(nid, [])
             neighbors.append({
-                "id": row["id"],
+                "id": nid,
                 "name": row["name"],
-                "disclosure": row["disclosure"],
+                "disclosures": [d.model_dump() for d in discs],
                 "degree": row["degree"],
             })
 

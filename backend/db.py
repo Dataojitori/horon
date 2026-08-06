@@ -105,6 +105,25 @@ class HoronDB(
             )
             try:
                 self.conn.executescript(full_script)
+            except sqlite3.OperationalError as e:
+                err_msg = str(e).lower()
+                sql_lower = sql.lower()
+                is_drop_col_idempotent = (
+                    "drop column" in sql_lower and "no such column" in err_msg
+                )
+                is_add_col_idempotent = (
+                    "add column" in sql_lower and "duplicate column name" in err_msg
+                )
+                if is_drop_col_idempotent or is_add_col_idempotent:
+                    self.conn.rollback()
+                    self.conn.execute(
+                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                        (version, _now()),
+                    )
+                    self.conn.commit()
+                else:
+                    self.conn.rollback()
+                    raise
             except Exception:
                 self.conn.rollback()
                 raise
