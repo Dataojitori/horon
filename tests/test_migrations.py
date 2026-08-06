@@ -50,3 +50,32 @@ def test_new_database_records_bundled_migrations_without_reapplying_them(
         ].count("source_concept_id") == 1
     finally:
         db.close()
+
+
+def test_schema_initialized_db_applies_drop_column_migration_idempotently(
+    tmp_path, monkeypatch,
+):
+    import sqlite3
+    from pathlib import Path
+
+    db_path = tmp_path / "manual_schema.db"
+    schema_sql = Path("backend/schema.sql").read_text(encoding="utf-8")
+
+    # 手动使用最新的 schema.sql 初始化数据库（模拟外部创建或已抹除 unless 列的存量库）
+    conn = sqlite3.connect(db_path)
+    conn.executescript(schema_sql)
+    conn.close()
+
+    monkeypatch.setattr(db_module, "_DB_PATH", db_path)
+
+    # 实例化 HoronDB，应平滑应用 002_drop_unless 等迁移，不崩溃
+    db = db_module.HoronDB()
+    try:
+        versions = {
+            row["version"]
+            for row in db.conn.execute("SELECT version FROM schema_migrations").fetchall()
+        }
+        assert "002_drop_unless" in versions
+    finally:
+        db.close()
+

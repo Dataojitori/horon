@@ -103,15 +103,15 @@ def test_rename_system_concept_is_rejected(horon_db):
     assert "system-reserved concept" in str(excinfo.value)
 
 
-def test_search_by_tag_only(horon_db):
+def test_search_by_tag_and_query(horon_db):
     horon_db.create_concept("部署新版本")
     horon_db.create_concept("服务恢复")
     horon_db.create_concept("无关概念")
     horon_db.add("部署新版本", "tag", "plan")
     horon_db.add("服务恢复", "tag", "result")
 
-    goal_candidates = horon_db.search_concepts(tag_expr="result")
-    assert [c.name for c in goal_candidates] == ["服务恢复"]
+    goal_candidates = horon_db.search_concepts("服务", tag_expr="result")
+    assert [c.concept_name for c in goal_candidates] == ["服务恢复"]
 
 
 def test_search_intersects_query_and_tag(horon_db):
@@ -122,12 +122,17 @@ def test_search_intersects_query_and_tag(horon_db):
     horon_db.add("部署回滚", "tag", "plan")
 
     hits = horon_db.search_concepts("回滚", tag_expr="plan")
-    assert [c.name for c in hits] == ["部署回滚"]
+    assert [c.concept_name for c in hits] == ["部署回滚"]
 
 
-def test_search_requires_query_or_tag(horon_db):
+def test_search_requires_non_empty_query(horon_db):
     with pytest.raises(ValueError):
-        horon_db.search_concepts()
+        horon_db.search_concepts("")
+    with pytest.raises(ValueError):
+        horon_db.search_concepts("   ")
+    with pytest.raises(ValueError):
+        horon_db.search_concepts(None)
+
 
 
 def test_foreign_key_rejects_unregistered_tag_bypassing_app_layer(horon_db):

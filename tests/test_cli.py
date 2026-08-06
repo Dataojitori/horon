@@ -75,7 +75,7 @@ def test_cli_create_update_and_read_share_the_same_database(tmp_path):
     assert updated.returncode == 0
     assert read.returncode == 0
     assert "CONCEPT: Topic" in read.stdout
-    assert "Disclosure: short note" in read.stdout
+    assert "short note" in read.stdout
     assert "Content:\ntest content\nfirst content" in read.stdout
 
 
@@ -133,7 +133,7 @@ def test_cli_batch_reads_commands_from_file(tmp_path):
 
     assert result.returncode == 0
     assert "CONCEPT: Topic" in result.stdout
-    assert "Disclosure: from file" in result.stdout
+    assert "from file" in result.stdout
     assert "Content:\ntest content\nfile batch content" in result.stdout
 
 
@@ -308,3 +308,11 @@ def test_cli_rename_audit_uses_new_name_and_same_concept_id(tmp_path):
     assert row["short_code"] is None
     assert row["sub_action"] == "name"
     assert row["success"] == 1
+
+
+def test_raw_output_ends_with_newline(tmp_path):
+    db_path = init_cli_db(tmp_path)
+    run_cli(["create_concept", "Alpha", "--content", "match"], tmp_path, db_path=db_path)
+    res = run_cli(["search_concepts", "match"], tmp_path, db_path=db_path)
+    assert res.returncode == 0
+    assert res.stdout.endswith("\n")

@@ -16,7 +16,8 @@ def test_create_rename_and_alias_resolution(horon_db):
     result = horon_db.read_concept("Alias")
 
     assert result.name == "Renamed"
-    assert result.disclosure == "first meaning"
+    assert len(result.disclosures) == 1
+    assert result.disclosures[0].text == "first meaning"
     assert set(result.aliases) == {"Original", "Alias", "Renamed"}
 
 
@@ -234,8 +235,8 @@ def test_read_concept_groups_relations_and_surfaces_disclosures(horon_db):
             "NegatedOut",
         ],
     )
-    horon_db.set("Source", "disclosure", "source disclosure")
-    horon_db.set("Other", "disclosure", "other disclosure")
+    horon_db.add("Source", "disclosure", "source disclosure")
+    horon_db.add("Other", "disclosure", "other disclosure")
     set_relation(horon_db, "ConfirmedIn", "Source → Target")
     set_relation(horon_db, "HypothesisIn", "Other → Target", status=None)
     set_relation(horon_db, "NegatedOut", "Target → Other", status="negated")
@@ -243,10 +244,10 @@ def test_read_concept_groups_relations_and_surfaces_disclosures(horon_db):
     target = horon_db.read_concept("Target")
 
     assert [r.concept_name for r in target.inbound_confirmed] == ["ConfirmedIn"]
-    assert target.inbound_confirmed[0].members[0].disclosure == "source disclosure"
+    assert target.inbound_confirmed[0].members[0].disclosures[0].text == "source disclosure"
     assert [r.concept_name for r in target.inbound_hypotheses] == ["HypothesisIn"]
     assert [r.concept_name for r in target.outbound_negated] == ["NegatedOut"]
-    assert target.outbound_negated[0].members[0].disclosure == "other disclosure"
+    assert target.outbound_negated[0].members[0].disclosures[0].text == "other disclosure"
 
 
 

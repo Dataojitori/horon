@@ -4,13 +4,13 @@ from conftest import create_concepts, set_relation
 
 
 def names(results):
-    return [item.name for item in results]
+    return [item.concept_name for item in results]
 
 
 def test_search_matches_alias_disclosure_and_content(horon_db):
     create_concepts(horon_db, ["Topic", "Other", "ContentOnly"])
     horon_db.add("Topic", "name", "AliasNeedle")
-    horon_db.set("Other", "disclosure", "DisclosureNeedle is here")
+    horon_db.add("Other", "disclosure", "DisclosureNeedle is here")
     horon_db.update("ContentOnly", "content", "ContentNeedle is here")
 
     assert names(horon_db.search_concepts("AliasNeedle")) == ["Topic"]
@@ -18,11 +18,82 @@ def test_search_matches_alias_disclosure_and_content(horon_db):
     assert names(horon_db.search_concepts("ContentNeedle")) == ["ContentOnly"]
 
 
+# ── Structured match attribution tests ────────────────────────────────────────
+
+def test_search_match_attributes_alias(horon_db):
+    """Alias hit → field="alias", snippet=alias text."""
+    create_concepts(horon_db, ["Widget"])
+    horon_db.add("Widget", "name", "Gadget")
+
+    results = horon_db.search_concepts("Gadget")
+    assert len(results) == 1
+    alias_matches = [m for m in results[0].matches if m.field == "alias"]
+    assert len(alias_matches) == 1
+    assert alias_matches[0].target_id is None
+    assert "Gadget" in alias_matches[0].snippet
+
+
+def test_search_match_attributes_name(horon_db):
+    """Primary name hit → field="name"."""
+    create_concepts(horon_db, ["Haystack"])
+
+    results = horon_db.search_concepts("Hay")
+    assert len(results) == 1
+    name_matches = [m for m in results[0].matches if m.field == "name"]
+    assert len(name_matches) == 1
+    assert name_matches[0].target_id is None
+
+
+def test_search_match_attributes_disclosure_with_id(horon_db):
+    """Disclosure hit → target_id is the disclosure DB id (as string)."""
+    create_concepts(horon_db, ["Foo"])
+    horon_db.add("Foo", "disclosure", "secret sauce lives here")
+
+    results = horon_db.search_concepts("secret sauce")
+    assert len(results) == 1
+    disc_matches = [m for m in results[0].matches if m.field == "disclosure"]
+    assert len(disc_matches) == 1
+    assert disc_matches[0].target_id is not None
+    assert disc_matches[0].target_id.isdigit()
+    assert "secret sauce" in disc_matches[0].snippet
+
+
+def test_search_match_attributes_variation_with_short_code(horon_db):
+    """Variation content hit → target_id is the short_code."""
+    create_concepts(horon_db, ["Bar"])
+    horon_db.update("Bar", "content", "hidden gem inside variation")
+
+    results = horon_db.search_concepts("hidden gem")
+    assert len(results) == 1
+    var_matches = [m for m in results[0].matches if m.field == "variation"]
+    assert len(var_matches) == 1
+    assert var_matches[0].target_id is not None
+    assert len(var_matches[0].target_id) == 4  # token_hex(2)
+    assert "hidden gem" in var_matches[0].snippet
+
+
+def test_search_respects_limit(horon_db):
+    """search_concepts respects the limit parameter."""
+    create_concepts(horon_db, ["Item1", "Item2", "Item3"])
+    results = horon_db.search_concepts("Item", limit=2)
+    assert len(results) == 2
+
+
+def test_search_respects_limit_with_tag_expr(horon_db):
+    create_concepts(horon_db, ["TagItem1", "TagItem2", "TagItem3"])
+    horon_db.add("TagItem1", "tag", "plan")
+    horon_db.add("TagItem2", "tag", "plan")
+    horon_db.add("TagItem3", "tag", "plan")
+    results = horon_db.search_concepts("TagItem", tag_expr="plan", limit=2)
+    assert len(results) == 2
+
+
+
 def test_search_treats_percent_and_underscore_as_literal_characters(horon_db):
     create_concepts(horon_db, ["Alpha", "Beta", "Gamma"])
-    horon_db.set("Alpha", "disclosure", "literal 100% marker")
-    horon_db.set("Beta", "disclosure", "literal a_b marker")
-    horon_db.set("Gamma", "disclosure", "plain marker")
+    horon_db.add("Alpha", "disclosure", "literal 100% marker")
+    horon_db.add("Beta", "disclosure", "literal a_b marker")
+    horon_db.add("Gamma", "disclosure", "plain marker")
 
     assert names(horon_db.search_concepts("100%")) == ["Alpha"]
     assert names(horon_db.search_concepts("a_b")) == ["Beta"]
@@ -30,7 +101,7 @@ def test_search_treats_percent_and_underscore_as_literal_characters(horon_db):
 
 def test_search_treats_backslash_as_literal_character(horon_db):
     horon_db.create_concept("Path")
-    horon_db.set("Path", "disclosure", r"stored at C:\tmp\horon")
+    horon_db.add("Path", "disclosure", r"stored at C:\tmp\horon")
 
     assert names(horon_db.search_concepts(r"C:\tmp")) == ["Path"]
 

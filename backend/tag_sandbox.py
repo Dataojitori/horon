@@ -175,13 +175,13 @@ class ConceptProxy:
 
     def __init__(self, concept_id: int, *,
                  fetch_name: Callable[[], str],
-                 fetch_disclosure: Callable[[], str | None],
+                 fetch_disclosures: Callable[[], list[str]] | None = None,
                  fetch_tags: Callable[[], list[str]],
                  fetch_variations: Callable[[], list],
                  fetch_used_in_variations: Callable[[], list]):
         self.concept_id = concept_id
         self._fetch_name = fetch_name
-        self._fetch_disclosure = fetch_disclosure
+        self._fetch_disclosures = fetch_disclosures
         self._fetch_tags = fetch_tags
         self._fetch_variations = fetch_variations
         self._fetch_used_in_variations = fetch_used_in_variations
@@ -194,10 +194,10 @@ class ConceptProxy:
         return self._cache["name"]
 
     @property
-    def disclosure(self) -> str | None:
-        if "disclosure" not in self._cache:
-            self._cache["disclosure"] = self._fetch_disclosure()
-        return self._cache["disclosure"]
+    def disclosures(self) -> list[str]:
+        if "disclosures" not in self._cache:
+            self._cache["disclosures"] = self._fetch_disclosures() if self._fetch_disclosures is not None else []
+        return self._cache["disclosures"]
 
     @property
     def tags(self) -> list[str]:
@@ -304,11 +304,18 @@ class MutationContext:
     """Context passed to on_mutation(ctx)."""
 
     def __init__(self, tag_name: str, this_proxy: ConceptProxy,
-                 changed: dict | None):
+                 changed: dict | None,
+                 get_concept: Callable[[int], ConceptProxy] | None = None):
         self.tag_name = tag_name
         self.this = this_proxy
         self.changed = changed if changed is not None else {}
+        self._get_concept = get_concept
         self._infos: list[str] = []
+
+    def get_concept(self, concept_id: int) -> ConceptProxy:
+        if self._get_concept is None:
+            raise RuntimeError("get_concept is not available.")
+        return self._get_concept(concept_id)
 
     def reject(self, msg: str) -> None:
         raise HookRejection(msg)
@@ -325,10 +332,17 @@ class MutationContext:
 class AuditContext:
     """Context passed to audit_cluster(ctx)."""
 
-    def __init__(self, tag_name: str, cluster_proxy: ClusterProxy):
+    def __init__(self, tag_name: str, cluster_proxy: ClusterProxy,
+                 get_concept: Callable[[int], ConceptProxy] | None = None):
         self.tag_name = tag_name
         self.cluster = cluster_proxy
+        self._get_concept = get_concept
         self._warnings: list[str] = []
+
+    def get_concept(self, concept_id: int) -> ConceptProxy:
+        if self._get_concept is None:
+            raise RuntimeError("get_concept is not available.")
+        return self._get_concept(concept_id)
 
     def warn(self, msg: str) -> None:
         self._warnings.append(msg)

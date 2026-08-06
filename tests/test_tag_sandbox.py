@@ -465,6 +465,73 @@ def test_no_reload_within_transaction(horon_db, plugin_dir, monkeypatch):
     assert p2 is not p
 
 
+def test_mtime_hot_reload_before_transaction(horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    plugin_path = plugin_dir / "pretx.py"
+    plugin_path.write_text(
+        "V = 'original'\ndef on_mutation(ctx): ctx.info(V)\n"
+        "def audit_cluster(ctx): pass\n")
+    horon_db.conn.execute("INSERT INTO tags (name, source_concept_id) VALUES ('pretx', NULL)")
+    horon_db.conn.commit()
+
+    horon_db.create_concept("PreTxConcept")
+    horon_db._get_plugin("pretx")  # warm cache
+
+    time.sleep(0.05)
+    # File is modified BEFORE transaction starts
+    plugin_path.write_text(
+        "V = 'modified'\ndef on_mutation(ctx): ctx.info(V)\n"
+        "def audit_cluster(ctx): pass\n")
+
+    @db_module.transactional
+    def run_txn(self):
+        p = self._get_plugin("pretx")
+        return p
+
+    p = run_txn(horon_db)
+    assert p is not None
+    
+    # We need a proper context to test it
+    proxy = ConceptProxy(1, fetch_name=lambda: "test", fetch_disclosures=lambda: [], fetch_tags=lambda: ["pretx"], fetch_variations=lambda: [], fetch_used_in_variations=lambda: [])
+    ctx = MutationContext("pretx", proxy, {})
+    p["on_mutation"](ctx)
+    assert "modified" in ctx._infos
+
+
+def test_mtime_exception_resets_transaction_state(horon_db, plugin_dir, monkeypatch):
+    import backend.tag_sandbox as sandbox_mod
+    monkeypatch.setattr(sandbox_mod, "_PLUGINS_DIR", plugin_dir)
+    plugin_path = plugin_dir / "errtx.py"
+    plugin_path.write_text(
+        "def on_mutation(ctx): pass\ndef audit_cluster(ctx): pass\n")
+    horon_db.conn.execute("INSERT INTO tags (name, source_concept_id) VALUES ('errtx', NULL)")
+    horon_db.conn.commit()
+
+    horon_db.create_concept("ErrTxConcept")
+    horon_db._get_plugin("errtx")  # warm cache
+
+    # Mock stat to raise an exception
+    original_stat = Path.stat
+    def mock_stat(self, *args, **kwargs):
+        if self.name == "errtx.py":
+            raise OSError("simulated stat error")
+        return original_stat(self, *args, **kwargs)
+    
+    monkeypatch.setattr(Path, "stat", mock_stat)
+
+    @db_module.transactional
+    def run_txn(self):
+        pass
+
+    with pytest.raises(OSError, match="simulated stat error"):
+        run_txn(horon_db)
+
+    # The crucial check: _in_transaction should be False
+    assert not getattr(horon_db, "_in_transaction", False)
+
+
+
 # ── 26: Exception class whitelist ────────────────────────────────────────────
 
 def test_exception_class_whitelist(horon_db, plugin_dir, monkeypatch):
@@ -494,7 +561,7 @@ def test_try_except_in_plugin(plugin_dir):
     plugin = load_plugin("trier")
     proxy = ConceptProxy(1,
         fetch_name=lambda: "test",
-        fetch_disclosure=lambda: None,
+        fetch_disclosures=lambda: [],
         fetch_tags=lambda: ["trier"],
         fetch_variations=lambda: [],
         fetch_used_in_variations=lambda: [])
@@ -773,3 +840,28 @@ def test_audit_clusters_report_sweep_ignores_unregistered_tags(horon_db, plugin_
     # 全量审计不应出现已注销的 tag
     report = horon_db.audit_clusters_report()
     assert "deletedtag" not in report
+
+
+def test_concept_proxy_disclosures_returns_str_list(horon_db):
+    horon_db.create_concept("disc_concept", disclosure="first disc")
+    horon_db._add_disclosure("disc_concept", "second disc")
+
+    cid = horon_db._resolve_id("disc_concept")[0]
+    proxy = horon_db._make_concept_proxy(cid)
+
+    # Test that disclosures property returns list of strings directly
+    disclosures = proxy.disclosures
+    assert disclosures == ["first disc", "second disc"]
+    assert all(isinstance(d, str) for d in disclosures)
+
+    # Test fallback when fetch_disclosures is None
+    fallback_proxy = ConceptProxy(
+        concept_id=999,
+        fetch_name=lambda: "test",
+        fetch_disclosures=None,
+        fetch_tags=lambda: [],
+        fetch_variations=lambda: [],
+        fetch_used_in_variations=lambda: [],
+    )
+    assert fallback_proxy.disclosures == []
+
