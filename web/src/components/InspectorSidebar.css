@@ -97,6 +97,44 @@
   color: var(--text-secondary);
 }
 
+/* ── Reminders ─────────────────────── */
+
+.reminder-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.reminder-msg {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+}
+
+.reminder-condition {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.reminder-condition code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-blue);
+  background: rgba(74, 158, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 3px;
+  word-break: break-all;
+}
+
+.reminder-fired {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
 /* ── Variation cards ───────────────── */
 
 .variation-card {

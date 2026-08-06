@@ -1,4 +1,4 @@
-import type { GraphData, ConceptDetail, NeighborhoodData } from "./types";
+import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult } from "./types";
 
 const BASE = "/api";
 
@@ -21,5 +21,5 @@ export const api = {
     fetchJSON<NeighborhoodData>(`${BASE}/neighborhood/${id}`),
 
   searchConcepts: (q: string) =>
-    fetchJSON<ConceptDetail[]>(`${BASE}/concepts/search?q=${encodeURIComponent(q)}`),
+    fetchJSON<ConceptSearchResult[]>(`${BASE}/concepts/search?q=${encodeURIComponent(q)}`),
 };

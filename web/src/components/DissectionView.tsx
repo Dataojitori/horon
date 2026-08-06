@@ -11,7 +11,7 @@ import {
   type SimulationLinkDatum,
 } from "d3-force";
 import { api } from "../api";
-import type { NeighborhoodData, ConceptDetail } from "../types";
+import type { NeighborhoodData, ConceptDetail, DisclosureDetail } from "../types";
 import "./DissectionView.css";
 
 interface Props {
@@ -38,6 +38,10 @@ interface SimLink extends SimulationLinkDatum<SimNode> {
   relation_name?: string;
 }
 
+function joinDisclosures(discs?: DisclosureDetail[]): string | null {
+  return discs && discs.length > 0 ? discs.map((d) => d.text).join("; ") : null;
+}
+
 // Helper to extract unique internal members of a focal concept's variations
 const getInternalMembers = (focalConcept: ConceptDetail) => {
   const map = new Map<number, { id: number; name: string; disclosure: string | null }>();
@@ -48,7 +52,7 @@ const getInternalMembers = (focalConcept: ConceptDetail) => {
           map.set(m.concept_id, {
             id: m.concept_id,
             name: m.name,
-            disclosure: m.disclosure,
+            disclosure: joinDisclosures(m.disclosures),
           });
         }
       });
@@ -170,7 +174,7 @@ export default function DissectionView({
     const focalNode: SimNode = {
       id: focalConcept.id,
       name: focalConcept.name,
-      disclosure: focalConcept.disclosure,
+      disclosure: joinDisclosures(focalConcept.disclosures),
       isFocal: true,
       isInternal: false,
       degree: 0,
@@ -211,7 +215,7 @@ export default function DissectionView({
       nodes.push({
         id: n.id,
         name: n.name,
-        disclosure: n.disclosure,
+        disclosure: joinDisclosures(n.disclosures),
         isFocal: false,
         isInternal: false,
         degree: n.degree,

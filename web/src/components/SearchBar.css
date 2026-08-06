@@ -61,7 +61,7 @@
   color: var(--text-primary);
 }
 
-.search-disclosure {
+.search-snippet {
   font-size: 11px;
   color: var(--text-dim);
   overflow: hidden;

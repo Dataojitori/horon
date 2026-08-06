@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { api } from "../api";
+import type { ConceptSearchResult } from "../types";
 import "./SearchBar.css";
 
 interface Props {
@@ -9,7 +10,7 @@ interface Props {
 interface SearchResult {
   id: number;
   name: string;
-  disclosure: string | null;
+  snippet: string | null;
 }
 
 export default function SearchBar({ onSelect }: Props) {
@@ -33,10 +34,10 @@ export default function SearchBar({ onSelect }: Props) {
       .searchConcepts(q)
       .then((res) => {
         if (reqId !== searchRequestId.current) return;
-        const mapped = res.map((c: SearchResult) => ({
-          id: c.id,
-          name: c.name,
-          disclosure: c.disclosure,
+        const mapped = res.map((c: ConceptSearchResult) => ({
+          id: c.concept_id,
+          name: c.concept_name,
+          snippet: c.matches && c.matches.length > 0 ? c.matches[0].snippet : null,
         }));
         setResults(mapped);
         setOpen(mapped.length > 0);
@@ -120,8 +121,8 @@ export default function SearchBar({ onSelect }: Props) {
               onMouseEnter={() => setActiveIdx(i)}
             >
               <span className="search-name">{r.name}</span>
-              {r.disclosure && (
-                <span className="search-disclosure">{r.disclosure}</span>
+              {r.snippet && (
+                <span className="search-snippet">{r.snippet}</span>
               )}
             </div>
           ))}

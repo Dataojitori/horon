@@ -26,8 +26,14 @@ export default function InspectorSidebar({ concept, open, onClose }: Props) {
       </div>
 
       <div className="inspector-body">
-        {concept.disclosure && (
-          <p className="inspector-disclosure">{concept.disclosure}</p>
+        {concept.disclosures && concept.disclosures.length > 0 && (
+          <div className="inspector-disclosures">
+            {concept.disclosures.map((d) => (
+              <p key={d.id} className="inspector-disclosure">
+                #{d.id}: {d.text}
+              </p>
+            ))}
+          </div>
         )}
 
         {concept.aliases.length > 0 && (
@@ -38,6 +44,28 @@ export default function InspectorSidebar({ concept, open, onClose }: Props) {
                 <span key={a} className="alias-tag">
                   {a}
                 </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {concept.reminders && concept.reminders.length > 0 && (
+          <div className="inspector-section">
+            <h3 className="section-label">Reminders</h3>
+            <div className="reminder-list">
+              {concept.reminders.map((r) => (
+                <div key={r.id} className="reminder-card">
+                  <div className="reminder-msg">#{r.id}: {r.message}</div>
+                  <div className="reminder-condition">
+                    <span className="field-label">When</span>
+                    <code>{r.condition}</code>
+                  </div>
+                  {r.last_fired_at && (
+                    <div className="reminder-fired">
+                      Last fired: {r.last_fired_at}
+                    </div>
+                  )}
+                </div>
               ))}
             </div>
           </div>
