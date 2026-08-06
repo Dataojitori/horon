@@ -19,18 +19,24 @@ class ConceptMixin:
 
         Args:
             name: 概念名（自動注冊為 alias）。
-            disclosure: 一句話觸發條件。
+            disclosure: 初始書腰（写入 disclosures 表）。
             content: 初始正文。
         """
         name = _validate_name(name)
         self._check_name_available(name)
         now = _now()
         cursor = self.conn.execute(
-            "INSERT INTO concepts (name, disclosure, created_at, updated_at) "
-            "VALUES (?,?,?,?)",
-            (name, disclosure, now, now),
+            "INSERT INTO concepts (name, created_at, updated_at) "
+            "VALUES (?,?,?)",
+            (name, now, now),
         )
         concept_id = cursor.lastrowid
+        if disclosure and disclosure.strip():
+            self.conn.execute(
+                "INSERT INTO disclosures (concept_id, text, created_at) "
+                "VALUES (?,?,?)",
+                (concept_id, disclosure.strip(), now),
+            )
         sc = secrets.token_hex(2)
         self.conn.execute(
             "INSERT INTO variations "
@@ -264,9 +270,12 @@ class ConceptMixin:
         res = self.create_concept(final_name)
         set_res = self._set_expression(final_name, expression)
 
+        plugin_part = set_res.message.partition("Status was also reset to null.")[2]
+
         set_res.message = (
             f"Success. Created concept '{final_name}' (id={res.concept_id}) "
             f"to represent this relation.\n"
             f"Variation {set_res.short_code} expression: {expression}"
+            + plugin_part
         )
         return set_res

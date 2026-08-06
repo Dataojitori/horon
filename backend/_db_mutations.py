@@ -18,15 +18,17 @@ class MutationMixin:
     # ── Add ──────────────────────────────────────────────────────────────────
 
     def add(self, concept, kind: str, value: str) -> MutationResult:
-        """给概念添加 name（别名）、variation（变种）或 tag（分类标签）。"""
+        """给概念添加 name（别名）、variation（变种）、tag（分类标签）或 disclosure（书腰）。"""
         if kind == "name":
             return self._add_name(concept, value)
         elif kind == "variation":
             return self._add_variation(concept, value)
         elif kind == "tag":
             return self._add_tag(concept, value)
+        elif kind == "disclosure":
+            return self._add_disclosure(concept, value)
         raise ValueError(
-            f"Unknown type: '{kind}'. Use 'name', 'variation' or 'tag'.")
+            f"Unknown type: '{kind}'. Use 'name', 'variation', 'tag' or 'disclosure'.")
 
     @transactional
     def _add_name(self, concept, name: str) -> MutationResult:
@@ -100,9 +102,17 @@ class MutationMixin:
         diff = {"variations": {"added": [
             {"concept_id": cid, "short_code": sc, "type": vtype, "members": member_ids}
         ], "removed": []}}
+        
+        existing_members = self.conn.execute(
+            "SELECT DISTINCT member_concept_id FROM compose_members WHERE concept_id=?",
+            (cid,)
+        ).fetchall()
+        existing_member_ids = [r["member_concept_id"] for r in existing_members]
+
         all_infos: list[str] = []
         all_infos.extend(self._run_mutation_hooks(cid, diff))
-        for mid in set(member_ids):
+        all_affected = set(member_ids) | set(existing_member_ids)
+        for mid in all_affected:
             all_infos.extend(self._run_mutation_hooks(mid, diff))
 
         msg = f"Success. Added variation {sc} to {label}."
@@ -161,6 +171,31 @@ class MutationMixin:
             concept_id=cid, concept_name=cname,
         )
 
+    @transactional
+    def _add_disclosure(self, concept, text: str) -> MutationResult:
+        """给概念追加一条 disclosure（书腰）。"""
+        text = text.strip()
+        if not text:
+            raise ValueError("Disclosure text cannot be empty.")
+        cid, _ = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
+        now = _now()
+        cursor = self.conn.execute(
+            "INSERT INTO disclosures (concept_id, text, created_at) "
+            "VALUES (?,?,?)",
+            (cid, text, now),
+        )
+        disc_id = cursor.lastrowid
+        self.conn.execute(
+            "UPDATE concepts SET updated_at=? WHERE id=?", (now, cid))
+        diff = {"disclosures": {"added": [{"concept_id": cid, "text": text}], "removed": []}}
+        self._run_mutation_hooks(cid, diff)
+        return MutationResult(
+            message=f"Success. Added disclosure #{disc_id} to {label}: {text}",
+            concept_id=cid, concept_name=cname,
+        )
+
     # ── Delete ───────────────────────────────────────────────────────────────
 
     def delete(self, target, kind: str | None = None,
@@ -171,6 +206,7 @@ class MutationMixin:
         name:       删除别名（value=要删的别名，必填）。
         expression: 清除组合回原子态（target 为概念名或 概念:sc）。
         tag:        揭掉概念上的 tag（value=要揭的 tag，必填）。
+        disclosure: 删除一条书腰（value=disclosure 的 DB id，必填）。
         """
         if kind is None:
             return self._delete_variation(target)
@@ -188,9 +224,13 @@ class MutationMixin:
             if value is None:
                 raise ValueError("Specify which tag to delete.")
             return self._delete_tag(target, value)
+        elif kind == "disclosure":
+            if value is None:
+                raise ValueError("Specify which disclosure ID to delete.")
+            return self._delete_disclosure(target, value)
         raise ValueError(
             f"Unknown type: '{kind}'. "
-            f"Use 'name', 'expression' or 'tag'.")
+            f"Use 'name', 'expression', 'tag' or 'disclosure'.")
 
     @transactional
     def _delete_name(self, concept, name: str) -> MutationResult:
@@ -249,6 +289,38 @@ class MutationMixin:
         self._run_mutation_hook_for_tag(cid, tag, diff)
         return MutationResult(
             message=f"Success. Removed tag '{tag}' from {label}.",
+            concept_id=cid, concept_name=cname,
+        )
+
+    @transactional
+    def _delete_disclosure(self, concept, disc_id_str: str) -> MutationResult:
+        """删除一条 disclosure by DB id。"""
+        try:
+            disc_id = int(disc_id_str)
+        except (ValueError, TypeError):
+            raise ValueError(
+                f"Disclosure ID must be an integer, got: '{disc_id_str}'.")
+        cid, _ = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
+        row = self.conn.execute(
+            "SELECT id, concept_id, text FROM disclosures WHERE id = ?",
+            (disc_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError(f"No disclosure with id #{disc_id}.")
+        if row["concept_id"] != cid:
+            raise ValueError(
+                f"Disclosure #{disc_id} belongs to concept "
+                f"{row['concept_id']}, not {label}.")
+        old_text = row["text"]
+        self.conn.execute("DELETE FROM disclosures WHERE id = ?", (disc_id,))
+        self.conn.execute(
+            "UPDATE concepts SET updated_at=? WHERE id=?", (_now(), cid))
+        diff = {"disclosures": {"added": [], "removed": [{"concept_id": cid, "text": old_text}]}}
+        self._run_mutation_hooks(cid, diff)
+        return MutationResult(
+            message=f"Success. Removed disclosure #{disc_id} from {label}.",
             concept_id=cid, concept_name=cname,
         )
 
@@ -466,9 +538,12 @@ class MutationMixin:
     # ── Set ──────────────────────────────────────────────────────────────────
 
     def set(self, target, prop: str, value: str) -> MutationResult:
-        """设置属性：disclosure、status、name（rename）、expression。"""
+        """设置属性：status、name（rename）、expression。"""
         if prop == "disclosure":
-            return self._set_disclosure(target, value)
+            raise ValueError(
+                "Disclosure is now multi-valued. "
+                "Use 'add <concept> disclosure \"text\"' to append, "
+                "or 'delete <concept> disclosure <id>' to remove.")
         elif prop == "status":
             return self._set_status(target, value)
         elif prop == "name":
@@ -477,30 +552,7 @@ class MutationMixin:
             return self._set_expression(target, value)
         raise ValueError(
             f"Unknown property: '{prop}'. "
-            f"Use 'disclosure', 'status', 'name', or 'expression'.")
-
-    @transactional
-    def _set_disclosure(self, concept, text: str) -> MutationResult:
-        cid, _ = self._resolve_id(concept)
-        cname = self._resolve_concept_name(cid)
-        label = f"'{concept}' ('{cname}', id={cid})"
-        text = text.strip()
-        if not text:
-            raise ValueError("Disclosure cannot be empty.")
-        old_row = self.conn.execute(
-            "SELECT disclosure FROM concepts WHERE id=?", (cid,)
-        ).fetchone()
-        old_val = old_row["disclosure"] if old_row else None
-        self.conn.execute(
-            "UPDATE concepts SET disclosure=?, updated_at=? WHERE id=?",
-            (text, _now(), cid),
-        )
-        diff = {"disclosure": {"concept_id": cid, "old": old_val, "new": text}}
-        self._run_mutation_hooks(cid, diff)
-        return MutationResult(
-            message=f"Success. Disclosure for {label} set to: {text}",
-            concept_id=cid, concept_name=cname,
-        )
+            f"Use 'status', 'name', or 'expression'.")
 
     @transactional
     def _set_status(self, node, value: str) -> MutationResult:

@@ -7,6 +7,7 @@ Usage:
 
 import argparse
 import json
+import logging
 import os
 import shlex
 import sqlite3
@@ -242,8 +243,16 @@ def _format_read_concept(result: ReadResult) -> str:
     if alt_names:
         lines.append(f"Also known as: {', '.join(alt_names)}")
 
-    disc = result.disclosure if result.disclosure else "(not set)"
-    lines.append(f"Disclosure: {disc}")
+    if result.disclosures:
+        if len(result.disclosures) == 1:
+            d = result.disclosures[0]
+            lines.append(f"Disclosure #{d.id}: {d.text}")
+        else:
+            lines.append("Disclosures:")
+            for d in result.disclosures:
+                lines.append(f"  #{d.id}: {d.text}")
+    else:
+        lines.append("Disclosures: (none)")
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
     if result.tag_source_info:
@@ -283,12 +292,12 @@ def _format_read_concept(result: ReadResult) -> str:
         out = [f"  * {group_name}:"]
         for item in items:
             out.append(f"    - {item.expression} (Concept ID: {item.concept_id}, Name: '{item.concept_name}')")
-            # 关系另一端的成员列表，逐个展示有 disclosure 的。
             for member in item.members:
-                if member.disclosure:
+                if member.disclosures:
+                    disc_texts = "; ".join(d.text for d in member.disclosures)
                     out.append(
                         f"      Disclosure ({member.concept_name}): "
-                        f"{member.disclosure}")
+                        f"{disc_texts}")
         return out
 
     inbound_lines = []
@@ -317,6 +326,13 @@ def _format_read_concept(result: ReadResult) -> str:
     else:
         lines.append("  (empty)")
 
+    if result.suggested_next:
+        lines.append("")
+        lines.append("[ YOU MAY ALSO NEED ]")
+        for s in result.suggested_next:
+            lines.append(
+                f"  {s.concept_name} (ID: {s.concept_id}, weight: {s.weight})")
+
     lines.append("")
     lines.append("=" * 60)
 
@@ -344,6 +360,8 @@ def _print(obj):
         print("done")
     elif isinstance(obj, RawOutput):
         sys.stdout.write(obj.content)
+        if not obj.content.endswith("\n"):
+            sys.stdout.write("\n")
     elif isinstance(obj, str):
         print(obj)
     else:
@@ -539,33 +557,35 @@ def _build_parser():
 
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
-    p.add_argument("query", nargs="?", default=None)
+    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and variations")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
+    p.add_argument("--limit", type=int, default=50,
+                   help="Maximum number of concepts to return (default: 50)")
+
 
     # list_concepts
     p = sub.add_parser("list_concepts", allow_abbrev=False)
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
-    # add (name / variation / tag)
+    # add (name / variation / tag / disclosure)
     p = sub.add_parser("add", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("kind", choices=["name", "variation", "tag"])
+    p.add_argument("kind", choices=["name", "variation", "tag", "disclosure"])
     p.add_argument("value")
 
-    # delete (default=variation, or name/expression/tag)
+    # delete (default=variation, or name/expression/tag/disclosure)
     p = sub.add_parser("delete", allow_abbrev=False)
     p.add_argument("target")
     p.add_argument("kind", nargs="?", default=None,
-                   choices=["name", "expression", "tag"])
+                   choices=["name", "expression", "tag", "disclosure"])
     p.add_argument("value", nargs="?", default=None)
 
-    # set (disclosure, status, name)
+    # set (status, name, expression)
     p = sub.add_parser("set", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("prop", choices=["disclosure", "status", "name",
-                                     "expression"])
+    p.add_argument("prop", choices=["status", "name", "expression"])
     p.add_argument("value")
 
     # update (content — patch or append)
@@ -684,7 +704,25 @@ def _dispatch(args, db):
             raise ValueError("specify a tag name or use --all to audit all clusters")
 
     elif args.command == "search_concepts":
-        return db.search_concepts(args.query, tag_expr=args.tag)
+        results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
+
+        if not results:
+            return RawOutput("(no results)")
+        lines = []
+        for r in results:
+            lines.append(f"[{r.concept_id}] {r.concept_name}")
+            for m in r.matches:
+                if m.field == "name":
+                    lines.append("     \u21b3 Name")
+                elif m.field == "alias":
+                    lines.append(f'     \u21b3 Alias: "{m.snippet}"')
+                elif m.field == "disclosure":
+                    lines.append(
+                        f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
+                elif m.field == "variation":
+                    lines.append(
+                        f'     \u21b3 Variation [{m.target_id}]: "{m.snippet}"')
+        return RawOutput("\n".join(lines))
 
     elif args.command == "list_concepts":
         overviews = db.get_all_concepts_overview(tag_expr=args.tag)
@@ -737,7 +775,13 @@ def _dispatch(args, db):
         return db.update(args.node, args.field, resolved)
 
     elif args.command == "read_concept":
-        return db.read_concept(args.concept)
+        result = db.read_concept(args.concept)
+        try:
+            db.record_transition(result.id)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "record_transition failed", exc_info=True)
+        return result
 
     elif args.command == "read_memory":
         content = _read_nocturne_memory(args.uri)

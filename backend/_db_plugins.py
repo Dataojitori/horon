@@ -49,11 +49,13 @@ class PluginMixin:
             ).fetchone()
             return row["name"] if row else ""
 
-        def fetch_disclosure():
-            row = conn.execute(
-                "SELECT disclosure FROM concepts WHERE id=?", (concept_id,)
-            ).fetchone()
-            return row["disclosure"] if row else None
+        def fetch_disclosures():
+            rows = conn.execute(
+                "SELECT text FROM disclosures "
+                "WHERE concept_id=? ORDER BY id",
+                (concept_id,)
+            ).fetchall()
+            return [r["text"] for r in rows]
 
         def fetch_tags():
             rows = conn.execute(
@@ -82,7 +84,7 @@ class PluginMixin:
         return ConceptProxy(
             concept_id,
             fetch_name=fetch_name,
-            fetch_disclosure=fetch_disclosure,
+            fetch_disclosures=fetch_disclosures,
             fetch_tags=fetch_tags,
             fetch_variations=fetch_variations,
             fetch_used_in_variations=fetch_used_in_variations,
@@ -171,7 +173,7 @@ class PluginMixin:
         if plugin is None:
             return []
         proxy = self._make_concept_proxy(concept_id)
-        ctx = MutationContext(tag, proxy, changed)
+        ctx = MutationContext(tag, proxy, changed, get_concept=self._make_concept_proxy)
         try:
             plugin["on_mutation"](ctx)
         except HookRejection as e:
@@ -202,7 +204,7 @@ class PluginMixin:
         plugin = self._get_plugin(tag_name)
         if plugin is None:
             return []
-        ctx = AuditContext(tag_name, self._make_cluster_proxy(tag_name))
+        ctx = AuditContext(tag_name, self._make_cluster_proxy(tag_name), get_concept=self._make_concept_proxy)
         plugin["audit_cluster"](ctx)
         return ctx._warnings
 

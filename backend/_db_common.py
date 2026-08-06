@@ -134,20 +134,21 @@ def transactional(method):
     def wrapper(self, *args, **kwargs):
         if getattr(self, '_in_transaction', False):
             return method(self, *args, **kwargs)
-        
-        if hasattr(self, '_plugin_cache'):
-            for tag, (cached_plugin, cached_mtime) in self._plugin_cache.items():
-                filepath = tag_sandbox._PLUGINS_DIR / f"{tag}.py"
-                current_mtime = filepath.stat().st_mtime if filepath.exists() else None
-                if current_mtime != cached_mtime:
-                    self._plugin_cache[tag] = (load_plugin(tag), current_mtime)
 
         self._in_transaction = True
-        self._txn_plugin_snapshot = {
-            tag: cached_plugin
-            for tag, (cached_plugin, _mtime) in getattr(self, '_plugin_cache', {}).items()
-        }
+        
         try:
+            # Pre-check mtime for all cached plugins to ensure snapshot is up-to-date.
+            # If a plugin file was modified, we omit it from the snapshot so that
+            # the first access within the transaction will reload it.
+            snapshot = {}
+            for tag, (cached_plugin, cached_mtime) in getattr(self, '_plugin_cache', {}).items():
+                filepath = tag_sandbox._PLUGINS_DIR / f"{tag}.py"
+                current_mtime = filepath.stat().st_mtime if filepath.exists() else None
+                if current_mtime == cached_mtime:
+                    snapshot[tag] = cached_plugin
+            self._txn_plugin_snapshot = snapshot
+            
             with self.conn:
                 return method(self, *args, **kwargs)
         finally:
