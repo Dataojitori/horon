@@ -4,6 +4,8 @@ __pycache__/
 *.db
 .pytest_cache/
 .claude/
+.vscode/
+_snapshots/
 # Agents & Skills whitelist
 .agents/*
 !.agents/skills/

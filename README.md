@@ -248,9 +248,9 @@ compile --assume A C --block B --constraints D E --goal G
 
 ### 概念 CRUD
 - `create_concept(name, disclosure?)` → ConceptDetail（创建概念 + 默认 variation，name 自动注册为 alias）
-- `add(target, kind, value)` — 给概念添加别名 (`name`) 或组合关系变体 (`variation`)
-- `delete(target, kind?, value?)` — 删除操作。缺省删 variation，也可指定删 `name` 或清除关系组合回到原子态 (`expression`)
-- `set(target, prop, value)` — 设置属性，支持 `disclosure`, `status`, `name` (重命名) 或重写当前 variation 的 `expression`
+- `add(target, kind, value)` — 给概念添加别名 (`name`)、组合关系变体 (`variation`)、标签 (`tag`) 或书腰 (`disclosure`)
+- `delete(target, kind?, value?)` — 删除操作。缺省删 variation，也可指定删 `name`、`expression`、`tag` 或 `disclosure` (ID)
+- `set(target, prop, value)` — 设置属性，支持 `status`, `name` (重命名) 或重写当前 variation 的 `expression`
 - `update(node, field)` — 给 variation 写 `content`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
   - **patch**（`--old` + `--new`，含 `-file` 变体）：局部修改
   - **append**（`--append`，含 `-file` 变体）：在已有内容末尾换行追加

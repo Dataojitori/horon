@@ -119,6 +119,7 @@ def audit_cluster(ctx):
 - **`ctx.this`** (`ConceptProxy`): 被检查或被卷入的概念代理（惰性、只读）。
   - `.concept_id` (`int`)
   - `.name` (`str`)
+  - `.disclosures` (`list[str]`): 所有书腰文本列表
   - `.tags` (`list[str]`)
   - `.variations` (`list[VariationProxy]`): 本概念的变体列表。
   - `.used_in_variations` (`list[VariationProxy]`): 本概念被作为成员链入的所有外部变体。

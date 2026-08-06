@@ -67,23 +67,25 @@ CLI 是专门为你打造的**有限且安全的操作边界**。如果本意是
 
 ### 基础检索与读写
 - `list_concepts([--tag "表达式"])` —— 列出所有概念。`--tag` 接受表达式：`--tag "鳥類 & 会飛"`（AND，同时带两个标签）或 `--tag "鳥類 | 会飛"`（OR，带其中任一个）。单个 tag 直接写：`--tag plan`。
-- `search_concepts(query, [--tag "表达式"])` —— 模糊搜索。`--tag` 语法同上。至少给一个 query 或 `--tag`。
+- `search_concepts(query, [--tag "表达式"])` —— 按关键词模糊搜索（query 必填）。可选 `--tag` 按标签过滤（语法同上）、`--limit N` 限制返回数量。
 - `read_concept(concept)` —— → 概念全貌及上下游关系、Tags 等。
 - `create_concept(name, --disclosure, --content)` —— 建一个自带原子变体的新概念；name 自动注册为 alias。**`--content` 必填**——必须写清"为什么建这个概念、观察到了什么"。空字符串会被拒绝。这条约束的目的是防止空壳节点扩散：如果你在建的那一刻说不出它为什么需要存在，那它就不该存在。
-- `set(concept, prop, value)` —— 填充或重写属性。prop ∈ `disclosure` / `status` / `name` / `expression`。
+- `set(concept, prop, value)` —— 填充或重写属性。prop ∈ `status` / `name` / `expression`。（注：书腰已升级为多值，请使用 `add <concept> disclosure "文本"` 追加，或 `delete <concept> disclosure <id>` 删除）。
   - 用例：`set API密钥过期导致心跳中断 status confirmed`、`set API密钥过期导致心跳中断 expression "API密钥过期 → 心跳中断"`。
   - **前提：expression 中引用的概念必须已存在。** 如果写 `set X expression "A → B"`，而 A 或 B 还没建，命令会报错。先 `create_concept` 建好成员，再 `set expression`。
   - **注：执行 `set expression` 操作会连带清空该变体原有的 status，重置为 hypothesis。** 因为结构变了，原来的验证结论不再成立。
-- `add(concept, "name"|"variation"|"tag", value)` —— 加别名、变体或标签。
+- `add(concept, "name"|"variation"|"tag"|"disclosure", value)` —— 加别名、变体、标签或书腰。
   - 加别名：`add 钱包 name wallet`——同一概念在不同语境下被叫不同的名字（钱包、wallet、asset），挂上别名后无论用哪个词搜索或引用都能命中同一个节点。
   - 加变体：`add 获取算力 variation "租用GPU服务器 → 获得SSH访问权"`——同一概念的另一种实现路径（原变体可能是 `申请免费API额度 → 获得API密钥`）。注意 `add variation` 会让概念变成多变体，之后必须用 `concept:short_code` 定位具体变体。
   - 加标签：`add Bluesky发帖流程 tag plan`——为节点挂载枚举标签（如 plan、result）。
-- `delete(concept, ["name"|"expression"|"tag"], [value])` —— 清误建的结构或移除标签：
+  - 追加书腰：`add 获取算力 disclosure "我什么时候需要读它"`——为概念追加一条书腰（触发条件）。
+- `delete(concept, ["name"|"expression"|"tag"|"disclosure"], [value])` —— 清误建的结构或移除标签/书腰：
   - **删概念**：`delete 12` 或 `delete concept`。仅限单变体概念；多变体概念拒绝直接删除，必须用 `delete concept:short_code` 从变体逐个删。
   - **删多变体概念中的某个变体**：`delete concept:short_code`。**删掉最后一个 variation = 连带删除 concept 本体。**
   - **删别名**：`delete concept name 要删的别名`。
   - **清空表达式（退回原子态）**：`delete concept expression`。界面显示的 `[Atomic]` 仅为无 expression 时的占位符，不可作为语法写入。
   - **删标签**：`delete Bluesky发帖流程 tag plan`。
+  - **删书腰**：`delete concept disclosure 12`（value 为要删除的书腰 ID）。
   - **注：delete 不是 negated。** 要表达"X 确定不属于 Y"，用 `set status negated`（留在图里锐化边界）；只有作废建错的概念/别名/结构时才 delete。
 - `update(concept, "content", --append 文本 | --append-file 路径 | --old/--new)` —— 给变体追加或 patch 文本，无整体替换。三种模式互斥：
   - `--append 文本`：在末尾追加。
