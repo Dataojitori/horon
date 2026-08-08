@@ -329,3 +329,37 @@ class HoronDB(
             if sc not in existing:
                 return sc
         raise RuntimeError("short_code collision limit reached")
+
+    def audit_db_integrity(self) -> str:
+        """Audit system-level database integrity (e.g., missing embeddings) and auto-patch them."""
+        lines = ["## Database Integrity Audit"]
+        
+        # Check disclosures for missing embeddings
+        rows = self.conn.execute(
+            "SELECT id, text FROM disclosures WHERE embedding IS NULL"
+        ).fetchall()
+        
+        if not rows:
+            lines.append("  - Embeddings: All disclosures have embeddings ✓")
+        else:
+            lines.append(f"  - Embeddings: Found {len(rows)} disclosures missing embeddings. Syncing...")
+            from .embedding import sync_single_embedding
+            success_count = 0
+            failed_count = 0
+            for r in rows:
+                try:
+                    ok = sync_single_embedding(self, "disclosures", r["id"], r["text"])
+                    if ok:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        lines.append(f"    - Failed to sync disclosure {r['id']}: embedding generation or write failed")
+                except Exception as e:
+                    failed_count += 1
+                    lines.append(f"    - Failed to sync disclosure {r['id']}: {e}")
+            if failed_count > 0:
+                lines.append(f"    - Synced {success_count}/{len(rows)} embeddings (failed: {failed_count}).")
+            else:
+                lines.append(f"    - Synced {success_count}/{len(rows)} embeddings.")
+            
+        return "\n".join(lines)

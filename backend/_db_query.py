@@ -699,7 +699,7 @@ class QueryMixin:
         5. new_weight = w₀ + (I * relevance)
         """
         recent_reads = self.conn.execute(
-            "SELECT concept_id FROM cli_audit_log "
+            "SELECT concept_id, timestamp FROM cli_audit_log "
             "WHERE command = 'read_concept' AND success = 1 "
             "ORDER BY id DESC LIMIT 10"
         ).fetchall()
@@ -707,9 +707,25 @@ class QueryMixin:
         if not recent_reads:
             return
             
+        import datetime
+        def _parse_ts(ts_str: str) -> datetime.datetime:
+            clean = str(ts_str).replace("T", " ").split(".")[0]
+            return datetime.datetime.strptime(clean, "%Y-%m-%d %H:%M:%S")
+
+        now_time = _parse_ts(_now())
+        last_time = now_time
+        
         distinct_from_ids = []
         for row in recent_reads:
             cid = row["concept_id"]
+            row_time = _parse_ts(row["timestamp"])
+            
+            # If the gap between this read and the next (or current) read is > 30 mins, break the chain
+            if (last_time - row_time).total_seconds() > 30 * 60:
+                break
+                
+            last_time = row_time
+            
             if cid not in distinct_from_ids:
                 distinct_from_ids.append(cid)
             if len(distinct_from_ids) == 3:

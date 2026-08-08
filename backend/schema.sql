@@ -77,10 +77,12 @@ CREATE TABLE IF NOT EXISTS concept_tags (
 -- Multi-Disclosure: 书腰（触发条件），每个 concept 可以有多条。
 -- 帮助 agent 在记忆重置后决定是否需要深入阅读该概念。
 CREATE TABLE IF NOT EXISTS disclosures (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    text        TEXT    NOT NULL,
-    created_at  TEXT    NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id      INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    text            TEXT    NOT NULL,
+    embedding       BLOB,
+    embedding_model TEXT,
+    created_at      TEXT    NOT NULL
 );
 
 -- Attention Routing: 概念间的注意力转移突触权重。

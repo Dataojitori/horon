@@ -104,7 +104,7 @@ Tag 是给概念贴的分类元数据，编译器对其全盲。Tag 的名字必
 - `create_tag(name)` —— 注册一个概念的显示名为 tag。源概念自动成为该 tag 的首位成员。
 - `delete_tag(name)` —— 注销一个 tag。如果还有其他概念在用这个 tag，必须先把 tag 从它们身上摘掉才能删。系统保留 tag（`plan`、`result`、`exit`）不可删；它们虽为系统注入，其族群纪律同样由同名概念（`plan`、`result`、`exit`）的正文承担解释责任。
 - `list_tags()` —— 列出所有已注册的 tag 及其使用概念数，并显示对应插件的 `DESCRIPTION` 自述。
-- `audit --all` (或 `audit <tag_name>`) —— 运行标签插件的离线集群审计。`audit --all` 遍历所有有插件的 tag 簇，搜寻并汇总存量违规账目（如 `plan ⚠3 / result ✓ / 有出处 ⚠1`）。
+- `audit <tag_name>` / `audit --db` / `audit --all` —— 离线诊断与审计入口。`audit <tag_name>` 审计指定标签簇；`audit --db` 审计数据库底层完整性（如向量嵌入缺失并自动补齐）；`audit --all` 执行全量审计（标签簇 + 数据库底层）。
 - **标签插件 (Tag Plugin System)**：Tag 不仅是分类标签，更可以在 `backend/tag_plugins/<tag_name>.py` 编写插件脚本。利用 `on_mutation`（事务内变动响应与否决权及导航指引）与 `audit_cluster`（离线集群审计），将已知翻车模式与领域死线编译成强制活闸与架构支架。制作与使用规范详见 horon-plugin Skill。
 
 **自动行为：**

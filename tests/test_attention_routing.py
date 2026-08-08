@@ -124,7 +124,7 @@ def _plant_last_read(horon_db, concept_id):
     horon_db.conn.execute(
         "INSERT INTO cli_audit_log "
         "(timestamp, command, success, concept_id) "
-        "VALUES (datetime('now'), 'read_concept', 1, ?)",
+        "VALUES (datetime('now', 'localtime'), 'read_concept', 1, ?)",
         (concept_id,),
     )
     horon_db.conn.commit()

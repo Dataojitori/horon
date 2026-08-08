@@ -550,10 +550,12 @@ def _build_parser():
     # list_tags
     sub.add_parser("list_tags", allow_abbrev=False)
 
-    # audit (sweep tag plugin's audit_cluster lint)
-    p = sub.add_parser("audit", allow_abbrev=False)
-    p.add_argument("tag", nargs="?", default=None, help="Tag name to audit")
-    p.add_argument("--all", action="store_true", help="Audit all tag clusters")
+    # audit (sweep tag cluster lints or system database integrity)
+    p = sub.add_parser("audit", allow_abbrev=False,
+                       help="Run diagnostic audits on tag clusters or database system integrity.")
+    p.add_argument("tag", nargs="?", default=None, help="Tag name for tag cluster audit")
+    p.add_argument("--all", action="store_true", help="Run all audits (all tag clusters + database integrity)")
+    p.add_argument("--db", action="store_true", help="Run database system integrity audit (e.g. missing embeddings)")
 
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
@@ -701,14 +703,25 @@ def _dispatch(args, db):
         return RawOutput("\n".join(lines))
 
     elif args.command == "audit":
-        if args.all and args.tag:
-            raise ValueError("cannot specify both a tag name and --all")
+        if args.tag and (args.all or args.db):
+            raise ValueError(
+                "Cannot combine a specific tag name with --all or --db. "
+                "Use 'audit <tag>' for a tag cluster audit, 'audit --db' for database integrity, "
+                "or 'audit --all' to run all checks."
+            )
         if args.all:
-            return RawOutput(db.audit_clusters_report())
+            tag_report = db.audit_clusters_report()
+            db_report = db.audit_db_integrity()
+            return RawOutput(f"{tag_report}\n\n{db_report}")
+        elif args.db:
+            return RawOutput(db.audit_db_integrity())
         elif args.tag:
             return RawOutput(db.audit_clusters_report(args.tag))
         else:
-            raise ValueError("specify a tag name or use --all to audit all clusters")
+            raise ValueError(
+                "Specify an audit target: a tag name (e.g., 'audit plan'), "
+                "'--db' (database integrity), or '--all' (all audits)."
+            )
 
     elif args.command == "search_concepts":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)

@@ -90,21 +90,27 @@ def get_embedding(text: str) -> list[float] | None:
         return None
 
 
-def sync_single_embedding(db_instance, table: str, row_id: int, text: str) -> None:
+def sync_single_embedding(db_instance, table: str, row_id: int, text: str) -> bool:
     """Synchronously fetch embedding and update the database.
     
+    Returns True if embedding was fetched and written to database, False otherwise.
     Designed to be called via `_post_commit_hooks` AFTER the main transaction 
     has committed, so it doesn't hold up the database lock.
     """
     emb = get_embedding(text)
     if not emb:
-        return
+        return False
         
     emb_blob = embedding_to_blob(emb)
     
-    # We are outside the main transaction lock now, so a quick new transaction is safe.
-    with db_instance.conn:
-        db_instance.conn.execute(
-            f"UPDATE {table} SET embedding=?, embedding_model=? WHERE id=?",
-            (emb_blob, EMBEDDING_MODEL, row_id)
-        )
+    try:
+        # We are outside the main transaction lock now, so a quick new transaction is safe.
+        with db_instance.conn:
+            db_instance.conn.execute(
+                f"UPDATE {table} SET embedding=?, embedding_model=? WHERE id=?",
+                (emb_blob, EMBEDDING_MODEL, row_id)
+            )
+        return True
+    except Exception as e:
+        _logger.warning("Failed to write embedding to database: %s", e)
+        return False
