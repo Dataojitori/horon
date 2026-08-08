@@ -5,7 +5,8 @@ import logging
 import os
 import secrets
 
-from ._db_common import _validate_name, _now, transactional, SYSTEM_TAGS
+from ._db_common import _validate_name, _now, transactional, _DB_PATH, SYSTEM_TAGS
+from .embedding import sync_single_embedding
 from .models import MutationResult
 from . import tag_sandbox
 
@@ -187,6 +188,10 @@ class MutationMixin:
             (cid, text, now),
         )
         disc_id = cursor.lastrowid
+        
+        def _sync_hook(d_id=disc_id, d_text=text):
+            sync_single_embedding(self, "disclosures", d_id, d_text)
+        self._post_commit_hooks.append(_sync_hook)
         self.conn.execute(
             "UPDATE concepts SET updated_at=? WHERE id=?", (now, cid))
         diff = {"disclosures": {"added": [{"concept_id": cid, "text": text}], "removed": []}}

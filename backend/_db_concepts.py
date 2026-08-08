@@ -1,9 +1,11 @@
 """Concept & tag lifecycle mixin for HoronDB."""
 from __future__ import annotations
 
+import logging
 import secrets
 
 from ._db_common import _validate_name, _now, transactional, SYSTEM_TAGS
+from .embedding import sync_single_embedding
 from .models import MutationResult
 from .tag_sandbox import TagPluginError
 
@@ -32,11 +34,17 @@ class ConceptMixin:
         )
         concept_id = cursor.lastrowid
         if disclosure and disclosure.strip():
-            self.conn.execute(
+            disc_text = disclosure.strip()
+            cursor_disc = self.conn.execute(
                 "INSERT INTO disclosures (concept_id, text, created_at) "
                 "VALUES (?,?,?)",
-                (concept_id, disclosure.strip(), now),
+                (concept_id, disc_text, now),
             )
+            disc_id = cursor_disc.lastrowid
+            
+            def _sync_hook(d_id=disc_id, d_text=disc_text):
+                sync_single_embedding(self, "disclosures", d_id, d_text)
+            self._post_commit_hooks.append(_sync_hook)
         sc = secrets.token_hex(2)
         self.conn.execute(
             "INSERT INTO variations "

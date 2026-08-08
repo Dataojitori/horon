@@ -338,8 +338,8 @@ def test_record_transition_ignores_deleted_from_concept(horon_db):
     assert count == 0
 
 
-def test_record_transition_ignores_deleted_from_concept_with_prior_read(horon_db):
-    """When the previously read concept was deleted, do not fall back to an even older read."""
+def test_record_transition_traces_back_past_deleted_concept(horon_db):
+    """When the previously read concept was deleted, it still traces back to the next older read."""
     create_concepts(horon_db, ["X", "A", "B"])
     x_id = horon_db.read_concept("X").id
     a_id = horon_db.read_concept("A").id
@@ -352,8 +352,43 @@ def test_record_transition_ignores_deleted_from_concept_with_prior_read(horon_db
 
     horon_db.record_transition(b_id)
 
-    count = horon_db.conn.execute(
-        "SELECT COUNT(*) AS cnt FROM concept_transitions",
-    ).fetchone()["cnt"]
-    assert count == 0
+    # It should trace back past the deleted A and record a transition from X to B.
+    # Because X is step 2 (i=1), its relevance is 0.5.
+    rows = horon_db.conn.execute(
+        "SELECT * FROM concept_transitions",
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["from_concept_id"] == x_id
+    assert rows[0]["to_concept_id"] == b_id
+    # Weight calculation: w0 = 0. w_total = 0. p_prime = max(0, 0.05) / 1.0 = 0.05.
+    # surprise = -log2(0.05) ≈ 4.321928. relevance = 0.5. weight = 0 + surprise * 0.5.
+    expected_surprise = -math.log2(0.05)
+    assert math.isclose(rows[0]["weight"], expected_surprise * 0.5)
 
+def test_record_transition_multiple_lookback(horon_db):
+    """Traces back up to 3 distinct reads with relevance decay 1.0, 0.5, 0.25."""
+    create_concepts(horon_db, ["C", "B", "A", "TARGET"])
+    c_id = horon_db.read_concept("C").id
+    b_id = horon_db.read_concept("B").id
+    a_id = horon_db.read_concept("A").id
+    target_id = horon_db.read_concept("TARGET").id
+
+    _plant_last_read(horon_db, c_id)
+    _plant_last_read(horon_db, b_id)
+    _plant_last_read(horon_db, a_id)
+
+    horon_db.record_transition(target_id)
+
+    transitions = horon_db.conn.execute(
+        "SELECT from_concept_id, weight FROM concept_transitions ORDER BY from_concept_id",
+    ).fetchall()
+    
+    # We expect transitions from A, B, C to TARGET
+    assert len(transitions) == 3
+    
+    weights = {r["from_concept_id"]: r["weight"] for r in transitions}
+    expected_surprise = -math.log2(0.05)
+    
+    assert math.isclose(weights[a_id], expected_surprise * 1.0) # step 1
+    assert math.isclose(weights[b_id], expected_surprise * 0.5) # step 2
+    assert math.isclose(weights[c_id], expected_surprise * 0.25) # step 3

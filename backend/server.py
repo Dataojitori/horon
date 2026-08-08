@@ -111,7 +111,14 @@ def search_concepts(q: str = Query(..., min_length=1)):
     try:
         with _db_lock:
             results = db.search_concepts(q)
-            return [r.model_dump() for r in results]
+            return [
+                {
+                    "id": r.concept_id,
+                    "name": r.concept_name,
+                    "matches": [m.model_dump() for m in r.matches],
+                }
+                for r in results
+            ]
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

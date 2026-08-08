@@ -84,7 +84,24 @@ def _dispatch(args: argparse.Namespace, db: HoronDB):
         return db.read_concept(args.concept)
 
     if args.command == "search_concepts":
-        return db.search_concepts(args.query)
+        results = db.search_concepts(args.query)
+        if not results:
+            return RawOutput("(no results)")
+        lines = []
+        for r in results:
+            lines.append(f"[{r.concept_id}] {r.concept_name}")
+            for m in r.matches:
+                if m.field == "name":
+                    lines.append("     \u21b3 Name")
+                elif m.field == "alias":
+                    lines.append(f'     \u21b3 Alias: "{m.snippet}"')
+                elif m.field == "disclosure":
+                    lines.append(
+                        f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
+                elif m.field == "variation":
+                    lines.append(
+                        f'     \u21b3 Variation [{m.target_id}]: "{m.snippet}"')
+        return RawOutput("\n".join(lines))
 
     if args.command == "list_concepts":
         overviews = db.get_all_concepts_overview()

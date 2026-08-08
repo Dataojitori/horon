@@ -641,6 +641,13 @@ def _build_parser():
     sub.add_parser("inbox", allow_abbrev=False,
         help="Evaluate all reminder conditions and show triggered ones.")
 
+    # intent (semantic search by disclosure embedding)
+    p = sub.add_parser("intent", allow_abbrev=False,
+        help="Search concepts by semantic intent (vector similarity on disclosures).")
+    p.add_argument("query", help="Natural language intent to search for")
+    p.add_argument("--limit", type=int, default=10,
+        help="Maximum number of results to return (default: 10)")
+
     # batch
     p = sub.add_parser("batch", allow_abbrev=False,
         help="Run multiple commands. Reads from stdin or --file. "
@@ -868,6 +875,18 @@ def _dispatch(args, db):
         if result["errors"]:
             raise ValueError("; ".join(result["errors"]))
         return result
+
+    elif args.command == "intent":
+        results = db.search_by_intent(args.query, limit=args.limit)
+        if not results:
+            return RawOutput("(no results — disclosures may lack embeddings)")
+        lines = []
+        for i, r in enumerate(results, 1):
+            lines.append(
+                f"{i}. [{r['concept_id']}] {r['concept_name']} "
+                f"(sim={r['similarity']:.4f})")
+            lines.append(f"   disclosure #{r['disclosure_id']}: {r['disclosure_text']}")
+        return RawOutput("\n".join(lines))
 
 
 def _audited_dispatch(args, db):

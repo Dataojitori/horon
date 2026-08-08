@@ -136,6 +136,7 @@ def transactional(method):
             return method(self, *args, **kwargs)
 
         self._in_transaction = True
+        self._post_commit_hooks = []
         
         try:
             # Pre-check mtime for all cached plugins to ensure snapshot is up-to-date.
@@ -150,8 +151,19 @@ def transactional(method):
             self._txn_plugin_snapshot = snapshot
             
             with self.conn:
-                return method(self, *args, **kwargs)
+                res = method(self, *args, **kwargs)
+                
+            # 事务已成功提交，离开锁范围后执行后置钩子
+            hooks = self._post_commit_hooks
+            self._post_commit_hooks = []
+            for hook in hooks:
+                try:
+                    hook()
+                except Exception as e:
+                    _logger.warning("Post-commit hook failed: %s", e)
+            return res
         finally:
             self._in_transaction = False
             self._txn_plugin_snapshot.clear()
+            self._post_commit_hooks = []
     return wrapper
