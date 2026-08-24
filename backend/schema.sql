@@ -1,68 +1,117 @@
 -- ============================================================
--- Horon v2 Schema: Concept → Variation 分层结构
+-- Horon v3 Harness Schema: Executable Cognitive Harness
 --
--- Concept:   概念的对外身份（名字层），组合的参与单位。
--- Variation: 同一概念的不同解释（concept_id + short_code），
---            每个 variation 有独立的 compose_members / status / content。
--- compose_members 的 member 引用 concept_id（hub），不是具体 variation。
+-- Concepts are flat entities with designated roles:
+--   'plain':  Static knowledge, entities, definitions (is_active = 0)
+--   'sensor': External facts / perceptual inputs (lifespan IN ('turn', 'session', 'permanent'))
+--   'logic':  Combinational & sequential logic (activation_type IN ('CHAIN', 'AND', 'OR'))
+--   'guard':  Tool gateway gating valve (activation_type IN ('CHAIN', 'AND', 'OR'))
 -- ============================================================
 
+-- 1. 概念主表
 CREATE TABLE IF NOT EXISTS concepts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL UNIQUE,
-    disclosure  TEXT,
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    name            TEXT    NOT NULL UNIQUE,
+    content         TEXT,                           -- 描述、事实、证据笔记
+    role            TEXT    NOT NULL DEFAULT 'plain'-- 'plain'(砖块), 'sensor'(传感器), 'logic'(逻辑中继), 'guard'(放行守卫)
+                            CHECK(role IN ('plain', 'sensor', 'logic', 'guard')),
+    
+    -- 电位状态（直接挂在概念上，单点读写；反映当前节点的客观物理电位：0=灭/断电, 1=亮/通电）
+    is_active       INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0, 1)),     
+    
+    -- 传感器保鲜期 (仅 role = 'sensor' 有效；非传感器恒为 NULL)
+    lifespan        TEXT    CHECK(lifespan IS NULL OR lifespan IN ('turn', 'session', 'permanent')),
+    
+    -- 激活规则类型 (仅 role = 'logic' 或持有激活规则的 'guard' 有效；sensor 与 plain 恒为 NULL，绝无上游计算依赖)
+    activation_type TEXT    CHECK(activation_type IS NULL OR activation_type IN ('CHAIN', 'AND', 'OR')),
+    
+    -- 发火动作配置 (JSON 文本，用于注意力引导等轻量副作用)
+    -- 例：{"set_focus": "代码实装规范"}
+    on_fire         TEXT,                           
+    
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+
+    -- 严格的角色互斥与字段完整性约束（plain 节点电位恒为 0）
+    CHECK (
+        (role = 'plain'  AND activation_type IS NULL     AND lifespan IS NULL     AND is_active = 0) OR
+        (role = 'sensor' AND activation_type IS NULL     AND lifespan IS NOT NULL) OR
+        (role = 'logic'  AND activation_type IS NOT NULL AND lifespan IS NULL) OR
+        (role = 'guard'  AND activation_type IS NOT NULL AND lifespan IS NULL)
+    )
 );
 
-CREATE TABLE IF NOT EXISTS variations (
-    concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    short_code  TEXT    NOT NULL,
-    type        TEXT    CHECK(type IN ('CHAIN', 'AND', 'OR')),
-    status      TEXT    CHECK(status IN ('hypothesis', 'confirmed', 'negated')),
-    content    TEXT,
-    -- 価値通道（与因果内容正交，编译器対此列全盲）：
-    -- 这条 variation 被现实碰撞后对我的利害。NULL=从未审视，
-    -- -1.0=harmful, 0.0=neutral, +1.0=beneficial。
-    -- 列用 REAL 保持存储通用；写入口（CLI）只接受符号标签、不接受裸数字，
-    -- 幅度将来若获得合法刻度来源（如读取端聚合缓存）再开闸。
-    valence     REAL,
-    created_at  TEXT    NOT NULL,
-    updated_at  TEXT    NOT NULL,
-    PRIMARY KEY (concept_id, short_code)
-);
-
+-- 2. 组合逻辑拓扑表（正向依赖边：member -> parent）
 CREATE TABLE IF NOT EXISTS compose_members (
-    concept_id        INTEGER NOT NULL,
-    short_code        TEXT    NOT NULL,
+    parent_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     member_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    order_index       INTEGER NOT NULL CHECK(order_index >= 1),
-    FOREIGN KEY (concept_id, short_code) REFERENCES variations(concept_id, short_code) ON DELETE CASCADE,
-    PRIMARY KEY (concept_id, short_code, order_index)
+    order_index       INTEGER NOT NULL DEFAULT 1,   -- CHAIN 按序排列 (1, 2, 3...)；AND/OR 默认 1, 2, 3...
+    PRIMARY KEY (parent_concept_id, order_index)    -- 保证同一父概念下每个步骤序号唯一；允许 CHAIN 出现时序回访（如 A → B → A）
 );
 
+-- 3. 输入端：被动感知钩子表（感觉传入神经）
+CREATE TABLE IF NOT EXISTS sensor_hooks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    sensor_concept_id INTEGER NOT NULL UNIQUE REFERENCES concepts(id) ON DELETE CASCADE, -- 1:1 物理锁死
+    event_type        TEXT    NOT NULL              -- 'user_message', 'model_message', 'tool_call', 'tool_result'
+                      CHECK(event_type IN ('user_message', 'model_message', 'tool_call', 'tool_result')),
+    tool              TEXT,                         -- 工具名 (仅 tool_call / tool_result 时有效；消息类为 NULL)
+    match_pattern     TEXT    NOT NULL,             -- 全文正则：匹配消息文本 / 工具返回值 / 调用参数序列化文本
+    created_at        TEXT    NOT NULL
+);
+
+-- 4. 输出端：工具放行守卫规则表（效应器 / 工具拦截与放行网关）
+CREATE TABLE IF NOT EXISTS tool_guards (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    guard_concept_id  INTEGER NOT NULL UNIQUE REFERENCES concepts(id) ON DELETE CASCADE, -- 1:1 物理锁死
+    tool              TEXT    NOT NULL,             -- 工具名，如 "run_command" 或 "replace_file_content"
+    args_pattern      TEXT,                         -- 参数正则 JSON，如 '{"CommandLine": "^git\\s+push"}'
+    created_at        TEXT    NOT NULL
+);
+
+-- 5. 负向抑制边拓扑表（负向依赖边：inhibitor -> target；一票否决使能端）
+-- 约束：target 必须为 'logic' 或 'guard'；inhibitor 必须为 'sensor' 或 'logic'
+CREATE TABLE IF NOT EXISTS inhibitions (
+    target_concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    inhibitor_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    created_at           TEXT    NOT NULL,
+    PRIMARY KEY (target_concept_id, inhibitor_concept_id)
+);
+
+-- 6. 时序状态机步进表（NFA 状态集：记录 CHAIN 逻辑当前活跃的步骤位置集合，支持重复/并发匹配）
+CREATE TABLE IF NOT EXISTS active_chain_instances (
+    chain_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    current_order    INTEGER NOT NULL DEFAULT 0,   -- 处于活跃状态的步骤编号 (1, 2, 3...)
+    session_id       TEXT    NOT NULL,
+    PRIMARY KEY (chain_concept_id, current_order, session_id)
+);
+
+-- 7. 审计与事后追踪日志表（纯事后只读审计，不参与 live 状态计算）
+CREATE TABLE IF NOT EXISTS cli_audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id   TEXT    NOT NULL DEFAULT 'default',                  -- 当前工作会话 ID
+    timestamp    TEXT    NOT NULL,
+    command      TEXT    NOT NULL,                  -- 'fire', 'tool_call', 'sensor_trigger' 等
+    concept_id   INTEGER,
+    concept_name TEXT,
+    sub_action   TEXT,
+    success      INTEGER NOT NULL DEFAULT 1
+);
+
+-- 8. 别名表
 CREATE TABLE IF NOT EXISTS aliases (
     alias       TEXT    PRIMARY KEY,
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE
 );
 
--- ── Tag 系统（记账元数据，编译器对这两张表全盲，不参与因果寻路）──
---
--- tags: tag 词表注册表。自然键（文本本身当主键），浏览时无需 JOIN 解码。
--- 词表是数据不是 schema：注册新 tag = 插一行（经 CLI create_tag，显式动作），
--- 但给概念盖未注册的 tag 会被外键当场拒绝——词汇漂移（plan/Plan/plans）在写入口就死。
--- 纪律：tag 的存在资格是有查询消费者，没有消费者的分类是装饰。
+-- 9. Tag 词表注册表与关联表
 CREATE TABLE IF NOT EXISTS tags (
     name              TEXT PRIMARY KEY,
-    source_concept_id INTEGER        -- NULL = system tag (plan, result)
+    source_concept_id INTEGER        -- NULL = system tag
 );
 
--- 种子词表（当前有工作流消费者的 tag）：
---   'plan'   — 有序动作序列。消费者：audit_cluster('plan') 两条 lint
---              （未绑期待=不良构图；期待未结账=续接清单）。
---   'result' — 曾以结果身份出现的概念。消费者：goal 选单检索
---              （search_concepts --tag result）。
-INSERT OR IGNORE INTO tags (name) VALUES ('plan'), ('result');
+-- 种子词表（系统保留 tag）
+INSERT OR IGNORE INTO tags (name) VALUES ('result'), ('exit'), ('state'), ('action');
 
 CREATE TABLE IF NOT EXISTS concept_tags (
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -70,12 +119,7 @@ CREATE TABLE IF NOT EXISTS concept_tags (
     PRIMARY KEY (concept_id, tag)
 );
 
--- 跨 concept 名字唯一性在应用层校验：
--- 不同 concept 之间不能有任何名字重复（无论主名还是别名）。
--- 同一 concept 的主名可以同时出现在自己的 alias 中。
-
--- Multi-Disclosure: 书腰（触发条件），每个 concept 可以有多条。
--- 帮助 agent 在记忆重置后决定是否需要深入阅读该概念。
+-- 10. Multi-Disclosure: 书腰（触发条件），每个 concept 可以有多条
 CREATE TABLE IF NOT EXISTS disclosures (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id      INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -85,8 +129,7 @@ CREATE TABLE IF NOT EXISTS disclosures (
     created_at      TEXT    NOT NULL
 );
 
--- Attention Routing: 概念间的注意力转移突触权重。
--- 记录 agent 在概念间的阅读跳转模式，用于 surprise-weighted 推荐。
+-- 11. Attention Routing: 概念间的注意力转移突触权重
 CREATE TABLE IF NOT EXISTS concept_transitions (
     from_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     to_concept_id   INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -95,23 +138,7 @@ CREATE TABLE IF NOT EXISTS concept_transitions (
     PRIMARY KEY (from_concept_id, to_concept_id)
 );
 
--- CLI 操作审计日志：谁在什么时候对哪个概念做了什么。
--- 不设 FK —— 概念删除后审计记录仍须保留。
-CREATE TABLE IF NOT EXISTS cli_audit_log (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp    TEXT    NOT NULL,
-    command      TEXT    NOT NULL,
-    concept_id   INTEGER,
-    concept_name TEXT,
-    short_code   TEXT,
-    sub_action   TEXT,
-    success      INTEGER NOT NULL DEFAULT 1
-);
-
--- ── Reminder 系统（轻量级提醒与收件箱，编译器全盲）──
---
--- 独立记录表，通过 FK 绑定到 concept。concept 删除时级联清理。
--- condition 存放 sandbox Python 表达式，由 inbox 命令 pull 求值。
+-- 12. Reminder 系统（轻量级提醒与收件箱）
 CREATE TABLE IF NOT EXISTS reminders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -121,40 +148,40 @@ CREATE TABLE IF NOT EXISTS reminders (
     last_fired_at TEXT
 );
 
--- 已发布数据库的增量升级记录。新数据库直接按本文件创建最新结构，
--- 并由 HoronDB 将随代码发布的迁移标记为已包含。
+-- 13. 迁移版本记录
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_variations_concept ON variations(concept_id);
-CREATE INDEX IF NOT EXISTS idx_cm_member           ON compose_members(member_concept_id);
-CREATE INDEX IF NOT EXISTS idx_variations_type     ON variations(type);
+-- 索引集合
+CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
+CREATE INDEX IF NOT EXISTS idx_sh_lookup           ON sensor_hooks(event_type, tool);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_sh_event   ON sensor_hooks(event_type, IFNULL(tool, ''), match_pattern);
+CREATE INDEX IF NOT EXISTS idx_tg_tool            ON tool_guards(tool);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_tg_rule    ON tool_guards(tool, IFNULL(args_pattern, ''));
+CREATE INDEX IF NOT EXISTS idx_inh_inhibitor      ON inhibitions(inhibitor_concept_id);
+CREATE INDEX IF NOT EXISTS idx_aci_session        ON active_chain_instances(session_id);
+CREATE INDEX IF NOT EXISTS idx_audit_session      ON cli_audit_log(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_audit_concept      ON cli_audit_log(concept_id);
-CREATE INDEX IF NOT EXISTS idx_audit_timestamp    ON cli_audit_log(timestamp);
-CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 CREATE INDEX IF NOT EXISTS idx_disclosures_concept ON disclosures(concept_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS
 SELECT
-    cm.concept_id,
-    cm.short_code,
-    v.type   AS variation_type,
-    c1.name  AS variation_concept_name,
+    cm.parent_concept_id AS concept_id,
+    c1.activation_type   AS activation_type,
+    c1.name              AS concept_name,
     cm.member_concept_id,
-    c2.name  AS member_concept_name,
+    c2.name              AS member_concept_name,
     cm.order_index
 FROM compose_members cm
-JOIN concepts c1 ON cm.concept_id = c1.id
+JOIN concepts c1 ON cm.parent_concept_id = c1.id
 JOIN concepts c2 ON cm.member_concept_id = c2.id
-JOIN variations v ON cm.concept_id = v.concept_id AND cm.short_code = v.short_code
-ORDER BY cm.concept_id, cm.short_code, cm.order_index, cm.member_concept_id;
+ORDER BY cm.parent_concept_id, cm.order_index, cm.member_concept_id;
 
--- GUI 可读视图：浏览 tag 时直接看概念名，按 tag 归组
 CREATE VIEW IF NOT EXISTS v_concept_tags AS
 SELECT
     ct.concept_id,

@@ -98,9 +98,9 @@ def _dispatch(args: argparse.Namespace, db: HoronDB):
                 elif m.field == "disclosure":
                     lines.append(
                         f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
-                elif m.field == "variation":
+                elif m.field == "content":
                     lines.append(
-                        f'     \u21b3 Variation [{m.target_id}]: "{m.snippet}"')
+                        f'     \u21b3 Content: "{m.snippet}"')
         return RawOutput("\n".join(lines))
 
     if args.command == "list_concepts":
@@ -108,15 +108,12 @@ def _dispatch(args: argparse.Namespace, db: HoronDB):
         lines = []
         for c in overviews:
             lines.append(f"[{c['id']}] {c['name']}")
-            variations = c["variations"]
-            for v in variations:
-                expr = v["expression"]
-                status = v["status"]
-                prefix = f"[{v['short_code']}] " if len(variations) > 1 else ""
-                if expr:
-                    lines.append(f"      = {prefix}{expr} ({status})")
-                else:
-                    lines.append(f"      = {prefix}[Atomic] ({status})")
+            rule = c.get("activation_rule")
+            role = c.get("role", "plain")
+            if rule:
+                lines.append(f"      = {rule} ({role})")
+            else:
+                lines.append(f"      = [Atomic] ({role})")
         return RawOutput("\n".join(lines))
 
     if args.command == "compile":

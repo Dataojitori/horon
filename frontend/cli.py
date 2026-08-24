@@ -237,7 +237,11 @@ def _format_compile(result: dict) -> str:
 def _format_read_concept(result: ReadResult) -> str:
     lines = []
     lines.append("=" * 60)
-    lines.append(f"CONCEPT: {result.name} (ID: {result.id})")
+    lines.append(f"CONCEPT: {result.name} (ID: {result.id}, Role: {result.role.upper()}, Active: {result.is_active})")
+    if result.lifespan:
+        lines.append(f"Lifespan: {result.lifespan}")
+    if result.on_fire:
+        lines.append(f"On-Fire: {result.on_fire}")
 
     alt_names = [a for a in result.aliases if a != result.name]
     if alt_names:
@@ -271,70 +275,44 @@ def _format_read_concept(result: ReadResult) -> str:
                 f"    last fired: {fired}")
         lines.append("=" * 60)
 
-    lines.append(f"VARIATIONS ({len(result.variations)})")
-    multi = len(result.variations) > 1
-    for v in result.variations:
-        lines.append("")
-        if multi:
-            lines.append(f"--- [{v.short_code}] ---")
-        if v.expression:
-            type_tag = f" [{v.type}]" if v.type else ""
-            lines.append(f"Expression: {v.expression}{type_tag} (status: {v.status or 'not set'})")
-        else:
-            lines.append(f"Expression: (Atomic / Not yet decomposed) (status: {v.status or 'not set'})")
-        lines.append(f"Content:\n{v.content}" if v.content else "Content: (empty)")
+    if result.activation_rule:
+        type_tag = f" [{result.activation_type}]" if result.activation_type else ""
+        lines.append(f"Activation Rule: {result.activation_rule}{type_tag}")
+    else:
+        lines.append("Activation Rule: (None / Atomic)")
+    lines.append(f"Content:\n{result.content}" if result.content else "Content: (empty)")
     lines.append("")
     lines.append("=" * 60)
 
-    def format_rel_group(group_name, items):
-        if not items:
-            return []
-        out = [f"  * {group_name}:"]
-        for item in items:
-            out.append(f"    - {item.expression} (Concept ID: {item.concept_id}, Name: '{item.concept_name}')")
-            for member in item.members:
-                if member.disclosures:
-                    disc_texts = "; ".join(d.text for d in member.disclosures)
-                    out.append(
-                        f"      Disclosure ({member.concept_name}): "
-                        f"{disc_texts}")
-        return out
+    if result.sensor_hooks:
+        lines.append("[ SENSOR HOOKS ]")
+        for sh in result.sensor_hooks:
+            tool_info = f" (tool: {sh.tool})" if sh.tool else ""
+            lines.append(f"  #{sh.id}: {sh.event_type}{tool_info} => pattern: '{sh.match_pattern}'")
+        lines.append("=" * 60)
 
-    inbound_lines = []
-    inbound_lines.extend(format_rel_group("Confirmed", result.inbound_confirmed))
-    inbound_lines.extend(format_rel_group("Hypotheses", result.inbound_hypotheses))
-    inbound_lines.extend(format_rel_group("Negated", result.inbound_negated))
+    if result.tool_guards:
+        lines.append("[ TOOL GUARDS ]")
+        for tg in result.tool_guards:
+            args_info = f" args: '{tg.args_pattern}'" if tg.args_pattern else ""
+            lines.append(f"  #{tg.id}: tool '{tg.tool}'{args_info}")
+        lines.append("=" * 60)
 
-    outbound_lines = []
-    outbound_lines.extend(format_rel_group("Confirmed", result.outbound_confirmed))
-    outbound_lines.extend(format_rel_group("Hypotheses", result.outbound_hypotheses))
-    outbound_lines.extend(format_rel_group("Negated", result.outbound_negated))
-
-    lines.append("RELATIONS (Connections to this Concept)")
-
-    lines.append("")
-    lines.append(f"[ INBOUND ] (Paths leading TO '{result.name}')")
-    if inbound_lines:
-        lines.extend(inbound_lines)
-    else:
-        lines.append("  (empty)")
-
-    lines.append("")
-    lines.append(f"[ OUTBOUND ] (Paths leading FROM '{result.name}')")
-    if outbound_lines:
-        lines.extend(outbound_lines)
-    else:
-        lines.append("  (empty)")
+    if result.inhibitions or result.inhibiting:
+        lines.append("[ INHIBITIONS ]")
+        for inh in result.inhibitions:
+            lines.append(f"  Inhibited by: '{inh.inhibitor_name}' (id={inh.inhibitor_concept_id})")
+        for inh in result.inhibiting:
+            lines.append(f"  Inhibiting: '{inh.target_name}' (id={inh.target_concept_id})")
+        lines.append("=" * 60)
 
     if result.suggested_next:
-        lines.append("")
         lines.append("[ YOU MAY ALSO NEED ]")
         for s in result.suggested_next:
             lines.append(
                 f"  {s.concept_name} (ID: {s.concept_id}, weight: {s.weight})")
-
-    lines.append("")
-    lines.append("=" * 60)
+        lines.append("")
+        lines.append("=" * 60)
 
     return "\n".join(lines)
 
@@ -522,22 +500,12 @@ def _build_parser():
     p.add_argument("--disclosure", default=None)
     p.add_argument("--content", required=True,
                    help="Why this concept exists and what observation prompted it.")
-
-    # init_plan
-    p = sub.add_parser("init_plan", allow_abbrev=False)
-    p.add_argument("name")
-    p.add_argument("--content", required=True,
-                   help="What this plan is for and why it was conceived.")
-
-    # init_result
-    p = sub.add_parser("init_result", allow_abbrev=False)
-    p.add_argument("name")
-    p.add_argument("--content", required=True,
-                   help="What achieving this result looks like (physical evidence).")
-
-    # suppose
-    p = sub.add_parser("suppose", allow_abbrev=False)
-    p.add_argument("expression")
+    p.add_argument("--role", default="plain", choices=["plain", "sensor", "logic", "guard"])
+    p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"])
+    p.add_argument("--activation-rule", "--activation_rule", dest="activation_rule", default=None,
+                   help="Activation rule for logic/guard nodes (e.g. 'A & B', 'A → B', 'A | B')")
+    p.add_argument("--on-fire", "--on_fire", dest="on_fire", default=None,
+                   help="On-fire action JSON config")
 
     # create_tag
     p = sub.add_parser("create_tag", allow_abbrev=False)
@@ -559,7 +527,7 @@ def _build_parser():
 
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
-    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and variations")
+    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
     p.add_argument("--limit", type=int, default=50,
@@ -571,24 +539,36 @@ def _build_parser():
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
-    # add (name / variation / tag / disclosure)
+    # add (name / tag / disclosure / inhibition)
     p = sub.add_parser("add", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("kind", choices=["name", "variation", "tag", "disclosure"])
+    p.add_argument("kind", choices=["name", "tag", "disclosure", "inhibition"])
     p.add_argument("value")
 
-    # delete (default=variation, or name/expression/tag/disclosure)
+    # delete (default=concept, or name/activation-rule/tag/disclosure/sensor_hook/tool_guard/inhibition)
     p = sub.add_parser("delete", allow_abbrev=False)
     p.add_argument("target")
     p.add_argument("kind", nargs="?", default=None,
-                   choices=["name", "expression", "tag", "disclosure"])
+                   choices=["name", "activation-rule", "activation_rule", "tag", "disclosure", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard", "inhibition"])
     p.add_argument("value", nargs="?", default=None)
 
-    # set (status, name, expression)
+    # set (name, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
     p = sub.add_parser("set", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("prop", choices=["status", "name", "expression"])
+    p.add_argument("prop", choices=["name", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
     p.add_argument("value")
+    p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"],
+                   help="Lifespan when setting role to sensor")
+    p.add_argument("--activation-rule", "--activation_rule", dest="activation_rule", default=None,
+                   help="Activation rule when setting role to logic/guard")
+    p.add_argument("--on-fire", "--on_fire", dest="on_fire", default=None,
+                   help="On-fire action config")
+    p.add_argument("--match-pattern", "--match_pattern", dest="match_pattern", default="",
+                   help="Regex or substring match pattern for sensor_hook")
+    p.add_argument("--tool", default=None,
+                   help="Tool name for sensor_hook (tool_call/tool_result)")
+    p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
+                   help="Args regex pattern for tool_guard")
 
     # update (content — patch or append)
     p = sub.add_parser("update", allow_abbrev=False)
@@ -667,17 +647,15 @@ def _dispatch(args, db):
     if args.command == "create_concept":
         if args.content is None or not args.content.strip():
             raise ValueError("create_concept requires non-empty --content.")
-        return db.create_concept(args.name, args.disclosure,
-                                 content=args.content)
-
-    elif args.command == "init_plan":
-        return db.init_plan(args.name, content=args.content)
-
-    elif args.command == "init_result":
-        return db.init_result(args.name, content=args.content)
-
-    elif args.command == "suppose":
-        return db.suppose(args.expression)
+        return db.create_concept(
+            args.name,
+            args.disclosure,
+            content=args.content,
+            role=getattr(args, "role", "plain"),
+            lifespan=getattr(args, "lifespan", None),
+            activation_rule=getattr(args, "activation_rule", None),
+            on_fire=getattr(args, "on_fire", None),
+        )
 
     elif args.command == "create_tag":
         return db.create_tag(args.name)
@@ -739,9 +717,9 @@ def _dispatch(args, db):
                 elif m.field == "disclosure":
                     lines.append(
                         f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
-                elif m.field == "variation":
+                elif m.field == "content":
                     lines.append(
-                        f'     \u21b3 Variation [{m.target_id}]: "{m.snippet}"')
+                        f'     \u21b3 Content: "{m.snippet}"')
         return RawOutput("\n".join(lines))
 
     elif args.command == "list_concepts":
@@ -753,32 +731,42 @@ def _dispatch(args, db):
                 header += f"  [{', '.join(c['tags'])}]"
             lines.append(header)
 
-            variations = c["variations"]
-            for v in variations:
-                expr = v["expression"]
-                status = v["status"]
-                prefix = f"[{v['short_code']}] " if len(variations) > 1 else ""
-
-                if expr:
-                    lines.append(f"      = {prefix}{expr} ({status})")
-                else:
-                    lines.append(f"      = {prefix}[Atomic] ({status})")
+            rule = c.get("activation_rule")
+            role = c.get("role", "plain")
+            if rule:
+                lines.append(f"      = {rule} ({role})")
+            else:
+                lines.append(f"      = [Atomic] ({role})")
 
         return RawOutput("\n".join(lines))
 
     elif args.command == "add":
-        return db.add(args.target, args.kind, args.value)
+        return db.add(
+            args.target,
+            args.kind,
+            args.value,
+        )
 
     elif args.command == "delete":
         return db.delete(args.target, args.kind,
                          getattr(args, "value", None))
 
     elif args.command == "set":
-        return db.set(args.target, args.prop, args.value)
+        return db.set(
+            args.target,
+            args.prop,
+            args.value,
+            lifespan=getattr(args, "lifespan", None),
+            activation_rule=getattr(args, "activation_rule", None),
+            on_fire=getattr(args, "on_fire", None),
+            match_pattern=getattr(args, "match_pattern", ""),
+            tool=getattr(args, "tool", None),
+            args_pattern=getattr(args, "args_pattern", None),
+        )
 
     elif args.command == "update":
-        # 使用 DB 提供的 helper 获取当前值，避免在 CLI 层重复解析 variation
-        _, _, current_value = db.get_variation_field(args.node, args.field)
+        # 使用 DB 提供的 helper 获取当前值，避免在 CLI 层重复查询
+        _, _, current_value = db.get_concept_field(args.node, args.field)
         resolved = _resolve_text(
             old=args.old,
             old_file=args.old_file,
