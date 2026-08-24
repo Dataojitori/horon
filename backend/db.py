@@ -1,28 +1,24 @@
 """
 Horon — Inference Language for Intelligent Agents
-DB operations (Concept → Variation 分層結構)
-
-Concept:   概念的对外身份（名字 + disclosure），组合的参与单位。
-Variation: 同一概念的不同解释（concept_id + short_code + type），
-           type ∈ {CHAIN, AND, OR, NULL(原子)}，
-           每个 variation 有独立的 status / content / compose_members。
-compose_members 的 member 引用 concept_id（hub），不是具体 variation。
+DB operations (Harness v3 Executable Cognitive System)
 
 Module layout:
   _db_common.py    — constants, validators, path setup, transactional decorator
   _db_plugins.py   — PluginMixin  (proxy factories, mutation hooks, cluster audit)
-  _db_concepts.py  — ConceptMixin (create/delete concepts & tags, suppose)
-  _db_mutations.py — MutationMixin (add / delete / set / update)
+  _db_concepts.py  — ConceptMixin (create/delete concepts & tags)
+  _db_mutations.py — MutationMixin (add / delete / set / update, role/lifespan/hooks/guards)
   _db_query.py     — QueryMixin   (search, read, expressions, relations)
   _db_reminders.py — ReminderMixin (reminder CRUD, sandbox eval, inbox)
-  _db_compile.py   — CompileMixin (relation graph, compile)
+  _db_compile.py   — CompileMixin (backward solver, compile)
   db.py  (this file) — HoronDB assembly + core infrastructure
 """
 from __future__ import annotations
 
-import secrets
+import os
 import sqlite3
 import sys
+import time
+import uuid
 from pathlib import Path
 
 from ._db_common import (
@@ -54,15 +50,17 @@ class HoronDB(
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         if is_new:
-            self.conn.executescript(_SCHEMA_PATH.read_text())
+            self.conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
             self.conn.executemany(
                 "INSERT INTO schema_migrations (version, applied_at) "
                 "VALUES (?, ?)",
                 [(path.stem, _now()) for path in self._migration_files()],
             )
-            self.conn.commit()
         else:
             self._apply_migrations()
+        for tag in SYSTEM_TAGS:
+            self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+        self.conn.commit()
 
     def close(self):
         self.conn.close()
@@ -90,73 +88,111 @@ class HoronDB(
             ).fetchall()
         }
 
-        for path in self._migration_files():
-            version = path.stem
-            if version in applied:
-                continue
-            sql = path.read_text(encoding="utf-8")
-            escaped_version = version.replace("'", "''")
-            full_script = (
-                "BEGIN;\n"
-                f"{sql}\n"
-                "INSERT INTO schema_migrations (version, applied_at) "
-                f"VALUES ('{escaped_version}', '{_now()}');\n"
-                "COMMIT;"
-            )
-            try:
-                self.conn.executescript(full_script)
-            except sqlite3.OperationalError as e:
-                err_msg = str(e).lower()
-                sql_lower = sql.lower()
-                is_drop_col_idempotent = (
-                    "drop column" in sql_lower and "no such column" in err_msg
+        # 禁用外键约束并开启 legacy_alter_table 以便安全执行表重建与重命名置换
+        self.conn.execute("PRAGMA foreign_keys = OFF")
+        self.conn.execute("PRAGMA legacy_alter_table = ON")
+        try:
+            for path in self._migration_files():
+                version = path.stem
+                if version in applied:
+                    continue
+
+                sql = path.read_text(encoding="utf-8")
+                escaped_version = version.replace("'", "''")
+                full_script = (
+                    "BEGIN;\n"
+                    f"{sql}\n"
+                    "INSERT INTO schema_migrations (version, applied_at) "
+                    f"VALUES ('{escaped_version}', '{_now()}');\n"
+                    "COMMIT;"
                 )
-                is_add_col_idempotent = (
-                    "add column" in sql_lower and "duplicate column name" in err_msg
-                )
-                if is_drop_col_idempotent or is_add_col_idempotent:
-                    self.conn.rollback()
-                    self.conn.execute(
-                        "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                        (version, _now()),
+                try:
+                    self.conn.executescript(full_script)
+                except sqlite3.OperationalError as e:
+                    err_msg = str(e).lower()
+                    sql_lower = sql.lower()
+                    is_drop_col_idempotent = (
+                        "drop column" in sql_lower and "no such column" in err_msg
                     )
-                    self.conn.commit()
-                else:
+                    is_add_col_idempotent = (
+                        "add column" in sql_lower and "duplicate column name" in err_msg
+                    )
+                    if is_drop_col_idempotent or is_add_col_idempotent:
+                        self.conn.rollback()
+                        self.conn.execute(
+                            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                            (version, _now()),
+                        )
+                        self.conn.commit()
+                    else:
+                        self.conn.rollback()
+                        raise
+                except Exception:
                     self.conn.rollback()
                     raise
-            except Exception:
-                self.conn.rollback()
-                raise
+        finally:
+            self.conn.execute("PRAGMA legacy_alter_table = OFF")
+            self.conn.execute("PRAGMA foreign_keys = ON")
 
-    # ── Resolution ───────────────────────────────────────────────────────────
+    # ── Session Lifecycle ────────────────────────────────────────────────────
 
-    def _resolve_id(self, query) -> tuple[int, list[str]]:
-        """将输入解析为 (concept_id, [short_codes])。
+    def init_session(self) -> str:
+        """初始化/开启新会话：自动生成 ID、写入 current_session、熄灭 session/turn 传感器、清空时序链。"""
+        new_id = f"sess_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        now = _now()
+
+        # 1. 覆盖写入当前活跃会话
+        self.conn.execute("DELETE FROM current_session")
+        self.conn.execute(
+            "INSERT INTO current_session (session_id, created_at) VALUES (?, ?)",
+            (new_id, now),
+        )
+
+        # 2. 熄灭会话级与回合级临时传感器
+        self.conn.execute(
+            "UPDATE concepts SET is_active = 0, updated_at = ? "
+            "WHERE lifespan IN ('session', 'turn')",
+            (now,),
+        )
+
+        # 3. 清除时序链状态机
+        self.conn.execute("DELETE FROM active_chain_instances")
+        self.conn.commit()
+
+        return new_id
+
+    def _resolve_session_id(self) -> str:
+        """获取当前有效会话 ID。直接读 current_session 表；若未初始化则自动生成。"""
+        try:
+            row = self.conn.execute(
+                "SELECT session_id FROM current_session LIMIT 1"
+            ).fetchone()
+            if row and row["session_id"]:
+                return row["session_id"]
+        except sqlite3.OperationalError:
+            pass
+        return self.init_session()
+
+    # ── Concept Resolution ───────────────────────────────────────────────────
+
+    def _resolve_id(self, query) -> int:
+        """将输入解析为 concept_id (int)。
 
         接受格式：
-          "爱"      → (cid, ["a3f1"])          — sole variation
-          "爱"      → (cid, ["a3f1","b7e2"])   — 多 variation
-          "爱:a3f1" → (cid, ["a3f1"])          — 显式指定，验证存在
-          42        → 同 "爱"，按 concept ID 查
-
-        调用者按 len 判断：
-          len == 1 → 唯一 variation，直接用 [0]
-          len > 1  → 多 variation，按业务决定报错还是新建
+          "爱"   → cid (按 name 或 alias 查)
+          42     → cid (按 concept ID 查)
+          "42"   → cid (纯数字字符串优先按 ID 查，查不到再按 name/alias 查)
         """
-        sc: str | None = None
+        if query is None:
+            raise ValueError("Concept query cannot be None.")
 
-        if isinstance(query, str) and ":" in query:
-            concept_part, sc = query.split(":", 1)
-            query = concept_part
-
-        cid: int | None = None
-
+        # 1. 尝试直接以整型 ID 解析
         raw_int: int | None = None
         if isinstance(query, int):
             raw_int = query
-        elif isinstance(query, str):
+        elif isinstance(query, str) and query.strip().isdigit():
             try:
-                raw_int = int(query)
+                raw_int = int(query.strip())
             except (ValueError, TypeError):
                 pass
 
@@ -165,51 +201,18 @@ class HoronDB(
                 "SELECT id FROM concepts WHERE id = ?", (raw_int,)
             ).fetchone()
             if row:
-                cid = row["id"]
+                return row["id"]
 
-        if cid is None and isinstance(query, str):
+        # 2. 尝试以名字或别名解析（主名在创建与修改时已严格同步至 aliases 表）
+        if isinstance(query, str):
+            query_str = query.strip()
             row = self.conn.execute(
-                "SELECT concept_id FROM aliases WHERE alias = ?", (query,)
+                "SELECT concept_id FROM aliases WHERE alias = ?", (query_str,)
             ).fetchone()
             if row:
-                cid = row["concept_id"]
+                return row["concept_id"]
 
-        if cid is None:
-            raise ValueError(f"Concept not found: {query}")
-
-        if sc is not None:
-            row = self.conn.execute(
-                "SELECT 1 FROM variations "
-                "WHERE concept_id=? AND short_code=?",
-                (cid, sc),
-            ).fetchone()
-            if not row:
-                concept_name = self._resolve_concept_name(cid)
-                raise ValueError(
-                    f"No variation '{sc}' in concept '{concept_name}' (ID: {cid}). "
-                    f"Use '{query}:short_code' format.")
-            return (cid, [sc])
-
-        var_rows = self.conn.execute(
-            "SELECT short_code FROM variations WHERE concept_id=? "
-            "ORDER BY short_code",
-            (cid,),
-        ).fetchall()
-        return (cid, [r["short_code"] for r in var_rows])
-
-    def _resolve_single_variation(self, node) -> tuple[int, str]:
-        """解析单点定位，确保精确命中一个 variation。"""
-        cid, scs = self._resolve_id(node)
-        if len(scs) == 0:
-            concept_name = self._resolve_concept_name(cid)
-            raise ValueError(
-                f"Concept '{concept_name}' (ID: {cid}) has no variations.")
-        if len(scs) != 1:
-            concept_name = self._resolve_concept_name(cid)
-            raise ValueError(
-                f"Concept '{concept_name}' (ID: {cid}) has multiple variations; "
-                f"use '{node}:short_code' to specify.")
-        return cid, scs[0]
+        raise ValueError(f"Concept not found: {query}")
 
     def _resolve_concept_name(self, concept_id: int) -> str:
         """concept ID → 显示名。"""
@@ -223,19 +226,19 @@ class HoronDB(
     def log_action(self, *, command: str,
                    concept_id: int | None = None,
                    concept_name: str | None = None,
-                   short_code: str | None = None,
                    sub_action: str | None = None,
-                   success: bool = True) -> None:
-        """INSERT into cli_audit_log. 审计写失败不打断真正的操作，
-        但会在 stderr 报一行，避免静默吞掉表缺失/SQL 错等真正的 bug。"""
+                   success: bool = True,
+                   **kwargs) -> None:
+        """INSERT into cli_audit_log. 审计写失败不打断主操作。"""
         try:
+            sess = self._resolve_session_id()
             self.conn.execute(
                 "INSERT INTO cli_audit_log"
-                " (timestamp, command, concept_id, concept_name,"
-                "  short_code, sub_action, success)"
+                " (session_id, timestamp, command, concept_id, concept_name,"
+                "  sub_action, success)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (_now(), command, concept_id, concept_name,
-                 short_code, sub_action, int(success)),
+                (sess, _now(), command, concept_id, concept_name,
+                 sub_action, int(success)),
             )
             self.conn.commit()
         except Exception as e:
@@ -256,54 +259,54 @@ class HoronDB(
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def _parse_expression(self, expression: str, allow_single: bool = False) -> tuple[str, list[int]]:
-        """拆分表达式，解析为 (type, member_concept_ids)。
+    def _parse_activation_rule(self, activation_rule: str, allow_single: bool = False) -> tuple[str, list[int]]:
+        """拆分激活规则，解析为 (activation_type, member_concept_ids)。
 
-        严格不混用：一个表达式只能包含一种运算符。
-        返回 (variation_type, ordered_member_ids)。
+        严格不混用：一个激活规则只能包含一种运算符。
+        返回 (activation_type, ordered_member_ids)。
 
         CHAIN (A → B → C):  ('CHAIN', [id_A, id_B, id_C])
         AND   (A & B & C):  ('AND',   [id_A, id_B, id_C])
         OR    (A | B | C):  ('OR',    [id_A, id_B, id_C])
         Single (A):         ('SINGLE',[id_A])
         """
-        has_arrow = "→" in expression
-        has_amp = "&" in expression
-        has_pipe = "|" in expression
+        has_arrow = "→" in activation_rule
+        has_amp = "&" in activation_rule
+        has_pipe = "|" in activation_rule
 
         op_count = sum([has_arrow, has_amp, has_pipe])
         if op_count > 1:
             raise ValueError(
-                "Mixed operators in one expression are not allowed. "
+                "Mixed operators in one activation rule are not allowed. "
                 "Use only one of: '→' (CHAIN), '&' (AND), '|' (OR). "
                 "Decompose into sub-concepts if needed.")
 
         if has_arrow:
             vtype = "CHAIN"
-            parts = [s.strip() for s in expression.split("→")]
+            parts = [s.strip() for s in activation_rule.split("→")]
         elif has_pipe:
             vtype = "OR"
-            parts = [s.strip() for s in expression.split("|")]
+            parts = [s.strip() for s in activation_rule.split("|")]
         elif has_amp:
             vtype = "AND"
-            parts = [s.strip() for s in expression.split("&")]
+            parts = [s.strip() for s in activation_rule.split("&")]
         else:
             if not allow_single:
                 raise ValueError(
-                    "Expression must contain at least one operator: "
+                    "Activation rule must contain at least one operator: "
                     "'→' (CHAIN), '&' (AND), or '|' (OR).")
             vtype = "SINGLE"
-            parts = [expression.strip()]
+            parts = [activation_rule.strip()]
 
         if any(not p for p in parts):
             raise ValueError(
-                "Invalid syntax: empty operand in expression. "
+                "Invalid syntax: empty operand in activation rule. "
                 "Each operator must separate two concepts.")
         if vtype != "SINGLE" and len(parts) < 2:
             raise ValueError(
-                f"{vtype} expression requires at least 2 concepts.")
+                f"{vtype} activation rule requires at least 2 concepts.")
 
-        ids = [self._resolve_id(n)[0] for n in parts]
+        ids = [self._resolve_id(n) for n in parts]
         if vtype == "CHAIN":
             if any(a == b for a, b in zip(ids, ids[1:])):
                 raise ValueError(
@@ -313,22 +316,8 @@ class HoronDB(
             if len(set(ids)) != len(ids):
                 raise ValueError(
                     "A concept cannot appear more than once in an AND/OR "
-                    "expression (duplicates are not allowed).")
+                    "activation rule (duplicates are not allowed).")
         return vtype, ids
-
-    def _next_short_code(self, concept_id: int) -> str:
-        """为 concept 生成随机 short_code（4 位 hex，不复用已删除的码）。"""
-        existing = {
-            r["short_code"] for r in self.conn.execute(
-                "SELECT short_code FROM variations WHERE concept_id=?",
-                (concept_id,),
-            ).fetchall()
-        }
-        for _ in range(100):
-            sc = secrets.token_hex(2)
-            if sc not in existing:
-                return sc
-        raise RuntimeError("short_code collision limit reached")
 
     def audit_db_integrity(self) -> str:
         """Audit system-level database integrity (e.g., missing embeddings) and auto-patch them."""

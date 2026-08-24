@@ -494,6 +494,10 @@ def _build_parser():
                                      allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # init
+    sub.add_parser("init", allow_abbrev=False,
+                   help="Initialize a new session, reset ephemeral sensors (session/turn) and chains.")
+
     # create_concept
     p = sub.add_parser("create_concept", allow_abbrev=False)
     p.add_argument("name")
@@ -644,7 +648,13 @@ def _build_parser():
 
 def _dispatch(args, db):
     """Execute a single command, return result object."""
-    if args.command == "create_concept":
+    if args.command == "init":
+        new_sess = db.init_session()
+        return RawOutput(
+            f"Success. Initialized new session: {new_sess} (ephemeral sensors & chains reset)."
+        )
+
+    elif args.command == "create_concept":
         if args.content is None or not args.content.strip():
             raise ValueError("create_concept requires non-empty --content.")
         return db.create_concept(

@@ -154,6 +154,12 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TEXT NOT NULL
 );
 
+-- 14. 当前活跃会话状态表
+CREATE TABLE IF NOT EXISTS current_session (
+    session_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL
+);
+
 -- 索引集合
 CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_sh_lookup           ON sensor_hooks(event_type, tool);
