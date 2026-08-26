@@ -247,16 +247,10 @@ def _format_read_concept(result: ReadResult) -> str:
     if alt_names:
         lines.append(f"Also known as: {', '.join(alt_names)}")
 
-    if result.disclosures:
-        if len(result.disclosures) == 1:
-            d = result.disclosures[0]
-            lines.append(f"Disclosure #{d.id}: {d.text}")
-        else:
-            lines.append("Disclosures:")
-            for d in result.disclosures:
-                lines.append(f"  #{d.id}: {d.text}")
+    if result.disclosure:
+        lines.append(f"Disclosure: {result.disclosure}")
     else:
-        lines.append("Disclosures: (none)")
+        lines.append("Disclosure: (none)")
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
     if result.tag_source_info:
@@ -543,10 +537,10 @@ def _build_parser():
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
-    # add (name / tag / disclosure / inhibition)
+    # add (name / tag / inhibition)
     p = sub.add_parser("add", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("kind", choices=["name", "tag", "disclosure", "inhibition"])
+    p.add_argument("kind", choices=["name", "tag", "inhibition"])
     p.add_argument("value")
 
     # delete (default=concept, or name/activation-rule/tag/disclosure/sensor_hook/tool_guard/inhibition)
@@ -556,10 +550,10 @@ def _build_parser():
                    choices=["name", "activation-rule", "activation_rule", "tag", "disclosure", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard", "inhibition"])
     p.add_argument("value", nargs="?", default=None)
 
-    # set (name, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
+    # set (name, disclosure, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
     p = sub.add_parser("set", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("prop", choices=["name", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
+    p.add_argument("prop", choices=["name", "disclosure", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
     p.add_argument("value")
     p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"],
                    help="Lifespan when setting role to sensor")
@@ -726,7 +720,7 @@ def _dispatch(args, db):
                     lines.append(f'     \u21b3 Alias: "{m.snippet}"')
                 elif m.field == "disclosure":
                     lines.append(
-                        f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
+                        f'     \u21b3 Disclosure: "{m.snippet}"')
                 elif m.field == "content":
                     lines.append(
                         f'     \u21b3 Content: "{m.snippet}"')
@@ -896,7 +890,7 @@ def _dispatch(args, db):
             lines.append(
                 f"{i}. [{r['concept_id']}] {r['concept_name']} "
                 f"(sim={r['similarity']:.4f})")
-            lines.append(f"   disclosure #{r['disclosure_id']}: {r['disclosure_text']}")
+            lines.append(f"   disclosure: {r['disclosure_text']}")
         return RawOutput("\n".join(lines))
 
 

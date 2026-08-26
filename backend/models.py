@@ -24,6 +24,7 @@ class Concept(BaseModel):
     id: int
     name: str
     content: str | None = None
+    disclosure: str | None = None
     role: Role = "plain"
     is_active: int = 0
     lifespan: Lifespan | None = None
@@ -33,17 +34,10 @@ class Concept(BaseModel):
     updated_at: str
 
 
-class DisclosureDetail(BaseModel):
-    """disclosures 表的一行，附带 DB id 以便定向删除。"""
-    id: int
-    text: str
-    created_at: str
-
-
 class SearchMatch(BaseModel):
     """搜索命中的单一匹配项。"""
     field: MatchField
-    target_id: str | None = None   # disclosure.id (str) / None for name/alias/content
+    target_id: str | None = None   # None for name/alias/disclosure/content
     snippet: str
 
 
@@ -58,7 +52,7 @@ class ComposeMemberDetail(BaseModel):
     concept_id: int
     name: str
     order_index: int
-    disclosures: list[DisclosureDetail] = []
+    disclosure: str | None = None
 
 
 class SensorHookDetail(BaseModel):
@@ -119,13 +113,13 @@ class ReadResult(BaseModel):
     id: int
     name: str
     content: str | None = None
+    disclosure: str | None = None
     role: Role = "plain"
     is_active: int = 0
     lifespan: Lifespan | None = None
     activation_type: ActivationType | None = None
     activation_rule: str | None = None
     on_fire: str | None = None
-    disclosures: list[DisclosureDetail] = []
     aliases: list[str] = []
     tags: list[str] = []
     tag_source_info: str | None = None

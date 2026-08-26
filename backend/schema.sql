@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS concepts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL UNIQUE,
     content         TEXT,                           -- 描述、事实、证据笔记
+    disclosure      TEXT,                           -- 一句话触发场景书腰 (1:1)
     role            TEXT    NOT NULL DEFAULT 'plain'-- 'plain'(砖块), 'sensor'(传感器), 'logic'(逻辑中继), 'guard'(放行守卫)
                             CHECK(role IN ('plain', 'sensor', 'logic', 'guard')),
     
@@ -119,17 +120,7 @@ CREATE TABLE IF NOT EXISTS concept_tags (
     PRIMARY KEY (concept_id, tag)
 );
 
--- 10. Multi-Disclosure: 书腰（触发条件），每个 concept 可以有多条
-CREATE TABLE IF NOT EXISTS disclosures (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    concept_id      INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    text            TEXT    NOT NULL,
-    embedding       BLOB,
-    embedding_model TEXT,
-    created_at      TEXT    NOT NULL
-);
-
--- 11. Attention Routing: 概念间的注意力转移突触权重
+-- 10. Attention Routing: 概念间的注意力转移突触权重
 CREATE TABLE IF NOT EXISTS concept_transitions (
     from_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     to_concept_id   INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -138,7 +129,7 @@ CREATE TABLE IF NOT EXISTS concept_transitions (
     PRIMARY KEY (from_concept_id, to_concept_id)
 );
 
--- 12. Reminder 系统（轻量级提醒与收件箱）
+-- 11. Reminder 系统（轻量级提醒与收件箱）
 CREATE TABLE IF NOT EXISTS reminders (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
@@ -148,16 +139,24 @@ CREATE TABLE IF NOT EXISTS reminders (
     last_fired_at TEXT
 );
 
--- 13. 迁移版本记录
+-- 12. 迁移版本记录
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT PRIMARY KEY,
     applied_at TEXT NOT NULL
 );
 
--- 14. 当前活跃会话状态表
+-- 13. 当前活跃会话状态表
 CREATE TABLE IF NOT EXISTS current_session (
     session_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL
+);
+
+-- 14. 概念书腰向量表 (冷热分离，1:1 挂载于 concepts)
+CREATE TABLE IF NOT EXISTS concept_embeddings (
+    concept_id      INTEGER PRIMARY KEY REFERENCES concepts(id) ON DELETE CASCADE,
+    embedding       BLOB    NOT NULL,               -- 书腰向量 (OpenRouter voyage-4-large, 1024-dim)
+    embedding_model TEXT    NOT NULL,               -- 向量模型标识
+    updated_at      TEXT    NOT NULL
 );
 
 -- 索引集合
@@ -171,7 +170,6 @@ CREATE INDEX IF NOT EXISTS idx_aci_session        ON active_chain_instances(sess
 CREATE INDEX IF NOT EXISTS idx_audit_session      ON cli_audit_log(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_disclosures_concept ON disclosures(concept_id);
 CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 
 -- GUI 可读视图

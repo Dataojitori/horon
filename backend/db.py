@@ -323,29 +323,34 @@ class HoronDB(
         """Audit system-level database integrity (e.g., missing embeddings) and auto-patch them."""
         lines = ["## Database Integrity Audit"]
         
-        # Check disclosures for missing embeddings
+        # Check concepts with disclosure for missing embeddings
         rows = self.conn.execute(
-            "SELECT id, text FROM disclosures WHERE embedding IS NULL"
+            """
+            SELECT c.id, c.disclosure
+            FROM concepts c
+            LEFT JOIN concept_embeddings ce ON c.id = ce.concept_id
+            WHERE c.disclosure IS NOT NULL AND c.disclosure != '' AND ce.embedding IS NULL
+            """
         ).fetchall()
         
         if not rows:
-            lines.append("  - Embeddings: All disclosures have embeddings ✓")
+            lines.append("  - Embeddings: All concept disclosures have embeddings ✓")
         else:
-            lines.append(f"  - Embeddings: Found {len(rows)} disclosures missing embeddings. Syncing...")
+            lines.append(f"  - Embeddings: Found {len(rows)} concepts missing embeddings. Syncing...")
             from .embedding import sync_single_embedding
             success_count = 0
             failed_count = 0
             for r in rows:
                 try:
-                    ok = sync_single_embedding(self, "disclosures", r["id"], r["text"])
+                    ok = sync_single_embedding(self, r["id"], r["disclosure"])
                     if ok:
                         success_count += 1
                     else:
                         failed_count += 1
-                        lines.append(f"    - Failed to sync disclosure {r['id']}: embedding generation or write failed")
+                        lines.append(f"    - Failed to sync concept {r['id']}: embedding generation or write failed")
                 except Exception as e:
                     failed_count += 1
-                    lines.append(f"    - Failed to sync disclosure {r['id']}: {e}")
+                    lines.append(f"    - Failed to sync concept {r['id']}: {e}")
             if failed_count > 0:
                 lines.append(f"    - Synced {success_count}/{len(rows)} embeddings (failed: {failed_count}).")
             else:

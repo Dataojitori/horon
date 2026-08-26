@@ -26,7 +26,7 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
-SYSTEM_TAGS = {"plan", "result", "exit"}
+SYSTEM_TAGS = {"result", "exit", "state", "action"}
 
 _SANDBOX_ALLOWED_CALLS = frozenset({"exists", "status", "tags"})
 _SANDBOX_ALLOWED_NODES = frozenset({
