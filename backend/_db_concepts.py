@@ -2,100 +2,281 @@
 from __future__ import annotations
 
 import logging
-import secrets
 
-from ._db_common import _validate_name, _now, transactional, SYSTEM_TAGS
+from . import tag_sandbox
+from ._db_common import SYSTEM_TAGS, _now, _validate_name, transactional
 from .embedding import sync_single_embedding
 from .models import MutationResult
 from .tag_sandbox import TagPluginError
 
+_logger = logging.getLogger(__name__)
+
 
 class ConceptMixin:
-    """Create / delete concepts and tag vocabulary; suppose."""
+    """Create / delete concepts and tag vocabulary."""
 
     @transactional
-    def create_concept(self, name: str,
-                       disclosure: str | None = None,
-                       content: str | None = None) -> MutationResult:
-        """創建概念 concept + 默認 variation + 同名 alias。
+    def create_concept(
+        self,
+        name: str,
+        disclosure: str | None = None,
+        content: str | None = None,
+        role: str = "plain",
+        lifespan: str | None = None,
+        activation_rule: str | None = None,
+        on_fire: str | None = None,
+    ) -> MutationResult:
+        """创建扁平概念 concept + 自动注册同名 alias。
 
         Args:
-            name: 概念名（自動注冊為 alias）。
-            disclosure: 初始書腰（写入 disclosures 表）。
+            name: 概念名（自动注册为 alias）。
+            disclosure: 初始书腰（1:1 挂在 concepts 上）。
             content: 初始正文。
+            role: 'plain' | 'sensor' | 'logic' | 'guard'
+            lifespan: 仅 role='sensor' 时有效 ('turn' | 'session' | 'permanent')，默认 'session'。
+            activation_rule: 激活规则（仅 role='logic'/'guard' 有效）。
+            on_fire: 发火动作配置 (JSON 字符串，仅 role='sensor'/'logic'/'guard' 有效)。
         """
+        valid_roles = ("plain", "sensor", "logic", "guard")
+        if role not in valid_roles:
+            raise ValueError(
+                f"Invalid role: '{role}'. Must be one of: {', '.join(valid_roles)}."
+            )
+
         name = _validate_name(name)
         self._check_name_available(name)
         now = _now()
+
+        # 处理 activation_rule 与 role 联动
+        rule_str = activation_rule
+        vtype: str | None = None
+        member_ids: list[int] = []
+        if rule_str and rule_str.strip():
+            if role == "sensor":
+                raise ValueError(
+                    "Sensor nodes cannot have activation rules (in-degree must be 0)."
+                )
+            if role == "plain":
+                raise ValueError(
+                    "Plain concepts cannot have activation rules (in-degree must be 0). "
+                    "Specify role='logic' or role='guard' when creating composite nodes."
+                )
+            vtype, member_ids = self._parse_activation_rule(rule_str.strip())
+
+            # 全局激活规则唯一性校验（仅限 logic 节点，guard 节点对应不同物理工具出口，允许共享相同激活规则）
+            if role == "logic":
+                existing_cid = self._find_composition_concept(vtype, member_ids, role="logic")
+                if existing_cid is not None:
+                    exist_name = self._resolve_concept_name(existing_cid)
+                    raise ValueError(
+                        f"Concept '{exist_name}' (id={existing_cid}) already has the same composition: {rule_str.strip()}"
+                    )
+        else:
+            if role in ("logic", "guard"):
+                raise ValueError(
+                    f"{role} node requires an activation rule (e.g. 'A & B', 'A → B', or 'A | B')."
+                )
+
+        # 处理 lifespan 与 is_active
+        is_active = 0
+        if role == "sensor":
+            lifespan = lifespan or "session"
+            valid_lifespans = ("turn", "session", "permanent")
+            if lifespan not in valid_lifespans:
+                raise ValueError(
+                    f"Invalid sensor lifespan: '{lifespan}'. Must be one of: {', '.join(valid_lifespans)}."
+                )
+            activation_type = None
+        else:
+            if lifespan is not None:
+                raise ValueError(
+                    f"Only sensor concepts can have a lifespan. Role '{role}' cannot have lifespan."
+                )
+            lifespan = None
+            activation_type = vtype if role in ("logic", "guard") else None
+            is_active = 0
+
+        # 处理 on_fire 与 role 联动
+        clean_on_fire = on_fire.strip() if on_fire and on_fire.strip() else None
+        if role == "plain" and clean_on_fire is not None:
+            raise ValueError("Plain concepts cannot have on_fire actions.")
+
+        clean_content = content.strip() if content else None
+        clean_disclosure = disclosure.strip() if disclosure and disclosure.strip() else None
+
         cursor = self.conn.execute(
-            "INSERT INTO concepts (name, created_at, updated_at) "
-            "VALUES (?,?,?)",
-            (name, now, now),
+            "INSERT INTO concepts (name, content, disclosure, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, clean_content, clean_disclosure, role, is_active, lifespan, activation_type, clean_on_fire, now, now),
         )
         concept_id = cursor.lastrowid
-        if disclosure and disclosure.strip():
-            disc_text = disclosure.strip()
-            cursor_disc = self.conn.execute(
-                "INSERT INTO disclosures (concept_id, text, created_at) "
-                "VALUES (?,?,?)",
-                (concept_id, disc_text, now),
-            )
-            disc_id = cursor_disc.lastrowid
-            
-            def _sync_hook(d_id=disc_id, d_text=disc_text):
-                sync_single_embedding(self, "disclosures", d_id, d_text)
-            self._post_commit_hooks.append(_sync_hook)
-        sc = secrets.token_hex(2)
+
+        # 写入 compose_members
+        all_infos: list[str] = []
+        if member_ids:
+            for idx, member_cid in enumerate(member_ids, start=1):
+                self.conn.execute(
+                    "INSERT INTO compose_members (parent_concept_id, member_concept_id, order_index) "
+                    "VALUES (?, ?, ?)",
+                    (concept_id, member_cid, idx),
+                )
+            clean_rule = activation_rule.strip() if activation_rule else ""
+            diff: dict = {
+                "activation-rule": {
+                    "concept_id": concept_id,
+                    "old": None,
+                    "new": clean_rule,
+                }
+            }
+            all_infos.extend(self._run_mutation_hooks(concept_id, diff))
+            for mid in set(member_ids):
+                all_infos.extend(self._run_mutation_hooks(mid, diff))
+
+        # 写入 aliases
         self.conn.execute(
-            "INSERT INTO variations "
-            "(concept_id, short_code, content, created_at, updated_at) "
-            "VALUES (?,?,?,?,?)",
-            (concept_id, sc, content.strip() if content else None, now, now),
-        )
-        self.conn.execute(
-            "INSERT INTO aliases (alias, concept_id) VALUES (?,?)",
+            "INSERT INTO aliases (alias, concept_id) VALUES (?, ?)",
             (name, concept_id),
         )
+
+        # 触发 embedding 同步
+        if clean_disclosure:
+            def _sync_hook(cid=concept_id, disc=clean_disclosure):
+                sync_single_embedding(self, cid, disc)
+            self._post_commit_hooks.append(_sync_hook)
+
+        msg = f"Success. Created concept '{name}' (id={concept_id}, role={role})."
+        if all_infos:
+            msg += "\n" + "\n".join(all_infos)
+
         return MutationResult(
-            message=f"Success. Created concept '{name}' ('{name}', id={concept_id}).",
+            message=msg,
             concept_id=concept_id,
             concept_name=name,
-            short_code=sc,
         )
 
     @transactional
-    def init_plan(self, name: str,
-                  content: str | None = None) -> MutationResult:
-        """创建计划概念并原子化盖上 plan tag，返回引导性提示词。"""
-        if not content or not content.strip():
-            raise ValueError("init_plan requires non-empty --content.")
-        res = self.create_concept(name, content=content)
-        self._add_tag(res.concept_id, "plan")
-        res.message = (
-            f"[OK] Concept '{name}' created with tag 'plan'.\n\n"
-            f"[ACTION REQUIRED]\n"
-            f"一个合法的计划必须包含具体的执行步骤。你现在必须补全其结构：\n"
-            f"使用 `horon set \"{name}\" expression \"步骤A → 步骤B → ...\"` 为其设定一个由 CHAIN (→) 组成的表达式。"
-        )
-        return res
+    def delete_concept(self, concept) -> MutationResult:
+        """删除概念本体及其级联关联。"""
+        cid = self._resolve_id(concept)
+        cname = self._resolve_concept_name(cid)
+        label = f"'{concept}' ('{cname}', id={cid})"
 
-    @transactional
-    def init_result(self, name: str,
-                    content: str | None = None) -> MutationResult:
-        """创建结果概念并原子化盖上 result tag，纯快捷方式，无多余引导。"""
-        if not content or not content.strip():
-            raise ValueError("init_result requires non-empty --content.")
-        res = self.create_concept(name, content=content)
-        self._add_tag(res.concept_id, "result")
-        res.message = f"[OK] Concept '{name}' created with tag 'result'."
-        return res
+        if cname in SYSTEM_TAGS:
+            raise ValueError(
+                f"Cannot delete {label}: it is a system-reserved concept and cannot be deleted."
+            )
+
+        # 检查是否被其他概念引用为 compose_member
+        refs = self.conn.execute(
+            "SELECT DISTINCT cm.parent_concept_id, c.name "
+            "FROM compose_members cm "
+            "JOIN concepts c ON cm.parent_concept_id = c.id "
+            "WHERE cm.member_concept_id = ? AND cm.parent_concept_id != ?",
+            (cid, cid),
+        ).fetchall()
+        if refs:
+            ref_parts = []
+            for r in refs:
+                expr = self._get_activation_rule(r["parent_concept_id"])
+                line = f"  - '{r['name']}' (id={r['parent_concept_id']})"
+                if expr:
+                    line += f"  [{expr}]"
+                ref_parts.append(line)
+            detail = "\n".join(ref_parts)
+            raise ValueError(
+                f"Cannot delete {label}: it is still referenced as a compose member by:\n{detail}\n"
+                f"Use read_concept to review them before deciding how to proceed."
+            )
+
+        # 检查是否作为 tag 源概念且被其他概念使用
+        tag_row = self.conn.execute(
+            "SELECT name FROM tags WHERE source_concept_id = ?",
+            (cid,),
+        ).fetchone()
+        if tag_row:
+            tag_name = tag_row["name"]
+            other_users = self.conn.execute(
+                "SELECT c.name FROM concept_tags ct "
+                "JOIN concepts c ON ct.concept_id = c.id "
+                "WHERE ct.tag = ? AND ct.concept_id != ?",
+                (tag_name, cid),
+            ).fetchall()
+            if other_users:
+                names = ", ".join(f"'{r['name']}'" for r in other_users)
+                raise ValueError(
+                    f"Cannot delete {label}: concept name '{tag_name}' is a registered tag still carried by: {names}."
+                )
+
+        # 预先获取当前概念所携带的全部 tags，用于触发对应的 mutation hooks
+        tag_rows = self.conn.execute(
+            "SELECT tag FROM concept_tags WHERE concept_id = ?", (cid,)
+        ).fetchall()
+        existing_tags = [r["tag"] for r in tag_rows]
+        deleted_proxy = self._make_concept_proxy(cid)
+
+        # 获取关联信息用于 mutation hooks（仅用于通知解除关联的子成员，非级联删除）
+        unlinked_member_rows = self.conn.execute(
+            "SELECT member_concept_id FROM compose_members WHERE parent_concept_id = ?",
+            (cid,),
+        ).fetchall()
+        unlinked_member_ids = [r["member_concept_id"] for r in unlinked_member_rows]
+
+        # 在任何数据库或文件删除之前运行删除 hook（若插件拒绝则在此抛出异常并触发事务回滚）
+        diff = {"concepts": {"removed": [{"concept_id": cid, "name": cname, "members": unlinked_member_ids}]}}
+        for tag in existing_tags:
+            self._run_mutation_hook_for_tag(cid, tag, diff, proxy=deleted_proxy)
+        if unlinked_member_ids:
+            for mid in set(unlinked_member_ids):
+                self._run_mutation_hooks(mid, diff)
+
+        # 执行删除（外键约束自动清理 compose_members, aliases, disclosures, reminders, sensor_hooks, tool_guards, inhibitions 等）
+        self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
+
+        msg = f"Success. Deleted concept {label}."
+        if tag_row:
+            msg += f" Tag '{tag_row['name']}' auto-removed."
+
+        result = MutationResult(
+            message=msg,
+            concept_id=cid,
+            concept_name=cname,
+        )
+
+        if tag_row:
+            tag_name_to_remove = tag_row["name"]
+            self.conn.execute("DELETE FROM tags WHERE name = ?", (tag_name_to_remove,))
+            plugin_path = tag_sandbox._PLUGINS_DIR / f"{tag_name_to_remove}.py"
+            if tag_name_to_remove not in SYSTEM_TAGS and plugin_path.exists():
+
+                def _delete_plugin_hook(path=plugin_path, tname=tag_name_to_remove, res=result):
+                    try:
+                        if path.exists():
+                            path.unlink()
+                            res.message = res.message.replace(
+                                f"Tag '{tname}' auto-removed.",
+                                f"Tag '{tname}' and its plugin file '{tname}.py' auto-removed.",
+                            )
+                    except OSError as e:
+                        _logger.warning(
+                            "Failed to delete plugin file '%s' for removed tag '%s': %s",
+                            path, tname, e,
+                        )
+                        res.message += (
+                            f" (Warning: Failed to delete plugin file '{path}': {e}. "
+                            f"Please remove it manually.)"
+                        )
+                    self._plugin_cache.pop(tname, None)
+
+                self._post_commit_hooks.append(_delete_plugin_hook)
+
+        return result
 
     @transactional
     def create_tag(self, concept_name: str) -> MutationResult:
         """Register a concept's display name as a tag.
 
         The name must be an exact match on concepts.name (aliases don't
-        qualify).  The source concept is auto-enrolled under the new tag.
+        qualify). The source concept is auto-enrolled under the new tag.
         If the tag already exists, returns an info message with usage count.
         """
         concept_name = concept_name.strip()
@@ -209,7 +390,7 @@ class ConceptMixin:
         return MutationResult(
             message=f"Success. Tag '{tag_name}' unregistered.",
             concept_id=source_cid,
-            concept_name=self._resolve_concept_name(source_cid),
+            concept_name=self._resolve_concept_name(source_cid) if source_cid else None,
         )
 
     def list_tags(self) -> list[dict]:
@@ -233,57 +414,3 @@ class ConceptMixin:
                 continue
             r["plugin_description"] = (plugin or {}).get("description")
         return result
-
-    @transactional
-    def suppose(self, expression: str) -> MutationResult:
-        """从表达式直接原子化创建概念+组合变体（自动命名）。"""
-        vtype, member_ids = self._parse_expression(expression, allow_single=False)
-
-        existing = self._find_composition_variation(vtype, member_ids)
-        if existing is not None:
-            exist_cid, exist_sc, _ = existing
-            exist_name = self._resolve_concept_name(exist_cid)
-            raise ValueError(
-                f"This relation already exists: '{exist_name}:{exist_sc}' "
-                f"(id={exist_cid}). Do not create a duplicate. To record a "
-                f"new observation of this relation, update the content of "
-                f"that variation ('{exist_name}:{exist_sc}')."
-            )
-
-        member_names = [self._resolve_concept_name(mid) for mid in member_ids]
-
-        if vtype == "CHAIN":
-            joiner = "-then-"
-        elif vtype == "AND":
-            joiner = "-and-"
-        elif vtype == "OR":
-            joiner = "-or-"
-        else:
-            raise ValueError(f"Unknown variation type: {vtype}")
-
-        base_name = joiner.join(member_names)
-        
-        try:
-            _validate_name(base_name)
-            self._check_name_available(base_name)
-        except ValueError as e:
-            raise ValueError(
-                f"Auto-naming failed for '{expression}': {e}. "
-                f"Please fall back to manual creation: "
-                f"use `horon create_concept <custom_name> --content \"...\"` then `horon add <custom_name> variation \"{expression}\"`."
-            )
-
-        final_name = base_name
-
-        res = self.create_concept(final_name)
-        set_res = self._set_expression(final_name, expression)
-
-        plugin_part = set_res.message.partition("Status was also reset to null.")[2]
-
-        set_res.message = (
-            f"Success. Created concept '{final_name}' (id={res.concept_id}) "
-            f"to represent this relation.\n"
-            f"Variation {set_res.short_code} expression: {expression}"
-            + plugin_part
-        )
-        return set_res

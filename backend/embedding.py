@@ -23,6 +23,14 @@ def embedding_to_blob(emb: list[float] | None) -> bytes | None:
     return struct.pack(f'<{len(emb)}f', *emb)
 
 
+def blob_to_embedding(blob: bytes | None) -> list[float] | None:
+    """Deserialize a little-endian binary blob from SQLite into a list of floats."""
+    if not blob:
+        return None
+    count = len(blob) // 4
+    return list(struct.unpack(f'<{count}f', blob))
+
+
 def _get_api_key() -> str:
     key = os.environ.get("OPENROUTER_API_KEY", "")
     if not key:
@@ -90,12 +98,13 @@ def get_embedding(text: str) -> list[float] | None:
         return None
 
 
-def sync_single_embedding(db_instance, table: str, row_id: int, text: str) -> bool:
-    """Synchronously fetch embedding and update the database.
+def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
+    """Synchronously fetch embedding and update concept_embeddings table.
     
     Returns True if embedding was fetched and written to database, False otherwise.
     Designed to be called via `_post_commit_hooks` AFTER the main transaction 
     has committed, so it doesn't hold up the database lock.
+    Only writes/updates embedding if the current disclosure in database still equals `text`.
     """
     emb = get_embedding(text)
     if not emb:
@@ -104,13 +113,24 @@ def sync_single_embedding(db_instance, table: str, row_id: int, text: str) -> bo
     emb_blob = embedding_to_blob(emb)
     
     try:
+        from ._db_common import _now
+        now = _now()
         # We are outside the main transaction lock now, so a quick new transaction is safe.
         with db_instance.conn:
-            db_instance.conn.execute(
-                f"UPDATE {table} SET embedding=?, embedding_model=? WHERE id=?",
-                (emb_blob, EMBEDDING_MODEL, row_id)
+            cursor = db_instance.conn.execute(
+                """
+                INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
+                SELECT id, ?, ?, ?
+                FROM concepts
+                WHERE id = ? AND disclosure = ?
+                ON CONFLICT(concept_id) DO UPDATE SET
+                    embedding=excluded.embedding,
+                    embedding_model=excluded.embedding_model,
+                    updated_at=excluded.updated_at
+                """,
+                (emb_blob, EMBEDDING_MODEL, now, concept_id, text)
             )
-        return True
+            return cursor.rowcount > 0
     except Exception as e:
         _logger.warning("Failed to write embedding to database: %s", e)
         return False
