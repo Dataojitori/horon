@@ -1,17 +1,17 @@
 """Query / read mixin for HoronDB."""
 from __future__ import annotations
 
-import sqlite3
-import struct
 import math
+from typing import Any, Literal
+
+import numpy as np
 
 from ._db_common import _now, transactional
 from .embedding import get_embedding, EMBEDDING_DIMENSIONS
 from .models import (
-    Concept, VariationDetail, ComposeMemberDetail,
-    DirectedRelation, RelationMember, ReadResult,
-    ReminderDetail, DisclosureDetail, TransitionSuggestion,
-    SearchMatch, ConceptSearchResult,
+    Concept, ComposeMemberDetail, ReadResult,
+    ReminderDetail, TransitionSuggestion,
+    SearchMatch, ConceptSearchResult, SensorHookDetail, ToolGuardDetail, InhibitionDetail,
 )
 
 _DECAY_GAMMA = 0.95
@@ -20,42 +20,6 @@ _PRUNING_THRESHOLD = 0.05
 
 class QueryMixin:
     """Search, read, expression lookup, directed-relation queries, and attention routing."""
-
-    # ── Disclosure helpers ────────────────────────────────────────────────────
-
-    def _get_disclosures(self, concept_id: int) -> list[DisclosureDetail]:
-        rows = self.conn.execute(
-            "SELECT id, text, created_at FROM disclosures "
-            "WHERE concept_id = ? ORDER BY id",
-            (concept_id,),
-        ).fetchall()
-        return [DisclosureDetail(id=r["id"], text=r["text"],
-                                 created_at=r["created_at"]) for r in rows]
-
-    def _get_disclosures_batch(
-        self, concept_ids: list[int] | set[int],
-    ) -> dict[int, list[DisclosureDetail]]:
-        if not concept_ids:
-            return {}
-        ids = list(concept_ids)
-        result: dict[int, list[DisclosureDetail]] = {cid: [] for cid in ids}
-        
-        # SQLite has a hard limit on the number of host parameters (often 999).
-        # We chunk the ids to avoid "sqlite3.OperationalError: too many SQL variables".
-        chunk_size = 900
-        for i in range(0, len(ids), chunk_size):
-            chunk = ids[i:i + chunk_size]
-            placeholders = ",".join("?" * len(chunk))
-            rows = self.conn.execute(
-                f"SELECT id, concept_id, text, created_at FROM disclosures "
-                f"WHERE concept_id IN ({placeholders}) ORDER BY concept_id, id",
-                tuple(chunk),
-            ).fetchall()
-            for r in rows:
-                result[r["concept_id"]].append(
-                    DisclosureDetail(id=r["id"], text=r["text"],
-                                     created_at=r["created_at"]))
-        return result
 
     # ── Tag filter ────────────────────────────────────────────────────────────
 
@@ -76,7 +40,8 @@ class QueryMixin:
         if has_and and has_or:
             raise ValueError(
                 "Tag filter cannot mix & and |. "
-                "Use one operator per --tag expression.")
+                "Use one operator per --tag expression."
+            )
 
         if has_or:
             parts = [p.strip() for p in tag_expr.split("|")]
@@ -111,8 +76,7 @@ class QueryMixin:
         return subq, params
 
     @staticmethod
-    def _make_snippet(text: str, query: str,
-                      context_chars: int = 40) -> str:
+    def _make_snippet(text: str, query: str, context_chars: int = 40) -> str:
         """Extract a text snippet around the first occurrence of *query*."""
         pos = text.lower().find(query.lower())
         if pos == -1:
@@ -155,7 +119,7 @@ class QueryMixin:
 
         sql = f"""
         WITH target_concepts AS (
-            SELECT DISTINCT c.id, c.name FROM concepts c
+            SELECT DISTINCT c.id, c.name, c.disclosure, c.content FROM concepts c
             {tag_join}
         )
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'name' AS field, NULL AS target_id, tc.name AS text
@@ -171,17 +135,15 @@ class QueryMixin:
 
         UNION ALL
 
-        SELECT tc.id AS concept_id, tc.name AS concept_name, 'disclosure' AS field, CAST(d.id AS TEXT) AS target_id, d.text AS text
+        SELECT tc.id AS concept_id, tc.name AS concept_name, 'disclosure' AS field, NULL AS target_id, tc.disclosure AS text
         FROM target_concepts tc
-        JOIN disclosures d ON tc.id = d.concept_id
-        WHERE d.text LIKE ? ESCAPE '\\'
+        WHERE tc.disclosure LIKE ? ESCAPE '\\' AND tc.disclosure IS NOT NULL
 
         UNION ALL
 
-        SELECT tc.id AS concept_id, tc.name AS concept_name, 'variation' AS field, v.short_code AS target_id, v.content AS text
+        SELECT tc.id AS concept_id, tc.name AS concept_name, 'content' AS field, NULL AS target_id, tc.content AS text
         FROM target_concepts tc
-        JOIN variations v ON tc.id = v.concept_id
-        WHERE v.content LIKE ? ESCAPE '\\' AND v.content IS NOT NULL
+        WHERE tc.content LIKE ? ESCAPE '\\' AND tc.content IS NOT NULL
 
         ORDER BY concept_id
         """
@@ -228,8 +190,6 @@ class QueryMixin:
 
         return list(results_by_cid.values())
 
-
-
     def get_all_concepts(self) -> list[Concept]:
         """获取所有 concept。"""
         rows = self.conn.execute("SELECT * FROM concepts ORDER BY id").fetchall()
@@ -251,38 +211,28 @@ class QueryMixin:
 
             if not concepts:
                 return []
-            
-            cids = [c.id for c in concepts]
-            # Use the subquery directly to avoid SQLite's parameter limits (too many SQL variables)
+
             where_clause = f"WHERE concept_id IN ({subq})"
-            mem_where_clause = f"WHERE cm.concept_id IN ({subq})"
+            mem_where_clause = f"WHERE cm.parent_concept_id IN ({subq})"
         else:
             concepts = self.get_all_concepts()
             if not concepts:
                 return []
-            cids = [c.id for c in concepts]
             where_clause = ""
             mem_where_clause = ""
             child_params = []
 
-        var_rows = self.conn.execute(
-            f"SELECT concept_id, short_code, type, status FROM variations "
-            f"{where_clause} ORDER BY concept_id, short_code", child_params
-        ).fetchall()
-        vars_by_cid: dict[int, list] = {}
-        for r in var_rows:
-            vars_by_cid.setdefault(r["concept_id"], []).append(r)
+        cids = [c.id for c in concepts]
 
         mem_rows = self.conn.execute(
-            f"SELECT cm.concept_id, cm.short_code, cm.order_index, c.name "
+            f"SELECT cm.parent_concept_id AS concept_id, cm.order_index, c.name "
             f"FROM compose_members cm "
             f"JOIN concepts c ON cm.member_concept_id = c.id "
-            f"{mem_where_clause} ORDER BY cm.order_index, cm.member_concept_id", child_params
+            f"{mem_where_clause} ORDER BY cm.parent_concept_id, cm.order_index, cm.member_concept_id", child_params
         ).fetchall()
-        mems_by_var: dict[tuple, list[str]] = {}
+        mems_by_cid: dict[int, list[str]] = {}
         for r in mem_rows:
-            key = (r["concept_id"], r["short_code"])
-            mems_by_var.setdefault(key, []).append(r["name"])
+            mems_by_cid.setdefault(r["concept_id"], []).append(r["name"])
 
         tag_rows = self.conn.execute(
             f"SELECT concept_id, tag FROM concept_tags "
@@ -292,74 +242,68 @@ class QueryMixin:
         for r in tag_rows:
             tags_by_cid.setdefault(r["concept_id"], []).append(r["tag"])
 
-        disc_map = self._get_disclosures_batch(cids)
-
         _OP = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
 
         result = []
         for c in concepts:
+            rule = None
+            if c.activation_type and c.id in mems_by_cid:
+                rule = _OP.get(c.activation_type, " & ").join(mems_by_cid[c.id])
+
             c_dict = {
                 "id": c.id,
                 "name": c.name,
-                "disclosures": [d.model_dump() for d in disc_map.get(c.id, [])],
+                "content": c.content,
+                "disclosure": c.disclosure,
+                "role": c.role,
+                "is_active": c.is_active,
+                "lifespan": c.lifespan,
+                "activation_type": c.activation_type,
+                "activation_rule": rule,
+                "on_fire": c.on_fire,
                 "tags": tags_by_cid.get(c.id, []),
-                "variations": [],
             }
-            for v in vars_by_cid.get(c.id, []):
-                key = (c.id, v["short_code"])
-                expr = None
-                vtype = v["type"]
-                names = mems_by_var.get(key)
-                if names and vtype:
-                    expr = _OP.get(vtype, " & ").join(names)
-
-                c_dict["variations"].append({
-                    "short_code": v["short_code"],
-                    "type": vtype,
-                    "status": v["status"] or "hypothesis",
-                    "expression": expr,
-                })
             result.append(c_dict)
 
         return result
 
-    # ── Expression & composition helpers ─────────────────────────────────────
+    # ── Activation Rule & composition helpers ─────────────────────────────────
 
-    def _get_expression(self, concept_id: int,
-                        short_code: str) -> str | None:
-        """取 variation 的组合表达式字符串。无组合返回 None。"""
-        vtype_row = self.conn.execute(
-            "SELECT type FROM variations "
-            "WHERE concept_id = ? AND short_code = ?",
-            (concept_id, short_code),
+    def _get_activation_rule(self, concept_id: int) -> str | None:
+        """取概念的激活规则字符串。若无激活规则返回 None。"""
+        row = self.conn.execute(
+            "SELECT activation_type FROM concepts WHERE id = ?", (concept_id,)
         ).fetchone()
-        if not vtype_row or not vtype_row["type"]:
+        if not row or not row["activation_type"]:
             return None
 
+        vtype = row["activation_type"]
         rows = self.conn.execute(
             "SELECT c.name "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
-            "WHERE cm.concept_id = ? AND cm.short_code = ? "
+            "WHERE cm.parent_concept_id = ? "
             "ORDER BY cm.order_index",
-            (concept_id, short_code),
+            (concept_id,),
         ).fetchall()
         if not rows:
             return None
 
         names = [r["name"] for r in rows]
         op = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
-        return op.get(vtype_row["type"], " & ").join(names)
+        return op.get(vtype, " & ").join(names)
 
-    def _find_composition_variation(
-        self, vtype: str, member_ids: list[int]
-    ) -> tuple[int, str, str | None] | None:
-        """找到持有某个组合的 variation → (concept_id, short_code, status)。
+    def _find_composition_concept(
+        self, vtype: str, member_ids: list[int], role: str | None = None
+    ) -> int | None:
+        """找到持有某个组合的概念 ID。
 
-        通过构建规范签名在候选 variation 中精确匹配。
         CHAIN 按有序列表比较；AND/OR 按排序后的集合比较（忽略顺序），
-        且 type 必须相同。
+        且 activation_type 必须相同。可选按 role 过滤。
         """
+        if not member_ids:
+            return None
+
         total_members = len(member_ids)
         if vtype == "CHAIN":
             target_sig: tuple[int, ...] = tuple(member_ids)
@@ -367,23 +311,30 @@ class QueryMixin:
             target_sig = tuple(sorted(member_ids))
 
         placeholders = ",".join("?" * total_members)
+        role_clause = "AND c.role = ? " if role else ""
+        params: list[Any] = [*member_ids, vtype]
+        if role:
+            params.append(role)
+        params.append(total_members)
+
         candidates = self.conn.execute(
-            f"SELECT cm.concept_id, cm.short_code "
+            f"SELECT cm.parent_concept_id AS concept_id "
             f"FROM compose_members cm "
-            f"JOIN variations v USING (concept_id, short_code) "
+            f"JOIN concepts c ON cm.parent_concept_id = c.id "
             f"WHERE cm.member_concept_id IN ({placeholders}) "
-            f"AND v.type = ? "
-            f"GROUP BY cm.concept_id, cm.short_code "
+            f"AND c.activation_type = ? "
+            f"{role_clause}"
+            f"GROUP BY cm.parent_concept_id "
             f"HAVING COUNT(*) = ?",
-            (*member_ids, vtype, total_members),
+            params,
         ).fetchall()
 
         for cand in candidates:
             rows = self.conn.execute(
                 "SELECT member_concept_id FROM compose_members "
-                "WHERE concept_id = ? AND short_code = ? "
+                "WHERE parent_concept_id = ? "
                 "ORDER BY order_index",
-                (cand["concept_id"], cand["short_code"]),
+                (cand["concept_id"],),
             ).fetchall()
             if len(rows) != total_members:
                 continue
@@ -393,174 +344,101 @@ class QueryMixin:
             else:
                 cand_sig = tuple(sorted(cand_ids))
             if cand_sig == target_sig:
-                status = self.conn.execute(
-                    "SELECT status FROM variations "
-                    "WHERE concept_id = ? AND short_code = ?",
-                    (cand["concept_id"], cand["short_code"]),
-                ).fetchone()
-                return (
-                    cand["concept_id"],
-                    cand["short_code"],
-                    status["status"],
-                )
+                return cand["concept_id"]
         return None
 
-    # ── Directed relations ───────────────────────────────────────────────────
+    # ── Compose members ──────────────────────────────────────────────────────
 
-    def _query_directed_relations(
-        self, concept_id: int, *, inbound: bool,
-    ) -> dict[str, list[DirectedRelation]]:
-        """查 concept_id 的有向关系，按 status 分组。
-
-        只有 CHAIN 类型的变体有方向性。AND/OR 的成员之间无有向关系。
-
-        inbound=True：concept_id 作为被指向方（出现在 order_index >= 2），
-            关系另一端是相邻上一个 order_index (idx - 1) 的成员。
-        inbound=False：concept_id 作为指向方（其 order_index + 1 存在），
-            关系另一端是相邻下一个 order_index (idx + 1) 的成员。
-
-        单条 JOIN 一次取出 (variation, status, 另一端成员名)，随后批量加载
-        成员的 disclosures，避免逐行回查；表达式字符串按 variation 缓存，
-        不重复构建。
-        """
-        offset = -1 if inbound else 1
+    def _get_compose_members(self, concept_id: int) -> list[ComposeMemberDetail]:
         rows = self.conn.execute(
-            "SELECT "
-            "  self_cm.concept_id AS v_cid, "
-            "  self_cm.short_code AS v_sc, "
-            "  self_cm.order_index AS self_pos, "
-            "  v.status           AS status, "
-            "  rel.name           AS concept_name, "
-            "  other_cm.member_concept_id AS member_id, "
-            "  m.name             AS member_name "
-            "FROM compose_members self_cm "
-            "JOIN variations v "
-            "  ON v.concept_id = self_cm.concept_id "
-            "  AND v.short_code = self_cm.short_code "
-            "  AND v.type = 'CHAIN' "
-            "JOIN concepts rel ON rel.id = self_cm.concept_id "
-            "JOIN compose_members other_cm "
-            "  ON other_cm.concept_id = self_cm.concept_id "
-            "  AND other_cm.short_code = self_cm.short_code "
-            "  AND other_cm.order_index = self_cm.order_index + ? "
-            "JOIN concepts m ON m.id = other_cm.member_concept_id "
-            "WHERE self_cm.member_concept_id = ? "
-            "ORDER BY self_cm.concept_id, self_cm.short_code, "
-            "self_cm.order_index, other_cm.member_concept_id",
-            (offset, concept_id),
+            "SELECT c.id AS concept_id, c.name, c.disclosure, cm.order_index "
+            "FROM compose_members cm "
+            "JOIN concepts c ON cm.member_concept_id = c.id "
+            "WHERE cm.parent_concept_id = ? "
+            "ORDER BY cm.order_index, cm.member_concept_id",
+            (concept_id,),
         ).fetchall()
+        return [
+            ComposeMemberDetail(
+                concept_id=r["concept_id"],
+                name=r["name"],
+                order_index=r["order_index"],
+                disclosure=r["disclosure"],
+            )
+            for r in rows
+        ]
 
-        grouped: dict[str, list[DirectedRelation]] = {
-            "confirmed": [], "negated": [], "hypothesis": [],
-        }
-        relations: dict[tuple[int, str, int], DirectedRelation] = {}
-        expr_cache: dict[tuple[int, str], str | None] = {}
-        member_cids: set[int] = set()
+    def _get_sensor_hooks(self, concept_id: int) -> list[SensorHookDetail]:
+        rows = self.conn.execute(
+            "SELECT id, sensor_concept_id, event_type, tool, match_pattern, created_at "
+            "FROM sensor_hooks WHERE sensor_concept_id = ? ORDER BY id",
+            (concept_id,),
+        ).fetchall()
+        return [SensorHookDetail(**dict(r)) for r in rows]
 
-        for row in rows:
-            v_cid, v_sc, self_pos = row["v_cid"], row["v_sc"], row["self_pos"]
-            s = row["status"] or "hypothesis"
-            if s not in grouped:
-                continue
-            key = (v_cid, v_sc, self_pos)
-            relation = relations.get(key)
-            if relation is None:
-                var_key = (v_cid, v_sc)
-                if var_key not in expr_cache:
-                    expr_cache[var_key] = self._get_expression(v_cid, v_sc)
-                relation = DirectedRelation(
-                    expression=expr_cache[var_key] or "",
-                    concept_id=v_cid,
-                    concept_name=row["concept_name"],
-                    members=[],
-                )
-                relations[key] = relation
-                grouped[s].append(relation)
-            member_cids.add(row["member_id"])
-            relation.members.append(RelationMember(
-                concept_id=row["member_id"],
-                concept_name=row["member_name"],
-                disclosures=[],
-            ))
+    def _get_tool_guards(self, concept_id: int) -> list[ToolGuardDetail]:
+        rows = self.conn.execute(
+            "SELECT id, guard_concept_id, tool, args_pattern, created_at "
+            "FROM tool_guards WHERE guard_concept_id = ? ORDER BY id",
+            (concept_id,),
+        ).fetchall()
+        return [ToolGuardDetail(**dict(r)) for r in rows]
 
-        if member_cids:
-            disc_map = self._get_disclosures_batch(member_cids)
-            for relation in relations.values():
-                for member in relation.members:
-                    member.disclosures = disc_map.get(member.concept_id, [])
+    def _get_inhibitions(
+        self, concept_id: int, direction: Literal["incoming", "outgoing"] = "incoming"
+    ) -> list[InhibitionDetail]:
+        """查询概念的抑制关系。
 
-        return grouped
+        - direction="incoming": 谁抑制了当前概念 (inhibitor -> current)
+        - direction="outgoing": 当前概念抑制了谁 (current -> target)
+        """
+        if direction == "incoming":
+            filter_col = "i.target_concept_id"
+            order_col = "i.inhibitor_concept_id"
+        elif direction == "outgoing":
+            filter_col = "i.inhibitor_concept_id"
+            order_col = "i.target_concept_id"
+        else:
+            raise ValueError(f"Invalid direction '{direction}'. Use 'incoming' or 'outgoing'.")
 
-    def _query_inbound_relations(
-        self, concept_id: int,
-    ) -> dict[str, list[DirectedRelation]]:
-        return self._query_directed_relations(concept_id, inbound=True)
-
-    def _query_outbound_relations(
-        self, concept_id: int,
-    ) -> dict[str, list[DirectedRelation]]:
-        return self._query_directed_relations(concept_id, inbound=False)
+        rows = self.conn.execute(
+            f"SELECT i.target_concept_id, i.inhibitor_concept_id, "
+            f"c_inh.name AS inhibitor_name, c_tgt.name AS target_name, i.created_at "
+            f"FROM inhibitions i "
+            f"JOIN concepts c_inh ON i.inhibitor_concept_id = c_inh.id "
+            f"JOIN concepts c_tgt ON i.target_concept_id = c_tgt.id "
+            f"WHERE {filter_col} = ? ORDER BY {order_col}",
+            (concept_id,),
+        ).fetchall()
+        return [InhibitionDetail(**dict(r)) for r in rows]
 
     # ── read_concept ─────────────────────────────────────────────────────────
 
     def read_concept(self, concept) -> ReadResult:
         """读取概念的完整视图。"""
-        cid, _ = self._resolve_id(concept)
+        cid = self._resolve_id(concept)
         row = self.conn.execute(
             "SELECT * FROM concepts WHERE id = ?", (cid,)
         ).fetchone()
+        if not row:
+            raise ValueError(f"Concept not found: {concept}")
 
-        disclosures = self._get_disclosures(cid)
-
-        var_rows = self.conn.execute(
-            "SELECT * FROM variations WHERE concept_id = ? "
-            "ORDER BY short_code",
-            (cid,),
-        ).fetchall()
-        member_rows = self.conn.execute(
-            "SELECT cm.short_code, cm.member_concept_id AS concept_id, c.name, "
-            "       cm.order_index "
-            "FROM compose_members cm "
-            "JOIN concepts c ON cm.member_concept_id = c.id "
-            "WHERE cm.concept_id = ? "
-            "ORDER BY cm.order_index, cm.member_concept_id",
-            (cid,),
-        ).fetchall()
-
-        member_cids: set[int] = set()
-        members_raw_by_sc: dict[str, list[dict]] = {}
-        for mr in member_rows:
-            d = dict(mr)
-            sc = d.pop("short_code")
-            member_cids.add(d["concept_id"])
-            members_raw_by_sc.setdefault(sc, []).append(d)
-
-        member_disc_map = self._get_disclosures_batch(member_cids)
-
-        variations: list[VariationDetail] = []
-        for vr in var_rows:
-            expr = self._get_expression(cid, vr["short_code"])
-            members = [
-                ComposeMemberDetail(
-                    concept_id=m["concept_id"],
-                    name=m["name"],
-                    order_index=m["order_index"],
-                    disclosures=member_disc_map.get(m["concept_id"], []),
-                )
-                for m in members_raw_by_sc.get(vr["short_code"], [])
-            ]
-            variations.append(VariationDetail(**dict(vr), expression=expr, members=members))
+        activation_rule = self._get_activation_rule(cid)
+        members = self._get_compose_members(cid)
+        sensor_hooks = self._get_sensor_hooks(cid)
+        tool_guards = self._get_tool_guards(cid)
+        inhibitions = self._get_inhibitions(cid, direction="incoming")
+        inhibiting = self._get_inhibitions(cid, direction="outgoing")
 
         aliases = [
             ar["alias"] for ar in self.conn.execute(
-                "SELECT alias FROM aliases WHERE concept_id = ?", (cid,)
+                "SELECT alias FROM aliases WHERE concept_id = ? ORDER BY alias", (cid,)
             ).fetchall()
         ]
 
         tags = [
             tr["tag"] for tr in self.conn.execute(
-                "SELECT tag FROM concept_tags WHERE concept_id = ? "
-                "ORDER BY tag", (cid,)
+                "SELECT tag FROM concept_tags WHERE concept_id = ? ORDER BY tag", (cid,)
             ).fetchall()
         ]
 
@@ -577,7 +455,8 @@ class QueryMixin:
             tag_source_info = (
                 f"This concept's name is registered as tag "
                 f"'{ts_row['name']}'. "
-                f"Currently used by {ts_row['cnt']} other concept(s).")
+                f"Currently used by {ts_row['cnt']} other concept(s)."
+            )
 
         reminders = [
             ReminderDetail(
@@ -588,79 +467,101 @@ class QueryMixin:
                 last_fired_at=r["last_fired_at"],
             )
             for r in self.conn.execute(
-                "SELECT * FROM reminders WHERE concept_id = ? ORDER BY id",
+                "SELECT id, condition, message, created_at, last_fired_at "
+                "FROM reminders WHERE concept_id = ? ORDER BY id",
                 (cid,),
             ).fetchall()
         ]
 
-        inbound = self._query_inbound_relations(cid)
-        outbound = self._query_outbound_relations(cid)
         suggested_next = self._get_suggested_transitions(cid)
 
         return ReadResult(
             id=cid,
             name=row["name"],
-            disclosures=disclosures,
+            content=row["content"],
+            disclosure=row["disclosure"],
+            role=row["role"],
+            is_active=row["is_active"],
+            lifespan=row["lifespan"],
+            activation_type=row["activation_type"],
+            activation_rule=activation_rule,
+            on_fire=row["on_fire"],
             aliases=aliases,
             tags=tags,
             tag_source_info=tag_source_info,
             reminders=reminders,
-            variations=variations,
+            members=members,
+            sensor_hooks=sensor_hooks,
+            tool_guards=tool_guards,
+            inhibitions=inhibitions,
+            inhibiting=inhibiting,
             suggested_next=suggested_next,
-            inbound_confirmed=inbound["confirmed"],
-            inbound_negated=inbound["negated"],
-            inbound_hypotheses=inbound["hypothesis"],
-            outbound_confirmed=outbound["confirmed"],
-            outbound_negated=outbound["negated"],
-            outbound_hypotheses=outbound["hypothesis"],
         )
 
     # ── Intent-based vector search ──────────────────────────────────────────
 
-
-
     def search_by_intent(
         self, intent_text: str, limit: int = 10,
     ) -> list[dict]:
-        """Search disclosures by semantic similarity to an intent string.
+        """Search concept disclosures by semantic similarity to an intent string.
 
-        Computes the intent's embedding, then ranks all disclosures that have
-        stored embeddings by cosine similarity. Returns top-N results with
-        concept info.
+        Computes the intent's embedding, then ranks all concepts that have
+        stored disclosure embeddings by cosine similarity. Returns top-N results.
         """
         query_vec = get_embedding(intent_text)
         if query_vec is None:
             raise RuntimeError(
                 "Failed to compute embedding for intent query. "
-                "Check OPENROUTER_API_KEY and network connectivity.")
+                "Check OPENROUTER_API_KEY and network connectivity."
+            )
 
         rows = self.conn.execute(
-            "SELECT d.id, d.concept_id, d.text, d.embedding, c.name "
-            "FROM disclosures d "
-            "JOIN concepts c ON d.concept_id = c.id "
-            "WHERE d.embedding IS NOT NULL"
+            "SELECT c.id, c.name, c.disclosure, ce.embedding "
+            "FROM concept_embeddings ce "
+            "JOIN concepts c ON ce.concept_id = c.id "
+            "WHERE c.disclosure IS NOT NULL AND c.disclosure != ''"
         ).fetchall()
 
-        scored: list[tuple[float, dict]] = []
-        for r in rows:
-            try:
-                blob = r["embedding"]
-                stored_vec = struct.unpack(f'<{len(blob)//4}f', blob)
-                if len(stored_vec) != EMBEDDING_DIMENSIONS:
-                    continue
-                sim = sum(x * y for x, y in zip(query_vec, stored_vec))
-            except (TypeError, ValueError, struct.error):
-                continue
-            scored.append((sim, {
-                "disclosure_id": r["id"],
-                "concept_id": r["concept_id"],
-                "concept_name": r["name"],
-                "disclosure_text": r["text"],
-                "similarity": round(sim, 4),
-            }))
+        if not rows:
+            return []
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [item for _, item in scored[:limit]]
+        expected_bytes = EMBEDDING_DIMENSIONS * 4
+        valid_rows = []
+        valid_blobs = []
+        for r in rows:
+            blob = r["embedding"]
+            if isinstance(blob, (bytes, bytearray, memoryview)) and len(blob) == expected_bytes:
+                valid_rows.append(r)
+                valid_blobs.append(blob)
+
+        if not valid_rows:
+            return []
+
+        matrix = np.frombuffer(b"".join(valid_blobs), dtype=np.float32).reshape(
+            len(valid_rows), EMBEDDING_DIMENSIONS
+        )
+        q_vec = np.asarray(query_vec, dtype=np.float32)
+        sims = matrix @ q_vec
+
+        n_results = min(limit, len(valid_rows))
+        if n_results <= 0:
+            return []
+
+        if len(sims) <= limit:
+            top_indices = np.argsort(-sims)
+        else:
+            top_k_unsorted = np.argpartition(-sims, n_results)[:n_results]
+            top_indices = top_k_unsorted[np.argsort(-sims[top_k_unsorted])]
+
+        return [
+            {
+                "concept_id": valid_rows[i]["id"],
+                "concept_name": valid_rows[i]["name"],
+                "disclosure_text": valid_rows[i]["disclosure"],
+                "similarity": round(float(sims[i]), 4),
+            }
+            for i in top_indices
+        ]
 
     # ── Attention routing ────────────────────────────────────────────────────
 
@@ -698,23 +599,26 @@ class QueryMixin:
         4. I  = -log₂(P')                         — surprise
         5. new_weight = w₀ + (I * relevance)
         """
+        sess = self._resolve_session_id()
         recent_reads = self.conn.execute(
             "SELECT concept_id, timestamp FROM cli_audit_log "
-            "WHERE command = 'read_concept' AND success = 1 "
-            "ORDER BY id DESC LIMIT 10"
+            "WHERE command = 'read_concept' AND success = 1 AND session_id = ? "
+            "ORDER BY id DESC LIMIT 10",
+            (sess,),
         ).fetchall()
-        
+
         if not recent_reads:
             return
-            
+
         import datetime
+
         def _parse_ts(ts_str: str) -> datetime.datetime:
             clean = str(ts_str).replace("T", " ").split(".")[0]
             return datetime.datetime.strptime(clean, "%Y-%m-%d %H:%M:%S")
 
         now_time = _parse_ts(_now())
         last_time = now_time
-        
+
         distinct_from_ids = []
         for row in recent_reads:
             cid = row["concept_id"]
@@ -723,39 +627,41 @@ class QueryMixin:
             # If the gap between this read and the next (or current) read is > 30 mins, break the chain
             if (last_time - row_time).total_seconds() > 30 * 60:
                 break
-                
+
             last_time = row_time
-            
+
+            if cid == to_id:
+                continue
+
             if cid not in distinct_from_ids:
                 distinct_from_ids.append(cid)
             if len(distinct_from_ids) == 3:
                 break
-                
-        now = _now()
+
         for i, from_id in enumerate(distinct_from_ids):
             if from_id == to_id:
                 continue
-                
+
             exists = self.conn.execute(
                 "SELECT 1 FROM concepts WHERE id = ?", (from_id,)
             ).fetchone()
             if not exists:
                 continue
-                
+
             relevance = 0.5 ** i
-            
+
             self.conn.execute(
                 "UPDATE concept_transitions SET weight = weight * ? "
                 "WHERE from_concept_id = ?",
                 (_DECAY_GAMMA, from_id),
             )
-            
+
             self.conn.execute(
                 "DELETE FROM concept_transitions "
                 "WHERE from_concept_id = ? AND weight < ?",
                 (from_id, _PRUNING_THRESHOLD),
             )
-            
+
             row = self.conn.execute(
                 "SELECT weight FROM concept_transitions "
                 "WHERE from_concept_id = ? AND to_concept_id = ?",
@@ -778,7 +684,7 @@ class QueryMixin:
                 "INSERT INTO concept_transitions "
                 "(from_concept_id, to_concept_id, weight, last_accessed_at) "
                 "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(from_concept_id, to_concept_id) "
+                "ON CONFLICT (from_concept_id, to_concept_id) "
                 "DO UPDATE SET weight = ?, last_accessed_at = ?",
-                (from_id, to_id, new_weight, now, new_weight, now),
+                (from_id, to_id, new_weight, _now(), new_weight, _now()),
             )

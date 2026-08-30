@@ -14,7 +14,6 @@ Module layout:
 """
 from __future__ import annotations
 
-import os
 import sqlite3
 import sys
 import time
@@ -31,6 +30,8 @@ from ._db_mutations import MutationMixin
 from ._db_query import QueryMixin
 from ._db_reminders import ReminderMixin
 from ._db_compile import CompileMixin
+from .evaluator import GraphEvaluator
+from .models import EvaluationResult
 
 
 class HoronDB(
@@ -134,10 +135,10 @@ class HoronDB(
             self.conn.execute("PRAGMA legacy_alter_table = OFF")
             self.conn.execute("PRAGMA foreign_keys = ON")
 
-    # ── Session Lifecycle ────────────────────────────────────────────────────
+    # ── Session & Evaluation Lifecycle ───────────────────────────────────────
 
     def init_session(self) -> str:
-        """初始化/开启新会话：自动生成 ID、写入 current_session、熄灭 session/turn 传感器、清空时序链。"""
+        """初始化/开启新会话：自动生成 ID、写入 current_session、熄灭 session/turn 传感器、清空时序链并重算拓扑。"""
         new_id = f"sess_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         now = _now()
 
@@ -148,18 +149,47 @@ class HoronDB(
             (new_id, now),
         )
 
-        # 2. 熄灭会话级与回合级临时传感器
+        # 2. 清空 active_chain_instances
+        self.conn.execute("DELETE FROM active_chain_instances")
+
+        # 3. 熄灭临时传感器并重算拓扑
         self.conn.execute(
-            "UPDATE concepts SET is_active = 0, updated_at = ? "
-            "WHERE lifespan IN ('session', 'turn')",
+            "UPDATE concepts SET is_active = 0, updated_at = ? WHERE lifespan IN ('session', 'turn')",
             (now,),
         )
-
-        # 3. 清除时序链状态机
-        self.conn.execute("DELETE FROM active_chain_instances")
+        GraphEvaluator(self.conn, session_id=new_id).evaluate()
         self.conn.commit()
 
         return new_id
+
+    def session_reset(self, session_id: str | None = None) -> EvaluationResult:
+        """重置会话：清空 CHAIN 状态机与 session/turn 传感器，并重新求值全图。"""
+        sess = session_id or self._resolve_session_id()
+        res = GraphEvaluator(self.conn, session_id=sess).reset_session()
+        self.conn.commit()
+        return res
+
+    def turn_end(self, session_id: str | None = None) -> EvaluationResult:
+        """单回合结束：熄灭 turn 传感器，并重新求值全图。"""
+        sess = session_id or self._resolve_session_id()
+        res = GraphEvaluator(self.conn, session_id=sess).end_turn()
+        self.conn.commit()
+        return res
+
+    def evaluate(
+        self,
+        session_id: str | None = None,
+        activated_sensors: list[int] | None = None,
+        deactivated_sensors: list[int] | None = None,
+    ) -> EvaluationResult:
+        """执行单趟 Kahn 拓扑排序求值与时序/抑制计算。"""
+        sess = session_id or self._resolve_session_id()
+        res = GraphEvaluator(self.conn, session_id=sess).evaluate(
+            activated_sensors=activated_sensors,
+            deactivated_sensors=deactivated_sensors,
+        )
+        self.conn.commit()
+        return res
 
     def _resolve_session_id(self) -> str:
         """获取当前有效会话 ID。直接读 current_session 表；若未初始化则自动生成。"""
@@ -307,12 +337,7 @@ class HoronDB(
                 f"{vtype} activation rule requires at least 2 concepts.")
 
         ids = [self._resolve_id(n) for n in parts]
-        if vtype == "CHAIN":
-            if any(a == b for a, b in zip(ids, ids[1:])):
-                raise ValueError(
-                    "A concept cannot immediately follow itself in a chain "
-                    "(e.g. 'A → A' is invalid).")
-        elif vtype != "SINGLE":
+        if vtype in ("AND", "OR"):
             if len(set(ids)) != len(ids):
                 raise ValueError(
                     "A concept cannot appear more than once in an AND/OR "

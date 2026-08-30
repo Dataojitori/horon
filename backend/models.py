@@ -8,7 +8,7 @@ Core roles:
   guard:  Tool gateway gating valve (activation_type in CHAIN/AND/OR)
 """
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -89,6 +89,21 @@ class TransitionSuggestion(BaseModel):
     weight: float
 
 
+# ── Runtime Evaluation 返回 ───────────────────────────────────
+
+class FiredAction(BaseModel):
+    """发火动作详情。"""
+    concept: str
+    concept_id: int
+    action: Any
+
+
+class EvaluationResult(BaseModel):
+    """求值引擎拓扑计算与时序推进的返回结构。"""
+    active_changed: dict[str, int] = {}
+    fired_actions: list[FiredAction] = []
+
+
 # ── Mutation & Read 返回 ─────────────────────────────────────
 
 class MutationResult(BaseModel):
@@ -96,7 +111,7 @@ class MutationResult(BaseModel):
     message: str
     concept_id: int | None = None
     concept_name: str | None = None
-    short_code: str | None = None
+    fired_actions: list[FiredAction] = []
 
 
 class ReminderDetail(BaseModel):
@@ -130,3 +145,4 @@ class ReadResult(BaseModel):
     inhibitions: list[InhibitionDetail] = []
     inhibiting: list[InhibitionDetail] = []
     suggested_next: list[TransitionSuggestion] = []
+

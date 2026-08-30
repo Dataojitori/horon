@@ -319,6 +319,11 @@ class RawOutput:
 def _print(obj):
     if isinstance(obj, MutationResult):
         print(obj.message)
+        if obj.fired_actions:
+            print("\n[ FIRED ACTIONS ]")
+            for fa in obj.fired_actions:
+                act_str = json.dumps(fa.action, ensure_ascii=False) if isinstance(fa.action, (dict, list)) else str(fa.action)
+                print(f"  * {fa.concept} (id={fa.concept_id}): {act_str}")
     elif isinstance(obj, ReadResult):
         print(_format_read_concept(obj))
     elif isinstance(obj, dict) and "compiled_route" in obj:
@@ -899,7 +904,7 @@ def _audited_dispatch(args, db):
 
     Audit info comes from two sources:
       - sub_action: CLI routing (which sub-command was used)
-      - concept_id/name/short_code: DB return value (MutationResult or ReadResult)
+      - concept_id/name: DB return value (MutationResult or ReadResult)
     """
     cmd = args.command
     sub_action = None
@@ -920,12 +925,10 @@ def _audited_dispatch(args, db):
 
     concept_id = None
     concept_name = None
-    short_code = None
 
     if isinstance(result, MutationResult):
         concept_id = result.concept_id
         concept_name = result.concept_name
-        short_code = result.short_code
     elif isinstance(result, ReadResult):
         concept_id = result.id
         concept_name = result.name
@@ -934,7 +937,6 @@ def _audited_dispatch(args, db):
         command=cmd,
         concept_id=concept_id,
         concept_name=concept_name,
-        short_code=short_code,
         sub_action=sub_action,
         success=True,
     )

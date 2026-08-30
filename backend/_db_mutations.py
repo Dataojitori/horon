@@ -8,6 +8,7 @@ from typing import Any
 from . import tag_sandbox
 from ._db_common import SYSTEM_TAGS, _now, _validate_name, transactional
 from .embedding import sync_single_embedding
+from .evaluator import GraphEvaluator
 from .models import MutationResult
 
 _logger = logging.getLogger(__name__)
@@ -313,9 +314,13 @@ class MutationMixin:
             "VALUES (?, ?, ?)",
             (target_id, inhibitor_id, now),
         )
+        sess = self._resolve_session_id()
+        evaluator = GraphEvaluator(self.conn, session_id=sess)
+        eval_res = evaluator.evaluate()
         return MutationResult(
             message=f"Success. Added inhibition: '{inhibitor_name}' (id={inhibitor_id}) ─⊣ '{target_name}' (id={target_id}).",
             concept_id=target_id, concept_name=target_name,
+            fired_actions=eval_res.fired_actions,
         )
 
     # ── Delete ───────────────────────────────────────────────────────────────
@@ -501,6 +506,9 @@ class MutationMixin:
             "DELETE FROM inhibitions WHERE target_concept_id = ? OR inhibitor_concept_id = ?", (cid, cid)
         )
         self.conn.execute(
+            "DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,)
+        )
+        self.conn.execute(
             "UPDATE concepts SET role = 'plain', activation_type = NULL, lifespan = NULL, is_active = 0, on_fire = NULL, updated_at = ? "
             "WHERE id = ?",
             (_now(), cid),
@@ -522,6 +530,9 @@ class MutationMixin:
             for mid in set(unlinked_member_ids):
                 all_infos.extend(self._run_mutation_hooks(mid, diff))
 
+        sess = self._resolve_session_id()
+        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+
         if old_role != "plain":
             msg = f"Success. Cleared activation rule of {label}; automatically downgraded role from '{old_role}' to 'plain'."
         else:
@@ -532,6 +543,7 @@ class MutationMixin:
         return MutationResult(
             message=msg,
             concept_id=cid, concept_name=cname,
+            fired_actions=eval_res.fired_actions,
         )
 
     @transactional
@@ -590,9 +602,12 @@ class MutationMixin:
             "DELETE FROM inhibitions WHERE target_concept_id = ? AND inhibitor_concept_id = ?",
             (target_id, inhibitor_id),
         )
+        sess = self._resolve_session_id()
+        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
         return MutationResult(
             message=f"Success. Removed inhibition: '{inhibitor_name}' ─⊣ '{target_name}'.",
             concept_id=target_id, concept_name=target_name,
+            fired_actions=eval_res.fired_actions,
         )
 
     # ── Set ──────────────────────────────────────────────────────────────────
@@ -689,13 +704,16 @@ class MutationMixin:
                 f"or falsy (0, '0', 'false', 'inactive', 'off')."
             )
 
-        self.conn.execute(
-            "UPDATE concepts SET is_active = ?, updated_at = ? WHERE id = ?",
-            (val, _now(), cid),
-        )
+        sess = self._resolve_session_id()
+        evaluator = GraphEvaluator(self.conn, session_id=sess)
+        if val == 1:
+            eval_res = evaluator.evaluate(activated_sensors=[cid])
+        else:
+            eval_res = evaluator.evaluate(deactivated_sensors=[cid])
         return MutationResult(
             message=f"Success. Set active state of permanent sensor {label} to: {val}.",
             concept_id=cid, concept_name=cname,
+            fired_actions=eval_res.fired_actions,
         )
 
     @transactional
@@ -729,12 +747,18 @@ class MutationMixin:
                     "永久传感器不可绑定感知钩子；目标传感器已绑定 sensor_hooks，请先解除 Hook 绑定后再设为 permanent。"
                 )
 
+        fired_actions = []
         old_ls = row["lifespan"]
+        old_is_active = row["is_active"]
         if ls != old_ls and ls in ("turn", "session"):
             self.conn.execute(
                 "UPDATE concepts SET lifespan = ?, is_active = 0, updated_at = ? WHERE id = ?",
                 (ls, _now(), cid),
             )
+            if old_is_active == 1:
+                sess = self._resolve_session_id()
+                eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+                fired_actions = eval_res.fired_actions
         else:
             self.conn.execute(
                 "UPDATE concepts SET lifespan = ?, updated_at = ? WHERE id = ?",
@@ -752,6 +776,7 @@ class MutationMixin:
         return MutationResult(
             message=msg,
             concept_id=cid, concept_name=cname,
+            fired_actions=fired_actions,
         )
 
     @transactional
@@ -855,6 +880,9 @@ class MutationMixin:
                 (cid, cid),
             )
             self.conn.execute(
+                "DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,)
+            )
+            self.conn.execute(
                 "UPDATE concepts SET role = 'plain', activation_type = NULL, lifespan = NULL, is_active = 0, on_fire = NULL, updated_at = ? "
                 "WHERE id = ?",
                 (now, cid),
@@ -893,6 +921,9 @@ class MutationMixin:
                 side_effects.append("cleared tool guards")
             self.conn.execute(
                 "DELETE FROM inhibitions WHERE target_concept_id = ?", (cid,)
+            )
+            self.conn.execute(
+                "DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,)
             )
 
             if old_role == "sensor" and (not explicit_lifespan or ls == old_lifespan):
@@ -940,15 +971,26 @@ class MutationMixin:
                         raise ValueError(
                             f"Concept '{exist_name}' (id={existing_cid}) already has the same composition: {clean_rule}"
                         )
-                self.conn.execute("DELETE FROM compose_members WHERE parent_concept_id = ?", (cid,))
-                for idx, mid in enumerate(member_ids, start=1):
-                    self.conn.execute(
-                        "INSERT INTO compose_members (parent_concept_id, member_concept_id, order_index) VALUES (?, ?, ?)",
-                        (cid, mid, idx),
-                    )
+                old_act_type = row["activation_type"]
+                if old_act_type == vtype:
+                    if vtype == "CHAIN":
+                        rule_changed = (old_member_ids != member_ids)
+                    else:
+                        rule_changed = (set(old_member_ids) != set(member_ids))
+                else:
+                    rule_changed = True
+
+                if rule_changed:
+                    self.conn.execute("DELETE FROM compose_members WHERE parent_concept_id = ?", (cid,))
+                    self.conn.execute("DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,))
+                    for idx, mid in enumerate(member_ids, start=1):
+                        self.conn.execute(
+                            "INSERT INTO compose_members (parent_concept_id, member_concept_id, order_index) VALUES (?, ?, ?)",
+                            (cid, mid, idx),
+                        )
                 self.conn.execute(
-                    "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = 0, updated_at = ? WHERE id = ?",
-                    (new_role, vtype, now, cid),
+                    "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
+                    (new_role, vtype, old_is_active, now, cid),
                 )
                 side_effects.append(f"activation rule set to: {clean_rule}")
 
@@ -956,18 +998,20 @@ class MutationMixin:
                     diff["role"] = {"concept_id": cid, "old": old_role, "new": new_role}
                 if old_lifespan is not None:
                     diff["lifespan"] = {"concept_id": cid, "old": old_lifespan, "new": None}
-                if old_rule != clean_rule:
+                if rule_changed:
                     diff["activation-rule"] = {"concept_id": cid, "old": old_rule, "new": clean_rule}
-                affected_members.update(member_ids)
-                affected_members.update(old_member_ids)
+                    affected_members.update(member_ids)
+                    affected_members.update(old_member_ids)
+                elif old_role != new_role:
+                    affected_members.update(old_member_ids)
             else:
                 if not row["activation_type"]:
                     raise ValueError(
                         f"Switching role to '{new_role}' requires specifying an activation rule (e.g. set <concept> role {new_role} --activation-rule 'A & B')."
                     )
                 self.conn.execute(
-                    "UPDATE concepts SET role = ?, lifespan = NULL, is_active = 0, updated_at = ? WHERE id = ?",
-                    (new_role, now, cid),
+                    "UPDATE concepts SET role = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
+                    (new_role, old_is_active, now, cid),
                 )
                 if old_role != new_role:
                     diff["role"] = {"concept_id": cid, "old": old_role, "new": new_role}
@@ -980,6 +1024,10 @@ class MutationMixin:
             for mid in affected_members:
                 all_infos.extend(self._run_mutation_hooks(mid, diff))
 
+        sess = self._resolve_session_id()
+        evaluator = GraphEvaluator(self.conn, session_id=sess)
+        eval_res = evaluator.evaluate()
+
         details = f" ({'; '.join(side_effects)})" if side_effects else ""
         msg = f"Success. Switched role of {label} from '{old_role}' to '{new_role}'.{details}"
         if all_infos:
@@ -987,6 +1035,7 @@ class MutationMixin:
         return MutationResult(
             message=msg,
             concept_id=cid, concept_name=cname,
+            fired_actions=eval_res.fired_actions,
         )
 
     @transactional
@@ -1005,13 +1054,15 @@ class MutationMixin:
             raise ValueError("A concept cannot appear in its own activation rule.")
 
         row = self.conn.execute(
-            "SELECT role, activation_type FROM concepts WHERE id = ?", (cid,)
+            "SELECT role, activation_type, is_active FROM concepts WHERE id = ?", (cid,)
         ).fetchone()
 
         if row["role"] == "sensor":
             raise ValueError("传感器节点入度恒为 0，严禁定义激活规则上游依赖。")
 
         orig_role = row["role"]
+        old_is_active = row["is_active"]
+        old_act_type = row["activation_type"]
         target_role = "logic" if orig_role == "plain" else orig_role
 
         # 全局激活规则唯一性校验（仅限 logic 节点）
@@ -1031,34 +1082,49 @@ class MutationMixin:
         old_member_ids = [r["member_concept_id"] for r in old_member_rows]
         old_rule = self._get_activation_rule(cid)
 
-        self.conn.execute("DELETE FROM compose_members WHERE parent_concept_id = ?", (cid,))
-        for idx, mid in enumerate(member_ids, start=1):
-            self.conn.execute(
-                "INSERT INTO compose_members (parent_concept_id, member_concept_id, order_index) VALUES (?, ?, ?)",
-                (cid, mid, idx),
-            )
+        if old_act_type == vtype:
+            if vtype == "CHAIN":
+                rule_changed = (old_member_ids != member_ids)
+            else:
+                rule_changed = (set(old_member_ids) != set(member_ids))
+        else:
+            rule_changed = True
+
+        if rule_changed:
+            self.conn.execute("DELETE FROM compose_members WHERE parent_concept_id = ?", (cid,))
+            self.conn.execute("DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,))
+            for idx, mid in enumerate(member_ids, start=1):
+                self.conn.execute(
+                    "INSERT INTO compose_members (parent_concept_id, member_concept_id, order_index) VALUES (?, ?, ?)",
+                    (cid, mid, idx),
+                )
 
         now = _now()
         self.conn.execute(
-            "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = 0, updated_at = ? WHERE id = ?",
-            (target_role, vtype, now, cid),
+            "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
+            (target_role, vtype, old_is_active, now, cid),
         )
 
-        diff: dict = {
-            "activation-rule": {
+        diff: dict = {}
+        if rule_changed:
+            diff["activation-rule"] = {
                 "concept_id": cid,
                 "old": old_rule,
                 "new": clean_rule,
             }
-        }
         if orig_role != target_role:
             diff["role"] = {"concept_id": cid, "old": orig_role, "new": target_role}
 
         all_infos: list[str] = []
-        all_infos.extend(self._run_mutation_hooks(cid, diff))
-        all_affected = set(member_ids) | set(old_member_ids)
-        for mid in all_affected:
-            all_infos.extend(self._run_mutation_hooks(mid, diff))
+        if diff:
+            all_infos.extend(self._run_mutation_hooks(cid, diff))
+            all_affected = set(member_ids) | set(old_member_ids)
+            for mid in all_affected:
+                all_infos.extend(self._run_mutation_hooks(mid, diff))
+
+        sess = self._resolve_session_id()
+        evaluator = GraphEvaluator(self.conn, session_id=sess)
+        eval_res = evaluator.evaluate()
 
         if orig_role == "plain":
             msg = f"Success. Set activation rule of {label} to: {activation_rule}; automatically promoted role from 'plain' to 'logic'."
@@ -1070,6 +1136,7 @@ class MutationMixin:
         return MutationResult(
             message=msg,
             concept_id=cid, concept_name=cname,
+            fired_actions=eval_res.fired_actions,
         )
 
     @transactional

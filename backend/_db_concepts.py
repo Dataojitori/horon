@@ -6,6 +6,7 @@ import logging
 from . import tag_sandbox
 from ._db_common import SYSTEM_TAGS, _now, _validate_name, transactional
 from .embedding import sync_single_embedding
+from .evaluator import GraphEvaluator
 from .models import MutationResult
 from .tag_sandbox import TagPluginError
 
@@ -144,6 +145,12 @@ class ConceptMixin:
                 sync_single_embedding(self, cid, disc)
             self._post_commit_hooks.append(_sync_hook)
 
+        fired_actions = []
+        if role in ("logic", "guard"):
+            sess = self._resolve_session_id()
+            eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+            fired_actions = eval_res.fired_actions
+
         msg = f"Success. Created concept '{name}' (id={concept_id}, role={role})."
         if all_infos:
             msg += "\n" + "\n".join(all_infos)
@@ -152,6 +159,7 @@ class ConceptMixin:
             message=msg,
             concept_id=concept_id,
             concept_name=name,
+            fired_actions=fired_actions,
         )
 
     @transactional
@@ -232,6 +240,9 @@ class ConceptMixin:
         # 执行删除（外键约束自动清理 compose_members, aliases, disclosures, reminders, sensor_hooks, tool_guards, inhibitions 等）
         self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
 
+        sess = self._resolve_session_id()
+        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+
         msg = f"Success. Deleted concept {label}."
         if tag_row:
             msg += f" Tag '{tag_row['name']}' auto-removed."
@@ -240,6 +251,7 @@ class ConceptMixin:
             message=msg,
             concept_id=cid,
             concept_name=cname,
+            fired_actions=eval_res.fired_actions,
         )
 
         if tag_row:
