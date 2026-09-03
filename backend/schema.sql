@@ -159,6 +159,14 @@ CREATE TABLE IF NOT EXISTS concept_embeddings (
     updated_at      TEXT    NOT NULL
 );
 
+-- 15. 会话待消费通知队列表 (跨生命周期 Hook 消息暂存)
+CREATE TABLE IF NOT EXISTS pending_notifications (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    message    TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 -- 索引集合
 CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_sh_lookup           ON sensor_hooks(event_type, tool);
@@ -171,6 +179,7 @@ CREATE INDEX IF NOT EXISTS idx_audit_session      ON cli_audit_log(session_id, t
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
+CREATE INDEX IF NOT EXISTS idx_pn_session         ON pending_notifications(session_id);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS

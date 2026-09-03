@@ -34,7 +34,7 @@ def parse_on_fire_action(action_str: str | None) -> Any:
 class GraphEvaluator:
     """Kahn DAG topological evaluation engine for Horon graph state."""
 
-    def __init__(self, conn: sqlite3.Connection, session_id: str = "default"):
+    def __init__(self, conn: sqlite3.Connection, session_id: str):
         self.conn = conn
         self.session_id = session_id
 
@@ -323,19 +323,18 @@ class GraphEvaluator:
         return EvaluationResult(active_changed=active_changed, fired_actions=fired_actions)
 
     def reset_session(self) -> EvaluationResult:
-        """Reset session: clear active CHAIN instances and turn/session sensors, then re-evaluate graph."""
+        """Reset session: clear active CHAIN instances, pending notifications, and turn/session sensors, then re-evaluate graph."""
         now = _now()
-        # 1. Clear CHAIN instances
-        self.conn.execute(
-            "DELETE FROM active_chain_instances WHERE session_id = ?",
-            (self.session_id,),
-        )
-        # 2. Reset ephemeral sensors
+        # 1. Clear CHAIN instances for current session
+        self.conn.execute("DELETE FROM active_chain_instances WHERE session_id = ?", (self.session_id,))
+        # 2. Clear pending notifications for current session
+        self.conn.execute("DELETE FROM pending_notifications WHERE session_id = ?", (self.session_id,))
+        # 3. Reset ephemeral sensors
         self.conn.execute(
             "UPDATE concepts SET is_active = 0, updated_at = ? WHERE lifespan IN ('session', 'turn')",
             (now,),
         )
-        # 3. Re-evaluate graph to cascade deactivation
+        # 4. Re-evaluate graph to cascade deactivation
         return self.evaluate()
 
     def end_turn(self) -> EvaluationResult:

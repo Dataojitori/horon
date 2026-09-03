@@ -7,6 +7,7 @@ duplicating definitions.
 from __future__ import annotations
 
 import ast
+import json
 import logging
 import os
 import re
@@ -27,6 +28,7 @@ _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 SYSTEM_TAGS = {"result", "exit", "state", "action"}
+VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
 
 _SANDBOX_ALLOWED_CALLS = frozenset({"exists", "status", "tags"})
 _SANDBOX_ALLOWED_NODES = frozenset({
@@ -123,6 +125,71 @@ def _validate_name(name: str) -> str:
     else:
         raise ValueError("Name cannot be purely numeric (ambiguous with concept ID).")
     return name
+
+
+def _validate_and_normalize_on_fire(raw: Any) -> str | None:
+    """校验并归一化 on_fire 动作配置。
+
+    支持格式：
+      1. 多个动作（列表）：[{"notify": "消息内容"}, {"add_todo": "待办内容"}]
+      2. 单个动作（字典）：{"notify": "消息内容"}
+      3. 纯文本字符串："直接文本" -> 自动包装为 {"notify": "直接文本"}
+
+    规则：
+      - 任何动作的 key 必须在 VALID_ON_FIRE_ACTION_TYPES 白名单中。
+      - 任何动作对应的 value 必须是非空字符串。
+      - 包含未定义 key 或空值时直接抛出 ValueError。
+    """
+    if raw is None:
+        return None
+
+    # 1. 处理字符串输入
+    if isinstance(raw, str):
+        clean_str = raw.strip()
+        if not clean_str:
+            return None
+        if (clean_str.startswith("{") and clean_str.endswith("}")) or (clean_str.startswith("[") and clean_str.endswith("]")):
+            try:
+                parsed = json.loads(clean_str)
+            except Exception as e:
+                raise ValueError(f"on_fire JSON 格式错误: {e}") from e
+        else:
+            # 纯文本字符串 -> 自动包装为 notify 动作字典
+            return json.dumps({"notify": clean_str}, ensure_ascii=False)
+    else:
+        parsed = raw
+
+    # 2. 校验单字典格式
+    if isinstance(parsed, dict):
+        if not parsed:
+            raise ValueError("on_fire 动作对象不能为空。")
+        for k, v in parsed.items():
+            if k not in VALID_ON_FIRE_ACTION_TYPES:
+                raise ValueError(
+                    f"未定义的 on_fire 动作种类 '{k}'。支持的动作种类: {', '.join(sorted(VALID_ON_FIRE_ACTION_TYPES))}"
+                )
+            if not isinstance(v, str) or not v.strip():
+                raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
+        return json.dumps(parsed, ensure_ascii=False)
+
+    # 3. 校验列表格式
+    elif isinstance(parsed, list):
+        if not parsed:
+            raise ValueError("on_fire 动作列表不能为空。")
+        for item in parsed:
+            if not isinstance(item, dict) or not item:
+                raise ValueError(f"on_fire 列表中的每个动作必须是非空字典，得到: {item!r}")
+            for k, v in item.items():
+                if k not in VALID_ON_FIRE_ACTION_TYPES:
+                    raise ValueError(
+                        f"未定义的 on_fire 动作种类 '{k}'。支持的动作种类: {', '.join(sorted(VALID_ON_FIRE_ACTION_TYPES))}"
+                    )
+                if not isinstance(v, str) or not v.strip():
+                    raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
+        return json.dumps(parsed, ensure_ascii=False)
+
+    else:
+        raise ValueError(f"无效的 on_fire 数据格式: {type(parsed).__name__}。必须是动作列表或字典。")
 
 
 # ── Transactional decorator ──────────────────────────────────────────────────

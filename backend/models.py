@@ -53,6 +53,8 @@ class ComposeMemberDetail(BaseModel):
     name: str
     order_index: int
     disclosure: str | None = None
+    is_active: int = 0
+    role: Role
 
 
 class SensorHookDetail(BaseModel):
@@ -77,6 +79,10 @@ class InhibitionDetail(BaseModel):
     inhibitor_concept_id: int
     inhibitor_name: str | None = None
     target_name: str | None = None
+    inhibitor_is_active: int = 0
+    target_is_active: int = 0
+    inhibitor_role: Role
+    target_role: Role
     created_at: str
 
 

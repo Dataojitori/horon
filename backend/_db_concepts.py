@@ -4,9 +4,8 @@ from __future__ import annotations
 import logging
 
 from . import tag_sandbox
-from ._db_common import SYSTEM_TAGS, _now, _validate_name, transactional
+from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
-from .evaluator import GraphEvaluator
 from .models import MutationResult
 from .tag_sandbox import TagPluginError
 
@@ -98,7 +97,7 @@ class ConceptMixin:
             is_active = 0
 
         # 处理 on_fire 与 role 联动
-        clean_on_fire = on_fire.strip() if on_fire and on_fire.strip() else None
+        clean_on_fire = _validate_and_normalize_on_fire(on_fire)
         if role == "plain" and clean_on_fire is not None:
             raise ValueError("Plain concepts cannot have on_fire actions.")
 
@@ -147,8 +146,7 @@ class ConceptMixin:
 
         fired_actions = []
         if role in ("logic", "guard"):
-            sess = self._resolve_session_id()
-            eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+            eval_res = self._evaluator().evaluate()
             fired_actions = eval_res.fired_actions
 
         msg = f"Success. Created concept '{name}' (id={concept_id}, role={role})."
@@ -240,8 +238,7 @@ class ConceptMixin:
         # 执行删除（外键约束自动清理 compose_members, aliases, disclosures, reminders, sensor_hooks, tool_guards, inhibitions 等）
         self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
 
-        sess = self._resolve_session_id()
-        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+        eval_res = self._evaluator().evaluate()
 
         msg = f"Success. Deleted concept {label}."
         if tag_row:

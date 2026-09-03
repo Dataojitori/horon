@@ -6,9 +6,8 @@ import os
 from typing import Any
 
 from . import tag_sandbox
-from ._db_common import SYSTEM_TAGS, _now, _validate_name, transactional
+from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
-from .evaluator import GraphEvaluator
 from .models import MutationResult
 
 _logger = logging.getLogger(__name__)
@@ -314,9 +313,7 @@ class MutationMixin:
             "VALUES (?, ?, ?)",
             (target_id, inhibitor_id, now),
         )
-        sess = self._resolve_session_id()
-        evaluator = GraphEvaluator(self.conn, session_id=sess)
-        eval_res = evaluator.evaluate()
+        eval_res = self._evaluator().evaluate()
         return MutationResult(
             message=f"Success. Added inhibition: '{inhibitor_name}' (id={inhibitor_id}) ─⊣ '{target_name}' (id={target_id}).",
             concept_id=target_id, concept_name=target_name,
@@ -530,8 +527,7 @@ class MutationMixin:
             for mid in set(unlinked_member_ids):
                 all_infos.extend(self._run_mutation_hooks(mid, diff))
 
-        sess = self._resolve_session_id()
-        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+        eval_res = self._evaluator().evaluate()
 
         if old_role != "plain":
             msg = f"Success. Cleared activation rule of {label}; automatically downgraded role from '{old_role}' to 'plain'."
@@ -602,8 +598,7 @@ class MutationMixin:
             "DELETE FROM inhibitions WHERE target_concept_id = ? AND inhibitor_concept_id = ?",
             (target_id, inhibitor_id),
         )
-        sess = self._resolve_session_id()
-        eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+        eval_res = self._evaluator().evaluate()
         return MutationResult(
             message=f"Success. Removed inhibition: '{inhibitor_name}' ─⊣ '{target_name}'.",
             concept_id=target_id, concept_name=target_name,
@@ -704,8 +699,7 @@ class MutationMixin:
                 f"or falsy (0, '0', 'false', 'inactive', 'off')."
             )
 
-        sess = self._resolve_session_id()
-        evaluator = GraphEvaluator(self.conn, session_id=sess)
+        evaluator = self._evaluator()
         if val == 1:
             eval_res = evaluator.evaluate(activated_sensors=[cid])
         else:
@@ -756,8 +750,7 @@ class MutationMixin:
                 (ls, _now(), cid),
             )
             if old_is_active == 1:
-                sess = self._resolve_session_id()
-                eval_res = GraphEvaluator(self.conn, session_id=sess).evaluate()
+                eval_res = self._evaluator().evaluate()
                 fired_actions = eval_res.fired_actions
         else:
             self.conn.execute(
@@ -790,7 +783,7 @@ class MutationMixin:
         if not row:
             raise ValueError(f"Concept not found: {concept}")
 
-        clean_on_fire = on_fire.strip() if on_fire and on_fire.strip() else None
+        clean_on_fire = _validate_and_normalize_on_fire(on_fire)
         if row["role"] == "plain" and clean_on_fire is not None:
             raise ValueError(f"Plain concept {label} cannot have on_fire actions.")
 
@@ -1024,9 +1017,7 @@ class MutationMixin:
             for mid in affected_members:
                 all_infos.extend(self._run_mutation_hooks(mid, diff))
 
-        sess = self._resolve_session_id()
-        evaluator = GraphEvaluator(self.conn, session_id=sess)
-        eval_res = evaluator.evaluate()
+        eval_res = self._evaluator().evaluate()
 
         details = f" ({'; '.join(side_effects)})" if side_effects else ""
         msg = f"Success. Switched role of {label} from '{old_role}' to '{new_role}'.{details}"
@@ -1122,9 +1113,7 @@ class MutationMixin:
             for mid in all_affected:
                 all_infos.extend(self._run_mutation_hooks(mid, diff))
 
-        sess = self._resolve_session_id()
-        evaluator = GraphEvaluator(self.conn, session_id=sess)
-        eval_res = evaluator.evaluate()
+        eval_res = self._evaluator().evaluate()
 
         if orig_role == "plain":
             msg = f"Success. Set activation rule of {label} to: {activation_rule}; automatically promoted role from 'plain' to 'logic'."

@@ -351,7 +351,7 @@ class QueryMixin:
 
     def _get_compose_members(self, concept_id: int) -> list[ComposeMemberDetail]:
         rows = self.conn.execute(
-            "SELECT c.id AS concept_id, c.name, c.disclosure, cm.order_index "
+            "SELECT c.id AS concept_id, c.name, c.disclosure, c.is_active, c.role, cm.order_index "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "WHERE cm.parent_concept_id = ? "
@@ -364,6 +364,8 @@ class QueryMixin:
                 name=r["name"],
                 order_index=r["order_index"],
                 disclosure=r["disclosure"],
+                is_active=r["is_active"],
+                role=r["role"],
             )
             for r in rows
         ]
@@ -403,7 +405,10 @@ class QueryMixin:
 
         rows = self.conn.execute(
             f"SELECT i.target_concept_id, i.inhibitor_concept_id, "
-            f"c_inh.name AS inhibitor_name, c_tgt.name AS target_name, i.created_at "
+            f"c_inh.name AS inhibitor_name, c_tgt.name AS target_name, "
+            f"c_inh.is_active AS inhibitor_is_active, c_tgt.is_active AS target_is_active, "
+            f"c_inh.role AS inhibitor_role, c_tgt.role AS target_role, "
+            f"i.created_at "
             f"FROM inhibitions i "
             f"JOIN concepts c_inh ON i.inhibitor_concept_id = c_inh.id "
             f"JOIN concepts c_tgt ON i.target_concept_id = c_tgt.id "
@@ -599,7 +604,10 @@ class QueryMixin:
         4. I  = -log₂(P')                         — surprise
         5. new_weight = w₀ + (I * relevance)
         """
-        sess = self._resolve_session_id()
+        sess = self.get_current_session()
+        if not sess:
+            return
+
         recent_reads = self.conn.execute(
             "SELECT concept_id, timestamp FROM cli_audit_log "
             "WHERE command = 'read_concept' AND success = 1 AND session_id = ? "
