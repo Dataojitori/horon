@@ -150,5 +150,28 @@ class ReadResult(BaseModel):
     tool_guards: list[ToolGuardDetail] = []
     inhibitions: list[InhibitionDetail] = []
     inhibiting: list[InhibitionDetail] = []
+    active_chain_orders: list[int] = []
     suggested_next: list[TransitionSuggestion] = []
+
+
+# ── Backward Solver / Compile 诊断返回 ─────────────────────────
+
+CompileStatus = Literal["active", "inhibited", "unmet_prerequisites"]
+
+
+class ChainProgress(BaseModel):
+    """CHAIN 节点按序推进状态。"""
+    current_step: int
+    total_steps: int
+    waiting_for: str
+
+
+class CompileResult(BaseModel):
+    """compile 逆推诊断结果。"""
+    target: str
+    status: CompileStatus
+    active_inhibitors: list[str] = []
+    missing_prerequisites: list[str] = []
+    chain_progress: ChainProgress | None = None
+    diagnostic_tree: list[str] = []
 

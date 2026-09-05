@@ -29,6 +29,7 @@ _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 SYSTEM_TAGS = {"result", "exit", "state", "action"}
 VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
+OFFLINE_DEV_SESSION_ID = "devonly"
 
 _SANDBOX_ALLOWED_CALLS = frozenset({"exists", "status", "tags"})
 _SANDBOX_ALLOWED_NODES = frozenset({

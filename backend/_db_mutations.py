@@ -40,7 +40,7 @@ class MutationMixin:
                 "Use 'set <concept> tool_guard <tool> [--args-pattern \"...\"]' instead."
             )
         elif kind == "inhibition":
-            return self._add_inhibition(target_concept=concept, inhibitor_concept=value)
+            return self._add_inhibition(inhibitor_concept=concept, target_concept=value)
         raise ValueError(
             f"Unknown type: '{kind}'. Use 'name', 'tag', or 'inhibition'."
         )
@@ -285,15 +285,21 @@ class MutationMixin:
         )
 
     @transactional
-    def _add_inhibition(self, target_concept, inhibitor_concept) -> MutationResult:
+    def _add_inhibition(self, inhibitor_concept, target_concept) -> MutationResult:
         """建立负向抑制边 (inhibitor -> target)。"""
-        target_id = self._resolve_id(target_concept)
         inhibitor_id = self._resolve_id(inhibitor_concept)
-        target_name = self._resolve_concept_name(target_id)
+        target_id = self._resolve_id(target_concept)
         inhibitor_name = self._resolve_concept_name(inhibitor_id)
+        target_name = self._resolve_concept_name(target_id)
 
         if target_id == inhibitor_id:
             raise ValueError("自抑制（Target == Inhibitor）无效，严禁建立自环抑制边。")
+
+        i_row = self.conn.execute("SELECT role FROM concepts WHERE id = ?", (inhibitor_id,)).fetchone()
+        if not i_row or i_row["role"] not in ("sensor", "logic"):
+            raise ValueError(
+                f"抑制源 (inhibitor) 必须为 sensor 或 logic 节点，当前 '{inhibitor_name}' 角色为 '{i_row['role'] if i_row else 'unknown'}'。"
+            )
 
         t_row = self.conn.execute("SELECT role FROM concepts WHERE id = ?", (target_id,)).fetchone()
         if not t_row or t_row["role"] not in ("logic", "guard"):
@@ -301,10 +307,14 @@ class MutationMixin:
                 f"抑制目标 (target) 必须为 logic 或 guard 节点，当前 '{target_name}' 角色为 '{t_row['role'] if t_row else 'unknown'}'。"
             )
 
-        i_row = self.conn.execute("SELECT role FROM concepts WHERE id = ?", (inhibitor_id,)).fetchone()
-        if not i_row or i_row["role"] not in ("sensor", "logic"):
-            raise ValueError(
-                f"抑制源 (inhibitor) 必须为 sensor 或 logic 节点，当前 '{inhibitor_name}' 角色为 '{i_row['role'] if i_row else 'unknown'}'。"
+        existing = self.conn.execute(
+            "SELECT 1 FROM inhibitions WHERE target_concept_id = ? AND inhibitor_concept_id = ?",
+            (target_id, inhibitor_id),
+        ).fetchone()
+        if existing:
+            return MutationResult(
+                message=f"Success. Inhibition '{inhibitor_name}' (id={inhibitor_id}) ─⊣ '{target_name}' (id={target_id}) already exists.",
+                concept_id=inhibitor_id, concept_name=inhibitor_name,
             )
 
         now = _now()
@@ -316,7 +326,7 @@ class MutationMixin:
         eval_res = self._evaluator().evaluate()
         return MutationResult(
             message=f"Success. Added inhibition: '{inhibitor_name}' (id={inhibitor_id}) ─⊣ '{target_name}' (id={target_id}).",
-            concept_id=target_id, concept_name=target_name,
+            concept_id=inhibitor_id, concept_name=inhibitor_name,
             fired_actions=eval_res.fired_actions,
         )
 
@@ -333,7 +343,7 @@ class MutationMixin:
         disclosure:    清除概念上的书腰。
         sensor_hook:   删除感知钩子。
         tool_guard:    删除工具守卫规则。
-        inhibition:    解除抑制关系（value=inhibitor_concept，必填）。
+        inhibition:    解除抑制关系（target=inhibitor, value=target_concept，必填）。
         """
         if kind is None:
             return self.delete_concept(target)
@@ -368,8 +378,8 @@ class MutationMixin:
             return self._delete_tool_guard(target)
         elif kind == "inhibition":
             if value is None:
-                raise ValueError("Specify inhibitor concept to delete inhibition from.")
-            return self._delete_inhibition(target, value)
+                raise ValueError("Specify target concept to delete inhibition to.")
+            return self._delete_inhibition(inhibitor_concept=target, target_concept=value)
         raise ValueError(
             f"Unknown type: '{kind}'. "
             f"Use 'name', 'activation_rule', 'tag', 'disclosure', 'sensor_hook', 'tool_guard', or 'inhibition'.")
@@ -577,12 +587,12 @@ class MutationMixin:
         )
 
     @transactional
-    def _delete_inhibition(self, target_concept, inhibitor_concept) -> MutationResult:
+    def _delete_inhibition(self, inhibitor_concept, target_concept) -> MutationResult:
         """解除抑制关系。"""
-        target_id = self._resolve_id(target_concept)
         inhibitor_id = self._resolve_id(inhibitor_concept)
-        target_name = self._resolve_concept_name(target_id)
+        target_id = self._resolve_id(target_concept)
         inhibitor_name = self._resolve_concept_name(inhibitor_id)
+        target_name = self._resolve_concept_name(target_id)
 
         existing = self.conn.execute(
             "SELECT 1 FROM inhibitions WHERE target_concept_id = ? AND inhibitor_concept_id = ?",
@@ -601,7 +611,7 @@ class MutationMixin:
         eval_res = self._evaluator().evaluate()
         return MutationResult(
             message=f"Success. Removed inhibition: '{inhibitor_name}' ─⊣ '{target_name}'.",
-            concept_id=target_id, concept_name=target_name,
+            concept_id=inhibitor_id, concept_name=inhibitor_name,
             fired_actions=eval_res.fired_actions,
         )
 
@@ -617,8 +627,8 @@ class MutationMixin:
         elif prop == "inhibition":
             raise ValueError(
                 "Inhibition is multi-valued. "
-                "Use 'add <target> inhibition <inhibitor>' to add, "
-                "or 'delete <target> inhibition <inhibitor>' to remove.")
+                "Use 'add <inhibitor> inhibition <target>' to add, "
+                "or 'delete <inhibitor> inhibition <target>' to remove.")
         elif prop == "disclosure":
             return self._set_disclosure(target, str(value))
         elif prop == "name":

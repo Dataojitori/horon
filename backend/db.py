@@ -20,7 +20,7 @@ from pathlib import Path
 
 from ._db_common import (
     _now, _validate_condition_ast, SYSTEM_TAGS, transactional,  # noqa: F401  re-exported
-    _SCHEMA_PATH, _MIGRATIONS_DIR, _DB_PATH,
+    _SCHEMA_PATH, _MIGRATIONS_DIR, _DB_PATH, OFFLINE_DEV_SESSION_ID,
 )
 from ._db_plugins import PluginMixin
 from ._db_concepts import ConceptMixin
@@ -30,9 +30,6 @@ from ._db_reminders import ReminderMixin
 from ._db_compile import CompileMixin
 from .evaluator import GraphEvaluator
 from .models import EvaluationResult
-
-
-OFFLINE_DEV_SESSION_ID = "devonly"
 
 
 class HoronDB(

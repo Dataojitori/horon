@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ._db_common import _now, transactional
+from ._db_common import _now, transactional, OFFLINE_DEV_SESSION_ID
 from .embedding import get_embedding, EMBEDDING_DIMENSIONS
 from .models import (
     Concept, ComposeMemberDetail, ReadResult,
@@ -435,6 +435,17 @@ class QueryMixin:
         inhibitions = self._get_inhibitions(cid, direction="incoming")
         inhibiting = self._get_inhibitions(cid, direction="outgoing")
 
+        active_chain_orders: list[int] = []
+        if row["activation_type"] == "CHAIN":
+            sess = self.get_current_session() or OFFLINE_DEV_SESSION_ID
+            ac_rows = self.conn.execute(
+                "SELECT current_order FROM active_chain_instances "
+                "WHERE chain_concept_id = ? AND session_id = ? "
+                "ORDER BY current_order",
+                (cid, sess),
+            ).fetchall()
+            active_chain_orders = [r["current_order"] for r in ac_rows]
+
         aliases = [
             ar["alias"] for ar in self.conn.execute(
                 "SELECT alias FROM aliases WHERE concept_id = ? ORDER BY alias", (cid,)
@@ -500,6 +511,7 @@ class QueryMixin:
             tool_guards=tool_guards,
             inhibitions=inhibitions,
             inhibiting=inhibiting,
+            active_chain_orders=active_chain_orders,
             suggested_next=suggested_next,
         )
 

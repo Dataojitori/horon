@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 from backend.db import HoronDB
-from backend.models import MutationResult, ReadResult
+from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
     normalize_literal_newlines,
     try_normalized_patch,
@@ -27,219 +27,100 @@ from backend.text_patch import (
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 
-def _format_segments_chain(segments: list[dict]) -> str | None:
-    if not segments:
-        return None
-    chain_nodes = [segments[0]["from"]["name"]]
-    for i, s in enumerate(segments):
-        if i > 0 and s["from"]["name"] != segments[i-1]["to"]["name"]:
-            return None
-        chain_nodes.append(s["to"]["name"])
-    return " → ".join(chain_nodes)
-
-
-def _format_route(edges: list[dict], label: str) -> list[str]:
-    """将由多条边拼接而成的路径，格式化为易读的文本列表。
-
-    Args:
-        edges: compile 返回的边链。每条边形如
-               {"from": {"name": ...}, "to": {"name": ...},
-                "concept_id": int, "name": str, "status": str,
-                "segments": [{"from": ..., "to": ...}, ...]}
-        label: 输出首行的前缀标签（如 "route", "detour"）。
-
-    Returns:
-        多行字符串列表。格式示例（label="route"）：
-
-        连续路径：
-        [
-            "route: A → B(confirmed) → C(confirmed)",
-            "  A → B : see \"AtoB\"",
-            "  B → C : see \"BtoC\""
-        ]
-
-        含影分身跳跃（edge[i].to ≠ edge[i+1].from）：
-        [
-            "route: A → B(confirmed), AtoB → C(confirmed)",
-            "  A → B : see \"AtoB\"",
-            "  AtoB → C : see \"AtoBtoC\""
-        ]
-
-        第一行（摘要）：沿途节点用 → 连接。相邻边不连续时用逗号
-        分段重起，提示读者去看明细行了解跳跃原因。
-        后续行（明细）：每条边的物理遍历 from → to + 关系概念名，
-        供 read_concept 查阅。
-    """
-    if not edges:
-        return [f"{label}: (empty)"]
-
-    # ── 摘要：检测断裂，分段拼接 ──
-    route_segments: list[list[str]] = []
-    seg: list[str] = [edges[0]["from"]["name"]]
-    for i, edge in enumerate(edges):
-        is_break = False
-        if i > 0:
-            if len(edge["from"]["concept_ids"]) > 1:
-                # & 组具有多源汇聚语义，在单行文本中必须强制断开重起
-                is_break = True
-            elif edge["from"]["concept_ids"][0] != edges[i - 1]["to"]["concept_id"]:
-                # 断裂：上一条边的 to 和这条边的 from 不是同一个概念
-                is_break = True
-
-        if is_break:
-            route_segments.append(seg)
-            seg = [edge["from"]["name"]]
-            
-        if edge.get("segments"):
-            for s in edge["segments"]:
-                seg.append(f'{s["to"]["name"]}({edge["status"]})')
-        else:
-            seg.append(f'{edge["to"]["name"]}({edge["status"]})')
-            
-    route_segments.append(seg)
-    summary = ", ".join(" → ".join(s) for s in route_segments)
-    lines = [f"{label}: {summary}"]
-
-    # ── 明细 ──
-    for edge in edges:
-        if edge.get("segments"):
-            chain_str = _format_segments_chain(edge["segments"])
-            if chain_str:
-                lines.append(f'  {chain_str} : see "{edge["name"]}"')
-            else:
-                for s in edge["segments"]:
-                    lines.append(
-                        f'  {s["from"]["name"]} → {s["to"]["name"]}'
-                        f' : see "{edge["name"]}"'
-                    )
-        else:
-            lines.append(
-                f'  {edge["from"]["name"]} → {edge["to"]["name"]}'
-                f' : see "{edge["name"]}"'
-            )
-    return lines
-
-
-def _format_compile(result: dict) -> str:
-    """compile 结果 → 行動指引文本（给 agent 的提示词）。
-
-    输出结构（固定三段）：
-      1. 判定 —— passed / BLOCKED / failed
-      2. 路线展示 —— route / verified / detour
-      3. 行动指令 —— 假设阻断清单 或 确认后的执行提醒（二选一，不重叠）
-    """
+def _format_compile(result: CompileResult) -> str:
+    """compile 逆推诊断结果 → 给 Agent / 人类的行动指引文本。"""
     lines = []
+    target = result.target
+    status = result.status
 
-    # ── 硬错误（概念解析失败等）──
-    if result["errors"]:
-        for e in result["errors"]:
-            lines.append(f"error: {e}")
-        return "\n".join(lines)
-
-    compiled = result["compiled_route"]
-    brk = result["break"]
-    detour = result.get("detour")
-
-    # 收集所有会展示给 agent 的边，统一做假设检查
-    all_edges = list(compiled) + (detour or [])
-    hyp_edges = [e for e in all_edges if e["status"] != "confirmed"]
-
-    # ── 第一段：判定 ──
-    if result["passed"]:
-        if hyp_edges:
-            lines.append(
-                f"BLOCKED. route exists but contains "
-                f"{len(hyp_edges)} unverified hypothesis(es). "
-                f"do NOT execute until every hypothesis is resolved.")
-        else:
-            lines.append(
-                "compilation passed. this route is ready to execute:")
-    else:
-        if brk and not brk["goal_reached"]:
-            blocked = result.get("blocked") or []
-            if blocked and brk.get("goal_reachable_without_block"):
-                blocked_names = ", ".join(b["name"] for b in blocked)
-                lines.append(
-                    "compilation failed. goal not reachable from your "
-                    "assumed state without routing through the nodes you "
-                    f"excluded via --block: {blocked_names}.")
-            else:
-                lines.append(
-                    "compilation failed. goal not reachable "
-                    "from your assumed state.")
-        elif brk and brk["unmet_constraints"]:
-            unmet_names = ", ".join(
-                c["name"] for c in brk["unmet_constraints"])
-            lines.append(
-                f"compilation failed. route to goal exists "
-                f"but constraint(s) not met: {unmet_names}")
-        else:
-            # goal 单独可达、约束也各自能满足，但没有一条路能同时做到。
-            # 有价值的事实是「带上约束后 goal 到不了」，不是「约束能触达」。
-            lines.append(
-                "compilation failed. no route reaches goal "
-                "while satisfying your constraints.")
-
-    # ── 第二段：路线展示 ──
-    if result["passed"]:
-        lines.extend(_format_route(compiled, "route"))
-    else:
-        if compiled:
-            lines.append("best partial route found:")
-            lines.extend(_format_route(compiled, "partial"))
-        if detour:
-            lines.append(
-                "route to goal ignoring your constraints "
-                "(still respects --block):")
-            lines.extend(_format_route(detour, "detour"))
-        if not compiled and not detour and not (result.get("blocked")):
-            # block 断路时第一段已点名原因，不再重复；此处只兜底无 block 的情形。
-            lines.append(
-                "no route from assumed state to goal exists. "
-                "bridge the gap with hypotheses.")
-
-    # ── 第三段：行动指令（假设阻断 与 执行提醒 互斥）──
-    if hyp_edges:
+    if status == "active":
+        lines.append(f"[✓ 导通放行] 概念 '{target}' 条件已全部满足，处于就绪状态。")
+    elif status == "inhibited":
+        inh_str = ", ".join(f"'{name}'" for name in result.active_inhibitors) if result.active_inhibitors else "未知抑制源"
         lines.append(
-            "unverified steps in this route "
-            "(to investigate these assumptions, use read_concept):"
+            f"[⛔ 抑制锁死] 概念 '{target}' 前置条件已达成，但受活跃抑制源 ({inh_str}) 压制，输出被切断。"
         )
-        for e in hyp_edges:
-            if e.get("segments"):
-                chain_str = _format_segments_chain(e["segments"])
-                if chain_str:
-                    lines.append(f'  ✗ {chain_str} ({e["status"]}) : see "{e["name"]}"')
-                else:
-                    for s in e["segments"]:
-                        lines.append(
-                            f'  ✗ {s["from"]["name"]} → {s["to"]["name"]} '
-                            f'({e["status"]}) : see "{e["name"]}"')
-            else:
-                lines.append(
-                    f'  ✗ {e["from"]["name"]} → {e["to"]["name"]} '
-                    f'({e["status"]}) : see "{e["name"]}"')
-    elif all_edges and result["passed"]:
-        lines.append(
-            'all steps confirmed. if you intend to execute any part of this route, '
-            'use read_concept to inspect the nodes first — do not assume based on names alone.')
+    elif status == "unmet_prerequisites":
+        if result.chain_progress:
+            cp = result.chain_progress
+            lines.append(
+                f"[⏳ 序列等待] 概念 '{target}' 进行至第 {cp.current_step}/{cp.total_steps} 步，等待: '{cp.waiting_for}'"
+            )
+        elif result.missing_prerequisites:
+            missing_str = ", ".join(f"'{name}'" for name in result.missing_prerequisites)
+            lines.append(
+                f"[✗ 缺少前置] 概念 '{target}' 未就绪，缺少输入: {missing_str}"
+            )
+        else:
+            lines.append(f"[✗ 未就绪] 概念 '{target}' 前置条件未满足。")
+    else:
+        lines.append(f"[? 状态未知: {status}] 概念 '{target}'")
 
-    if result.get("goal_inbound_count", 0) < 3:
-        lines.append(
-            "\n[HEURISTIC WARNING] 你的目标节点被审视过的 inbound 边（含已否定的）少于 3 条。"
-            "一个真心想拿到结果的人不会只沿着一条路往下冲——"
-            "他会先想：还有什么完全不同的方向是我根本没考虑过的？"
-            "在继续之前，想想一个人类战略家在同样处境下会怎么思考。"
-        )
+    if result.diagnostic_tree:
+        if lines:
+            lines.append("")
+        lines.append("[ 依赖诊断树 ]")
+        for d in result.diagnostic_tree:
+            lines.append(f"  {d}")
 
     return "\n".join(lines)
 
 
+def _format_circuit_line(result: ReadResult) -> str:
+    """Format activation rule and inhibitions as an algebraic Scheme A expression."""
+    res_str = ("PASS" if result.is_active == 1 else "BLOCKED") if result.role == "guard" else ("ON" if result.is_active == 1 else "OFF")
+
+    pos_expr = ""
+    if result.members:
+        act_type = result.activation_type or "AND"
+        if act_type == "CHAIN":
+            max_active = max(result.active_chain_orders) if result.active_chain_orders else 0
+            if result.is_active == 1 or max_active >= len(result.members):
+                step_strs = [f"{m.name} [✓]" for m in result.members]
+            else:
+                waiting_idx = max_active
+                step_strs = []
+                for i, m in enumerate(result.members):
+                    if i < waiting_idx:
+                        step_strs.append(f"{m.name} [✓]")
+                    elif i == waiting_idx:
+                        step_strs.append(f"{m.name} [⏳]")
+                    else:
+                        step_strs.append(m.name)
+            pos_expr = f"CHAIN( {' → '.join(step_strs)} )"
+        else:  # AND / OR
+            items = [f"{m.name} [{'ON' if m.is_active == 1 else 'OFF'}]" for m in result.members]
+            pos_expr = f"{act_type}( {', '.join(items)} )"
+    elif result.activation_rule:
+        pos_expr = result.activation_rule
+
+    unless_expr = ""
+    if result.inhibitions:
+        inh_items = [f"{inh.inhibitor_name} [{'ON' if inh.inhibitor_is_active == 1 else 'OFF'}]" for inh in result.inhibitions]
+        unless_expr = f"UNLESS( {', '.join(inh_items)} )"
+
+    if pos_expr and unless_expr:
+        return f"{pos_expr} {unless_expr} = {res_str}"
+    elif pos_expr:
+        return f"{pos_expr} = {res_str}"
+    elif unless_expr:
+        return f"{unless_expr} = {res_str}"
+    else:
+        return f"(none) = {res_str}"
+
+
 def _format_read_concept(result: ReadResult) -> str:
     lines = []
-    lines.append("=" * 60)
-    lines.append(f"CONCEPT: {result.name} (ID: {result.id}, Role: {result.role.upper()}, Active: {result.is_active})")
-    if result.lifespan:
-        lines.append(f"Lifespan: {result.lifespan}")
+    role_str = result.role.upper()
+    if result.role == "guard":
+        status_str = "PASS" if result.is_active == 1 else "BLOCKED"
+        lines.append(f"CONCEPT: {result.name} (ID: {result.id}, GUARD, {status_str})")
+    elif result.role in ("logic", "sensor"):
+        status_str = "ON" if result.is_active == 1 else "OFF"
+        lines.append(f"CONCEPT: {result.name} (ID: {result.id}, {role_str}, {status_str})")
+    else:
+        lines.append(f"CONCEPT: {result.name} (ID: {result.id}, PLAIN)")
+
     if result.on_fire:
         lines.append(f"On-Fire: {result.on_fire}")
 
@@ -251,63 +132,121 @@ def _format_read_concept(result: ReadResult) -> str:
         lines.append(f"Disclosure: {result.disclosure}")
     else:
         lines.append("Disclosure: (none)")
+
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
     if result.tag_source_info:
         lines.append(f"[Tag Source] {result.tag_source_info}")
-    lines.append("=" * 60)
+
+    # ── 电路与规则（题头控制部分） ──
+    has_circuit = bool(result.members or result.activation_rule or result.inhibitions)
+    if result.role in ("logic", "guard"):
+        if has_circuit:
+            lines.append(f"Circuit: {_format_circuit_line(result)}")
+        else:
+            lines.append("Circuit: (none)")
+
+        if result.role == "guard":
+            if result.tool_guards:
+                for tg in result.tool_guards:
+                    args_flag = f" --args-pattern '{tg.args_pattern}'" if tg.args_pattern else ""
+                    lines.append(f"Tool Guard: {tg.tool}{args_flag}")
+            else:
+                lines.append("Tool Guard: (none)")
+
+    elif result.role == "sensor":
+        lines.append(f"Sensor: {result.lifespan or 'unknown'}")
+        if result.sensor_hooks:
+            for sh in result.sensor_hooks:
+                tool_flag = f" --tool '{sh.tool}'" if sh.tool else ""
+                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'")
+        else:
+            lines.append("Hook: (none)")
+
+    # ── 入向抑制（兜底展示：当节点非逻辑/守卫且附带抑制时） ──
+    if result.inhibitions and result.role not in ("logic", "guard"):
+        sources_str = ", ".join(
+            f"{inh.inhibitor_name} [{'ON' if inh.inhibitor_is_active == 1 else 'OFF'}]"
+            for inh in result.inhibitions
+        )
+        lines.append(f"Inhibited by: {sources_str}")
+
+    # ── 对外抑制（出向控制引脚） ──
+    if result.inhibiting:
+        targets_str = ", ".join(inh.target_name for inh in result.inhibiting)
+        lines.append(f"Inhibiting: {targets_str}")
+
+    # ── 题头与正文分界线 ──
+    lines.append("-" * 60)
+
+    # ── 正文内容 ──
+    lines.append(f"Content:\n{result.content}" if result.content else "Content: (empty)")
+
+    # ── 页脚（仅包含运行时附着物：Reminders 与 联想推荐） ──
+    footer_blocks: list[list[str]] = []
 
     if result.reminders:
-        lines.append("[ Reminders ]")
+        block = ["[ Reminders ]"]
         for rem in result.reminders:
             fired = rem.last_fired_at or "(never)"
-            lines.append(
-                f"  #{rem.id}: {rem.message}")
-            lines.append(
-                f"    when: {rem.condition}")
-            lines.append(
-                f"    last fired: {fired}")
-        lines.append("=" * 60)
-
-    if result.activation_rule:
-        type_tag = f" [{result.activation_type}]" if result.activation_type else ""
-        lines.append(f"Activation Rule: {result.activation_rule}{type_tag}")
-    else:
-        lines.append("Activation Rule: (None / Atomic)")
-    lines.append(f"Content:\n{result.content}" if result.content else "Content: (empty)")
-    lines.append("")
-    lines.append("=" * 60)
-
-    if result.sensor_hooks:
-        lines.append("[ SENSOR HOOKS ]")
-        for sh in result.sensor_hooks:
-            tool_info = f" (tool: {sh.tool})" if sh.tool else ""
-            lines.append(f"  #{sh.id}: {sh.event_type}{tool_info} => pattern: '{sh.match_pattern}'")
-        lines.append("=" * 60)
-
-    if result.tool_guards:
-        lines.append("[ TOOL GUARDS ]")
-        for tg in result.tool_guards:
-            args_info = f" args: '{tg.args_pattern}'" if tg.args_pattern else ""
-            lines.append(f"  #{tg.id}: tool '{tg.tool}'{args_info}")
-        lines.append("=" * 60)
-
-    if result.inhibitions or result.inhibiting:
-        lines.append("[ INHIBITIONS ]")
-        for inh in result.inhibitions:
-            lines.append(f"  Inhibited by: '{inh.inhibitor_name}' (id={inh.inhibitor_concept_id})")
-        for inh in result.inhibiting:
-            lines.append(f"  Inhibiting: '{inh.target_name}' (id={inh.target_concept_id})")
-        lines.append("=" * 60)
+            block.append(f"  #{rem.id}: {rem.message}")
+            block.append(f"    when: {rem.condition} | last fired: {fired}")
+        footer_blocks.append(block)
 
     if result.suggested_next:
-        lines.append("[ YOU MAY ALSO NEED ]")
+        block = ["[ YOU MAY ALSO NEED ]"]
         for s in result.suggested_next:
-            lines.append(
-                f"  {s.concept_name} (ID: {s.concept_id}, weight: {s.weight})")
-        lines.append("")
-        lines.append("=" * 60)
+            block.append(f"  {s.concept_name} (ID: {s.concept_id}, weight: {s.weight:.2f})")
+        footer_blocks.append(block)
 
+    if footer_blocks:
+        lines.append("-" * 60)
+        for i, block in enumerate(footer_blocks):
+            if i > 0:
+                lines.append("")
+            lines.extend(block)
+
+    return "\n".join(lines)
+
+
+def _format_search_concepts(results) -> str:
+    if not results:
+        return "(no results)"
+    lines = []
+    for r in results:
+        lines.append(f"[{r.concept_id}] {r.concept_name}")
+        for m in r.matches:
+            if m.field == "name":
+                lines.append("     ↳ Name")
+            elif m.field == "alias":
+                lines.append(f'     ↳ Alias: "{m.snippet}"')
+            elif m.field == "disclosure":
+                lines.append(f'     ↳ Disclosure: "{m.snippet}"')
+            elif m.field == "content":
+                lines.append(f'     ↳ Content: "{m.snippet}"')
+    return "\n".join(lines)
+
+
+def _format_list_concepts(overviews) -> str:
+    if not overviews:
+        return "(no concepts)"
+    lines = []
+    for c in overviews:
+        role = c.get("role", "plain")
+        if role == "guard":
+            status_str = "PASS" if c.get("is_active") == 1 else "BLOCKED"
+        elif role in ("logic", "sensor"):
+            status_str = "ON" if c.get("is_active") == 1 else "OFF"
+        else:
+            status_str = None
+
+        if status_str:
+            header = f"[{c['id']}] {c['name']} ({role}, {status_str})"
+        else:
+            header = f"[{c['id']}] {c['name']} ({role})"
+        if c.get("tags"):
+            header += f"  [{', '.join(c['tags'])}]"
+        lines.append(header)
     return "\n".join(lines)
 
 
@@ -326,15 +265,8 @@ def _print(obj):
                 print(f"  * {fa.concept} (id={fa.concept_id}): {act_str}")
     elif isinstance(obj, ReadResult):
         print(_format_read_concept(obj))
-    elif isinstance(obj, dict) and "compiled_route" in obj:
+    elif isinstance(obj, CompileResult):
         print(_format_compile(obj))
-    elif isinstance(obj, dict):
-        print(json.dumps(obj, ensure_ascii=False, indent=2))
-    elif isinstance(obj, list):
-        for item in obj:
-            print(item.model_dump_json(indent=2))
-    elif obj is None:
-        print("done")
     elif isinstance(obj, RawOutput):
         sys.stdout.write(obj.content)
         if not obj.content.endswith("\n"):
@@ -342,7 +274,7 @@ def _print(obj):
     elif isinstance(obj, str):
         print(obj)
     else:
-        print(obj.model_dump_json(indent=2))
+        print(str(obj))
 
 
 def _read_file(path):
@@ -493,9 +425,9 @@ def _build_parser():
                                      allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # init
-    sub.add_parser("init", allow_abbrev=False,
-                   help="Initialize a new session, reset ephemeral sensors (session/turn) and chains.")
+    # reset
+    sub.add_parser("reset", allow_abbrev=False,
+                   help="Reset ephemeral sensors (session/turn) and chains for the current session.")
 
     # create_concept
     p = sub.add_parser("create_concept", allow_abbrev=False)
@@ -590,12 +522,13 @@ def _build_parser():
     p = sub.add_parser("read_concept", allow_abbrev=False)
     p.add_argument("concept")
 
-    # compile — state-space planner: assume + block + constraints → goal
-    p = sub.add_parser("compile", allow_abbrev=False)
-    p.add_argument("--assume", nargs="+", required=True)
-    p.add_argument("--block", nargs="*", default=[])
-    p.add_argument("--constraints", nargs="*", default=[])
-    p.add_argument("--goal", required=True)
+    # compile — backward solver diagnostics for target concept
+    p = sub.add_parser("compile", allow_abbrev=False,
+                       help="Backward solver diagnostics for target concept.")
+    p.add_argument("--target", required=True,
+                   help="Target concept to diagnose (why it is active / inactive)")
+    p.add_argument("--assume", nargs="*", default=[],
+                   help="Additional hypothetical active concepts")
 
     # read_memory — read from nocturne_memory.db
     p = sub.add_parser("read_memory", allow_abbrev=False,
@@ -647,11 +580,13 @@ def _build_parser():
 
 def _dispatch(args, db):
     """Execute a single command, return result object."""
-    if args.command == "init":
-        new_sess = db.init_session()
-        return RawOutput(
-            f"Success. Initialized new session: {new_sess} (ephemeral sensors & chains reset)."
-        )
+    if args.command == "reset":
+        sess = db.get_current_session()
+        if not sess:
+            sess = db.init_session("devonly")
+        else:
+            db.session_reset()
+        return RawOutput(f"Success. Session '{sess}' reset (ephemeral sensors & chains cleared).")
 
     elif args.command == "create_concept":
         if args.content is None or not args.content.strip():
@@ -712,42 +647,11 @@ def _dispatch(args, db):
 
     elif args.command == "search_concepts":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
-
-        if not results:
-            return RawOutput("(no results)")
-        lines = []
-        for r in results:
-            lines.append(f"[{r.concept_id}] {r.concept_name}")
-            for m in r.matches:
-                if m.field == "name":
-                    lines.append("     \u21b3 Name")
-                elif m.field == "alias":
-                    lines.append(f'     \u21b3 Alias: "{m.snippet}"')
-                elif m.field == "disclosure":
-                    lines.append(
-                        f'     \u21b3 Disclosure: "{m.snippet}"')
-                elif m.field == "content":
-                    lines.append(
-                        f'     \u21b3 Content: "{m.snippet}"')
-        return RawOutput("\n".join(lines))
+        return RawOutput(_format_search_concepts(results))
 
     elif args.command == "list_concepts":
         overviews = db.get_all_concepts_overview(tag_expr=args.tag)
-        lines = []
-        for c in overviews:
-            header = f"[{c['id']}] {c['name']}"
-            if c.get("tags"):
-                header += f"  [{', '.join(c['tags'])}]"
-            lines.append(header)
-
-            rule = c.get("activation_rule")
-            role = c.get("role", "plain")
-            if rule:
-                lines.append(f"      = {rule} ({role})")
-            else:
-                lines.append(f"      = [Atomic] ({role})")
-
-        return RawOutput("\n".join(lines))
+        return RawOutput(_format_list_concepts(overviews))
 
     elif args.command == "add":
         return db.add(
@@ -877,14 +781,17 @@ def _dispatch(args, db):
         return RawOutput("\n".join(lines))
 
     elif args.command == "compile":
-        result = db.compile(
-            args.assume, args.block, args.constraints, args.goal)
-        # 输入解析失败（概念不存在、变体码不对）是坏输入，不是编译结论：
-        # 抛异常走统一错误通道（非零退出码 / batch 中止），与其它命令一致。
-        # passed/failed（含"无路可走"）是正常结论，照常返回、退出码 0。
-        if result["errors"]:
-            raise ValueError("; ".join(result["errors"]))
-        return result
+        try:
+            return db.compile(
+                target=args.target,
+                assume=args.assume,
+            )
+        except NotImplementedError:
+            return RawOutput(
+                f"[Step 3 Pending] Backward solver for 'compile --target' will be implemented in Step 3.\n"
+                f"Target: '{args.target}'\n"
+                f"Assumed: {', '.join(args.assume) if args.assume else '(none)'}"
+            )
 
     elif args.command == "intent":
         results = db.search_by_intent(args.query, limit=args.limit)
@@ -904,7 +811,7 @@ def _audited_dispatch(args, db):
 
     Audit info comes from two sources:
       - sub_action: CLI routing (which sub-command was used)
-      - concept_id/name: DB return value (MutationResult or ReadResult)
+      - concept_id/name: DB return value (MutationResult, ReadResult, or CompileResult)
     """
     cmd = args.command
     sub_action = None
@@ -932,6 +839,10 @@ def _audited_dispatch(args, db):
     elif isinstance(result, ReadResult):
         concept_id = result.id
         concept_name = result.name
+    elif isinstance(result, CompileResult):
+        concept_name = result.target
+    elif cmd == "compile" and getattr(args, "target", None):
+        concept_name = args.target
 
     db.log_action(
         command=cmd,
