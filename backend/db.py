@@ -340,7 +340,7 @@ class HoronDB(
         CHAIN (A → B → C):  ('CHAIN', [id_A, id_B, id_C])
         AND   (A & B & C):  ('AND',   [id_A, id_B, id_C])
         OR    (A | B | C):  ('OR',    [id_A, id_B, id_C])
-        Single (A):         ('SINGLE',[id_A])
+        Single (A):         ('AND',   [id_A])  # guard 允许的单输入归一化
         """
         has_arrow = "→" in activation_rule
         has_amp = "&" in activation_rule
@@ -367,23 +367,22 @@ class HoronDB(
                 raise ValueError(
                     "Activation rule must contain at least one operator: "
                     "'→' (CHAIN), '&' (AND), or '|' (OR).")
-            vtype = "SINGLE"
+            vtype = "AND"
             parts = [activation_rule.strip()]
 
         if any(not p for p in parts):
             raise ValueError(
                 "Invalid syntax: empty operand in activation rule. "
                 "Each operator must separate two concepts.")
-        if vtype != "SINGLE" and len(parts) < 2:
+        if op_count > 0 and len(parts) < 2:
             raise ValueError(
                 f"{vtype} activation rule requires at least 2 concepts.")
 
         ids = [self._resolve_id(n) for n in parts]
-        if vtype in ("AND", "OR"):
-            if len(set(ids)) != len(ids):
-                raise ValueError(
-                    "A concept cannot appear more than once in an AND/OR "
-                    "activation rule (duplicates are not allowed).")
+        if vtype in ("AND", "OR") and len(set(ids)) != len(ids):
+            raise ValueError(
+                "A concept cannot appear more than once in an AND/OR "
+                "activation rule (duplicates are not allowed).")
         return vtype, ids
 
     def audit_db_integrity(self) -> str:

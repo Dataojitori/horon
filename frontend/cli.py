@@ -854,6 +854,69 @@ def _audited_dispatch(args, db):
     return result
 
 
+class _SmartBatchEscape:
+    """Smart escape handler for Horon batch commands.
+
+    - Inside double quotes: treats '\\' as an escape character for quotes and backslashes
+      (e.g., \\" -> " and \\\\ -> \\), preventing escaped quotes from prematurely closing strings.
+    - In unquoted words: preserves backslashes literally (so Windows paths like C:\\Users\\...
+      and regex sequences remain intact without losing backslashes).
+    """
+
+    def __init__(self, lexer: shlex.shlex):
+        self.lexer = lexer
+
+    def __contains__(self, char: object) -> bool:
+        if char == "\\":
+            return self.lexer.state == "\\" or self.lexer.state in self.lexer.escapedquotes
+        return False
+
+
+def _create_batch_lexer(text: str) -> shlex.shlex:
+    lexer = shlex.shlex(text, posix=True)
+    lexer.whitespace_split = True
+    lexer.escapedquotes = '"'
+    lexer.escape = _SmartBatchEscape(lexer)
+    return lexer
+
+
+def _parse_batch_commands(text: str) -> list[tuple[int, list[str], str]]:
+    """Parse batch script text into list of (start_line, tokens, raw_command).
+    Supports multi-line commands with quoted strings.
+    """
+    lines = text.splitlines(keepends=True)
+    commands = []
+    buffer = ""
+    start_line = 1
+
+    for line_idx, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not buffer and (not stripped or stripped.startswith("#")):
+            continue
+
+        if not buffer:
+            start_line = line_idx
+
+        buffer += line
+
+        try:
+            lexer = _create_batch_lexer(buffer)
+            tokens = list(lexer)
+            if tokens:
+                commands.append((start_line, tokens, buffer.strip()))
+            buffer = ""
+        except ValueError as e:
+            if "No closing quotation" in str(e) or "No escaped character" in str(e):
+                continue
+            raise ValueError(f"Line {start_line}: syntax error in batch script: {e}") from e
+
+    if buffer.strip():
+        first_line = buffer.strip().splitlines()[0]
+        raise ValueError(f"Line {start_line}: unclosed quotation mark in command: {first_line}")
+
+    return commands
+
+
 def main():
     parser = _build_parser()
     args = parser.parse_args()
@@ -862,33 +925,33 @@ def main():
     try:
         if args.command == "batch":
             if args.file:
-                lines = Path(args.file).read_text(encoding="utf-8").splitlines()
+                raw_text = Path(args.file).read_text(encoding="utf-8")
             else:
-                lines = sys.stdin.read().splitlines()
+                raw_text = sys.stdin.read()
+
+            try:
+                commands = _parse_batch_commands(raw_text)
+            except Exception as e:
+                print(f"Fail. Syntax error in batch script: {e}")
+                sys.exit(1)
 
             last_result = None
-            for i, line in enumerate(lines, 1):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
+            for start_line, tokens, raw_cmd in commands:
                 try:
-                    lexer = shlex.shlex(line, posix=True)
-                    lexer.whitespace_split = True
-                    lexer.escape = ''
-                    tokens = list(lexer)
                     cmd_args = parser.parse_args(tokens)
                     if cmd_args.command == "batch":
-                        print(f"Line {i}: batch inside batch is not allowed")
+                        print(f"Line {start_line}: batch inside batch is not allowed")
                         sys.exit(1)
                     result = _audited_dispatch(cmd_args, db)
                     if args.all:
                         _print(result)
                     last_result = result
                 except SystemExit:
-                    print(f"Fail. Line {i}: invalid command: {line}")
+                    first_line = raw_cmd.splitlines()[0] if raw_cmd else ""
+                    print(f"Fail. Line {start_line}: invalid command: {first_line}")
                     sys.exit(1)
                 except Exception as e:
-                    print(f"Fail. Line {i}: {e}")
+                    print(f"Fail. Line {start_line}: {e}")
                     sys.exit(1)
 
             if not args.all and last_result is not None:

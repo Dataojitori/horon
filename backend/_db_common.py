@@ -132,14 +132,13 @@ def _validate_and_normalize_on_fire(raw: Any) -> str | None:
     """校验并归一化 on_fire 动作配置。
 
     支持格式：
-      1. 多个动作（列表）：[{"notify": "消息内容"}, {"add_todo": "待办内容"}]
-      2. 单个动作（字典）：{"notify": "消息内容"}
-      3. 纯文本字符串："直接文本" -> 自动包装为 {"notify": "直接文本"}
+      1. 单个动作（字典或 JSON 字符串）：{"notify": "消息内容"}
+      2. 多个动作（列表或 JSON 字符串）：[{"notify": "消息内容"}, {"add_todo": "待办内容"}]
 
     规则：
-      - 任何动作的 key 必须在 VALID_ON_FIRE_ACTION_TYPES 白名单中。
+      - 必须显式指定动作类型，且 key 必须在 VALID_ON_FIRE_ACTION_TYPES 白名单中。
       - 任何动作对应的 value 必须是非空字符串。
-      - 包含未定义 key 或空值时直接抛出 ValueError。
+      - 纯文本或未指定动作类型的非法格式直接抛出 ValueError。
     """
     if raw is None:
         return None
@@ -153,10 +152,11 @@ def _validate_and_normalize_on_fire(raw: Any) -> str | None:
             try:
                 parsed = json.loads(clean_str)
             except Exception as e:
-                raise ValueError(f"on_fire JSON 格式错误: {e}") from e
+                raise ValueError(f"on_fire JSON 格式错误: {e}。请确保使用合法的标准 JSON 格式（如 '{{\"notify\": \"...\"}}'）。") from e
         else:
-            # 纯文本字符串 -> 自动包装为 notify 动作字典
-            return json.dumps({"notify": clean_str}, ensure_ascii=False)
+            raise ValueError(
+                f"on_fire 配置必须是合法的 JSON 动作对象（如 '{{\"notify\": \"...\"}}'）或动作列表。不支持未指定动作类型的裸文本。"
+            )
     else:
         parsed = raw
 

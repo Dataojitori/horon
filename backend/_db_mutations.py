@@ -963,7 +963,8 @@ class MutationMixin:
                 )
             if rule_str and rule_str.strip():
                 clean_rule = rule_str.strip()
-                vtype, member_ids = self._parse_activation_rule(clean_rule)
+                allow_single = (new_role == "guard")
+                vtype, member_ids = self._parse_activation_rule(clean_rule, allow_single=allow_single)
                 if cid in member_ids:
                     raise ValueError("A concept cannot appear in its own activation rule.")
                 # 全局激活规则唯一性校验（仅限 logic 节点）
@@ -1012,6 +1013,19 @@ class MutationMixin:
                     raise ValueError(
                         f"Switching role to '{new_role}' requires specifying an activation rule (e.g. set <concept> role {new_role} --activation-rule 'A & B')."
                     )
+                if new_role == "logic":
+                    if len(old_member_ids) < 2:
+                        raise ValueError(
+                            "Logic nodes require at least 2 concepts. Specify a valid activation rule (e.g. set <concept> role logic --activation-rule 'A & B')."
+                        )
+                    existing_cid = self._find_composition_concept(
+                        row["activation_type"], old_member_ids, role="logic"
+                    )
+                    if existing_cid is not None and existing_cid != cid:
+                        exist_name = self._resolve_concept_name(existing_cid)
+                        raise ValueError(
+                            f"Concept '{exist_name}' (id={existing_cid}) already has the same composition: {old_rule}"
+                        )
                 self.conn.execute(
                     "UPDATE concepts SET role = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
                     (new_role, old_is_active, now, cid),
@@ -1048,15 +1062,11 @@ class MutationMixin:
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
 
-        clean_rule = activation_rule.strip()
-        vtype, member_ids = self._parse_activation_rule(clean_rule)
-
-        if cid in member_ids:
-            raise ValueError("A concept cannot appear in its own activation rule.")
-
         row = self.conn.execute(
             "SELECT role, activation_type, is_active FROM concepts WHERE id = ?", (cid,)
         ).fetchone()
+        if not row:
+            raise ValueError(f"Concept not found: {concept}")
 
         if row["role"] == "sensor":
             raise ValueError("传感器节点入度恒为 0，严禁定义激活规则上游依赖。")
@@ -1065,6 +1075,13 @@ class MutationMixin:
         old_is_active = row["is_active"]
         old_act_type = row["activation_type"]
         target_role = "logic" if orig_role == "plain" else orig_role
+
+        clean_rule = activation_rule.strip()
+        allow_single = (target_role == "guard")
+        vtype, member_ids = self._parse_activation_rule(clean_rule, allow_single=allow_single)
+
+        if cid in member_ids:
+            raise ValueError("A concept cannot appear in its own activation rule.")
 
         # 全局激活规则唯一性校验（仅限 logic 节点）
         if target_role == "logic":
