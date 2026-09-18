@@ -586,7 +586,7 @@ class QueryMixin:
         self, concept_id: int, limit: int = 10,
     ) -> list[TransitionSuggestion]:
         rows = self.conn.execute(
-            "SELECT ct.to_concept_id, c.name, ct.weight "
+            "SELECT ct.to_concept_id, c.name, c.disclosure, ct.weight "
             "FROM concept_transitions ct "
             "JOIN concepts c ON ct.to_concept_id = c.id "
             "WHERE ct.from_concept_id = ? "
@@ -597,6 +597,7 @@ class QueryMixin:
             TransitionSuggestion(
                 concept_id=r["to_concept_id"],
                 concept_name=r["name"],
+                disclosure=r["disclosure"],
                 weight=round(r["weight"], 4),
             )
             for r in rows

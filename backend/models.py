@@ -93,6 +93,7 @@ class TransitionSuggestion(BaseModel):
     concept_id: int
     concept_name: str
     weight: float
+    disclosure: str | None = None
 
 
 # ── Runtime Evaluation 返回 ───────────────────────────────────

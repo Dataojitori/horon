@@ -196,7 +196,9 @@ def _format_read_concept(result: ReadResult) -> str:
     if result.suggested_next:
         block = ["[ YOU MAY ALSO NEED ]"]
         for s in result.suggested_next:
-            block.append(f"  {s.concept_name} (ID: {s.concept_id}, weight: {s.weight:.2f})")
+            block.append(f"  - [{s.concept_id}] {s.concept_name}")
+            if s.disclosure:
+                block.append(f"    ↳ When: {s.disclosure}")
         footer_blocks.append(block)
 
     if footer_blocks:
