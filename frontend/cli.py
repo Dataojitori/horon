@@ -422,9 +422,27 @@ def _read_nocturne_memory(uri: str) -> str:
         conn.close()
 
 
+class HoronArgumentParser(argparse.ArgumentParser):
+    """Custom ArgumentParser providing friendly diagnostic hints on shell argument splitting."""
+
+    def error(self, message: str):
+        if "unrecognized arguments" in message:
+            sys.stderr.write(
+                f"{self.format_usage()}\n"
+                f"{self.prog}: error: {message}\n\n"
+                f"[提示] 检测到命令行参数疑似被 Shell 截断（例如 PowerShell 将中文引号“”‘’当作代码定界符而拆分参数）。\n"
+                f"       若内容包含复杂引号、特殊符号或多行长文本，请避免在命令行内联传参，改用文件传递：\n"
+                f"       - create_concept: 使用 --content-file <文件>\n"
+                f"       - update: 使用 --old-file <文件> / --new-file <文件> / --append-file <文件>\n"
+                f"       - batch:  使用 batch --file <命令文件>\n"
+            )
+            self.exit(2)
+        super().error(message)
+
+
 def _build_parser():
-    parser = argparse.ArgumentParser(prog="horon", description="Horon CLI",
-                                     allow_abbrev=False)
+    parser = HoronArgumentParser(prog="horon", description="Horon CLI",
+                                 allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
     # reset
@@ -435,8 +453,10 @@ def _build_parser():
     p = sub.add_parser("create_concept", allow_abbrev=False)
     p.add_argument("name")
     p.add_argument("--disclosure", default=None)
-    p.add_argument("--content", required=True,
+    p.add_argument("--content", default=None,
                    help="Why this concept exists and what observation prompted it.")
+    p.add_argument("--content-file", "--content_file", dest="content_file", default=None,
+                   help="Read concept content from file.")
     p.add_argument("--role", default="plain", choices=["plain", "sensor", "logic", "guard"])
     p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"])
     p.add_argument("--activation-rule", "--activation_rule", dest="activation_rule", default=None,
@@ -591,12 +611,18 @@ def _dispatch(args, db):
         return RawOutput(f"Success. Session '{sess}' reset (ephemeral sensors & chains cleared).")
 
     elif args.command == "create_concept":
-        if args.content is None or not args.content.strip():
-            raise ValueError("create_concept requires non-empty --content.")
+        content = args.content
+        if getattr(args, "content_file", None) is not None:
+            if content is not None:
+                raise ValueError("Cannot use both --content and --content-file")
+            content = _read_file(args.content_file)
+
+        if content is None or not content.strip():
+            raise ValueError("create_concept requires non-empty --content or --content-file.")
         return db.create_concept(
             args.name,
             args.disclosure,
-            content=args.content,
+            content=content,
             role=getattr(args, "role", "plain"),
             lifespan=getattr(args, "lifespan", None),
             activation_rule=getattr(args, "activation_rule", None),
