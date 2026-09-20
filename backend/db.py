@@ -331,7 +331,7 @@ class HoronDB(
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
-    def _parse_activation_rule(self, activation_rule: str, allow_single: bool = False) -> tuple[str, list[int]]:
+    def _parse_activation_rule(self, activation_rule: str) -> tuple[str, list[int]]:
         """拆分激活规则，解析为 (activation_type, member_concept_ids)。
 
         严格不混用：一个激活规则只能包含一种运算符。
@@ -340,7 +340,14 @@ class HoronDB(
         CHAIN (A → B → C):  ('CHAIN', [id_A, id_B, id_C])
         AND   (A & B & C):  ('AND',   [id_A, id_B, id_C])
         OR    (A | B | C):  ('OR',    [id_A, id_B, id_C])
-        Single (A):         ('AND',   [id_A])  # guard 允许的单输入归一化
+        Single (A):         ('AND',   [id_A])  # 单输入归一化为单成员 AND
+
+        单成员规则对所有角色一律放行。原先这里有个 allow_single 开关，仅 guard 传 True，
+        意在阻止 `logic = A` 这种无意义的转发中继。但它只扫规则字符串里有没有运算符，
+        看不见抑制边——而 `logic = A UNLESS B` 等价于 A AND NOT B，是真正的二元逻辑，
+        却被一并误判成套娃。结果是想表达「A 发生了而 B 没发生」的人被逼去借 guard 的壳，
+        造出不管任何工具的空壳门禁，污染比套娃本身更隐蔽。
+        真套娃（单成员且无 incoming inhibition）改由结构审计捕捉，不在写时拦。
         """
         has_arrow = "→" in activation_rule
         has_amp = "&" in activation_rule
@@ -363,10 +370,6 @@ class HoronDB(
             vtype = "AND"
             parts = [s.strip() for s in activation_rule.split("&")]
         else:
-            if not allow_single:
-                raise ValueError(
-                    "Activation rule must contain at least one operator: "
-                    "'→' (CHAIN), '&' (AND), or '|' (OR).")
             vtype = "AND"
             parts = [activation_rule.strip()]
 

@@ -963,8 +963,7 @@ class MutationMixin:
                 )
             if rule_str and rule_str.strip():
                 clean_rule = rule_str.strip()
-                allow_single = (new_role == "guard")
-                vtype, member_ids = self._parse_activation_rule(clean_rule, allow_single=allow_single)
+                vtype, member_ids = self._parse_activation_rule(clean_rule)
                 if cid in member_ids:
                     raise ValueError("A concept cannot appear in its own activation rule.")
                 # 全局激活规则唯一性校验（仅限 logic 节点）
@@ -1014,10 +1013,6 @@ class MutationMixin:
                         f"Switching role to '{new_role}' requires specifying an activation rule (e.g. set <concept> role {new_role} --activation-rule 'A & B')."
                     )
                 if new_role == "logic":
-                    if len(old_member_ids) < 2:
-                        raise ValueError(
-                            "Logic nodes require at least 2 concepts. Specify a valid activation rule (e.g. set <concept> role logic --activation-rule 'A & B')."
-                        )
                     existing_cid = self._find_composition_concept(
                         row["activation_type"], old_member_ids, role="logic"
                     )
@@ -1077,8 +1072,7 @@ class MutationMixin:
         target_role = "logic" if orig_role == "plain" else orig_role
 
         clean_rule = activation_rule.strip()
-        allow_single = (target_role == "guard")
-        vtype, member_ids = self._parse_activation_rule(clean_rule, allow_single=allow_single)
+        vtype, member_ids = self._parse_activation_rule(clean_rule)
 
         if cid in member_ids:
             raise ValueError("A concept cannot appear in its own activation rule.")

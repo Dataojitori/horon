@@ -61,8 +61,7 @@ class ConceptMixin:
                     "Plain concepts cannot have activation rules (in-degree must be 0). "
                     "Specify role='logic' or role='guard' when creating composite nodes."
                 )
-            allow_single = (role == "guard")
-            vtype, member_ids = self._parse_activation_rule(rule_str.strip(), allow_single=allow_single)
+            vtype, member_ids = self._parse_activation_rule(rule_str.strip())
 
             # 全局激活规则唯一性校验（仅限 logic 节点，guard 节点对应不同物理工具出口，允许共享相同激活规则）
             if role == "logic":

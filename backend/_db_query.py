@@ -76,13 +76,15 @@ class QueryMixin:
         return subq, params
 
     @staticmethod
-    def _make_snippet(text: str, query: str, context_chars: int = 40) -> str:
-        """Extract a text snippet around the first occurrence of *query*."""
+    def _make_snippet(
+        text: str, query: str, prefix_chars: int = 12, suffix_chars: int = 40
+    ) -> str:
+        """Extract a text snippet around the first occurrence of *query*, keeping query near the start for narrow UI."""
         pos = text.lower().find(query.lower())
         if pos == -1:
-            return text[:80] + ("..." if len(text) > 80 else "")
-        start = max(0, pos - context_chars)
-        end = min(len(text), pos + len(query) + context_chars)
+            return text[:60] + ("..." if len(text) > 60 else "")
+        start = max(0, pos - prefix_chars)
+        end = min(len(text), pos + len(query) + suffix_chars)
         snippet = text[start:end]
         if start > 0:
             snippet = "..." + snippet
