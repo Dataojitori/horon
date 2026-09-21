@@ -451,7 +451,7 @@ def handle_post_invocation(payload: dict[str, Any], db: HoronDB) -> dict[str, An
 
     model_text = ""
     for entry in entries:
-        if entry.get("source") == "MODEL" or entry.get("type") == "PLANNER_RESPONSE":
+        if entry.get("type") == "PLANNER_RESPONSE" and entry.get("source") == "MODEL":
             content = entry.get("content", "")
             if isinstance(content, str) and content.strip():
                 model_text = content

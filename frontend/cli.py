@@ -320,9 +320,15 @@ def _resolve_text(old, old_file, new, new_file,
 
     # Append mode
     if append is not None:
+        append_clean = append.strip()
+        if not append_clean:
+            return current_value if current_value is not None else ""
         if current_value is None:
-            return append
-        return current_value + "\n" + append
+            return append_clean
+        curr_clean = current_value.rstrip()
+        if not curr_clean:
+            return append_clean
+        return f"{curr_clean}\n\n{append_clean}"
 
     # Patch mode
     if old is not None or new is not None:

@@ -1,312 +1,132 @@
 # Horon
 
-Inference Language for Intelligent Agents.
+> **Unified Dynamic Memory & Execution Harness for Intelligent Agents**  
+> **推理即记忆，记忆即推理**：将自适应的联想记忆网络与确定性的运行时门禁 Harness 融为一体。
 
-推理即记忆，记忆即推理。
+[![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18+-61dafb.svg)](https://reactjs.org/)
 
-## 核心思想
+---
 
-**一个概念是由它与其他概念的关系所定义的。**
+## 💡 为什么需要 Horon？
 
-一切皆**定义空间**——一个由边界决定含义的圆圈。概念没有孤立的“本质”，它的身份完全取决于网络结构：即确认流入它的东西（圈内）和确认不流入它的东西（圈外）。
+在构建复杂且需要长期自主演化的 AI Agent 时，开发者通常面临两个极端的困境：
 
-## 语义
+1. **记忆系统是死板的向量检索库**：传统 Memory（如单纯的向量检索）只是静态文本切片匹配，缺乏**关联跃迁与自适应思维路径**——AI 无法随着任务重心的转移自动学习“下一步该联想到什么”。
+2. **执行控制依赖脆弱的 Prompt 规训**：在 Prompt 里写“没有做步骤 A 严禁调用工具 B”，在长上下文或复杂任务中极易发生注意力稀释与幻觉跳步；而硬编码的静态 Workflow 图又过于僵化，无法与动态记忆协同。
 
-### 一切皆概念
+**Horon 将“长效联想记忆”与“运行时确定性 Harness”统一在同一个概念图谱（Concept Graph）中**：
+- **在记忆层（Memory）**：通过转移学习（Transition Learning）动态捕捉 AI 的注意力偏好与思维轨迹；通过 Tag 集群与生命周期钩子实现结构化认知归类与治理；
+- **在执行层（Harness）**：通过 DAG 逻辑拓扑与运行时工具门禁（Tool Guards），从网关层物理拦截未授权的工具调用，并将缺失的前置差集精准反压回 AI 的注意力中。
 
-系统中只有一种实体：**概念（定义空间）**。实体和关系之间没有类型区分。
+---
 
-概念可以是**尚未拆解的**（当前不由其他概念组合而来），也可以是**组合的**（由多个概念的关系实体化而来）。两者的工作方式完全一样——都是由入边定义的圆圈。任何未拆解的概念都可能在将来被进一步分解。
+## 🧠 核心特性
 
-组合概念就是关系。`Nocturne → 发帖` 不是一条“边”，而是一个独立的概念。它记录了自己是由 "Nocturne" 和 "发帖" 以有序关系组合而来的。由于关系本身也是概念，它可以继续参与更复杂的组合，嵌套没有层数限制。
+### 一、 动态联想记忆网络 (Dynamic Memory Network)
 
-**名字与结构的二象性**：
-因为任何关系都是独立概念，所以它们都必须拥有属于自己的“名字”（身份锚点）。为关系命名，本质上是将一段推导链条“打包”并“实体化”。在认知一个概念时，我们总是同时看到它的表层身份与底层结构：
+* **自适应注意力路由 (Adaptive Thought Routing)**：  
+  概念节点之间的转移权重（`concept_transitions`）随 AI 实际探索和读取轨迹动态学习与衰减。**当 AI 的任务重心和兴趣发生改变时，系统推荐的下一步思维路径（`[ SUGGESTED NEXT ]`）会自动演化**，实现真正的认知流动。
+* **多维 Tag 集群与认知治理 (Tag Clustering & Governance)**：  
+  Tag 不仅是分类标签，更是认知集合与工程项目容器。每个 Tag 由源节点统领，支持挂载插件生命周期、结构约束、变动监听钩子（`on_mutation`）以及离线集群审计（`audit_cluster`），防止记忆系统发生无序膨胀。
+* **书腰与意图语义检索 (Disclosure & Intent Recall)**：  
+  每个概念具备精确的“书腰”（Disclosure，说明在何种场景下需要唤起）。AI 可以通过自然语言描述当前困惑或情境（`intent`），在不污染上下文的前提下精准打捞深层经验。
+
+---
+
+### 二、 确定性运行时 Harness (Deterministic Execution Harness)
+
+* **事件驱动感觉神经 (Sensors)**：  
+  支持 `turn`（单回合瞬态脉冲）、`session`（会话累积事实）、`permanent`（长期客观环境）三级生命周期的传感器，通过 Hook 自动监听外部事件与工具调用并点亮事实。
+* **拓扑中继与时序状态机 (Logic & Chains)**：  
+  支持 `AND`（并列前置）、`OR`（分支容灾）以及跨回合锁存步进进度的时序状态机（`CHAIN`：`A → B → C`）。
+* **声明式负向抑制网络 (Declarative Inhibitions)**：  
+  支持 `A ─⊣ B` 形式的一票否决机制。抑制解除后瞬间恢复通路，无需回滚历史状态。
+* **工具物理拦截与逆推反压 (Physical Tool Guards & Compile)**：  
+  1:1 挂载高危工具。条件不满足时在网关物理拦截调用（`Permission Denied`），并通过 `compile` 自动逆推依赖树，告知 AI “还差哪一步”，精准修正注意力。
+
+---
+
+## 🏛️ 系统全景架构
 
 ```text
-Nocturne发帖                            ← 手动赋予的独立身份（名字）
-  [Nocturne → 发帖]                    ← 它的底层构成逻辑
-
-策略驱动的发帖                           ← 更高维度上手动赋予的新名字
-  [我的营销策略 → Nocturne发帖]         ← 它的构成逻辑（直接复用了底层已实体化的名字）
+[ 外部事件 / 用户交互 / 工具调用 ]
+                 ↓ (Sensor Hooks)
+┌─────────────────────────────────────────────────────────────┐
+│                       HORON GRAPH                           │
+│                                                             │
+│   [ 记忆与知识 (Plain Concepts) ] ──(转移学习/兴趣演化)──┐   │
+│   [ Tag 集群分类与生命周期插件 ]                          │   │
+│                 ↕                                       │   │
+│   [ 感觉传入神经 (Sensors) ]                            │   │
+│                 ↓                                       │   │
+│   [ 逻辑中继与时序锁存 (AND / OR / CHAIN) ]              ▼   │
+│                 ↓                         [ 动态注意力推荐 ] │
+│   [ 负向抑制门控 (Inhibitions) ]            (Suggested Next)│
+│                 ↓                                           │
+│   [ 效应器放行守卫 (Tool Guards) ]                           │
+└────────────────┬────────────────────────────────────────────┘
+                 ↓
+      [ 工具物理网关拦截 / 放行 ]  ──(拦截时)──→ [ 逆推阻塞差集回传 AI ]
 ```
 
-通过在每一层组合时手动赋予名字，系统保证了无论嵌套多深，复杂的网络都会被不断“降维”成对人类直观可读的词汇；而底层的组合记录则忠实保留了它可以被无限追溯的拓扑历史。更具体的实现逻辑见后面的[数据模型](#数据模型)。
+---
 
-### 表达式语法：`→`、`&` 与 `|`
+## 🚀 快速上手 (Quick Start)
 
-一个概念变体（Variation）由且仅由一种底层类型构成。**严禁在同一个变体中混用不同的关系符号**。
-
-- **CHAIN (`→`)**：严格有向序列。如 `A → B → C`。成员有严格的先后顺序，代表路径或推导链条。
-- **AND (`&`)**：并列容器。如 `A & B`。成员之间没有顺序，所有子元素必须**同时**具备，该集合概念才算成立并被激活。
-- **OR (`|`)**：选择面板。如 `A | B`。成员之间没有顺序，只要有**任意一个**子元素具备，该集合概念即算成立并被激活。
-
-**强制降维原则**：
-如果用户想表达复杂的混合逻辑（例如 `A 指向 B&C`），系统不允许写成 `A → B & C`。用户必须手动将其拆分为两层：
-1. 建立一个独立的 AND 概念 `M = B & C`。
-2. 建立一条 CHAIN `A → M`。
-通过强迫在输入端降维，保证了底层网络数据结构的绝对稳健和清爽。
-
-**不可分割性**：`A → B → C` **不等于**先建 `M = A → B` 再建 `M → C`。如何定义表达式决定了视角——`A → B → C` 中不存在独立的 `A → B` 概念。
-
-**Inbound / Outbound 的统一规则**：inbound 和 outbound 永远只在 CHAIN 的相邻位置（`order_index`）之间产生。概念出现在某个位置，它的「下一个位置」是 outbound 方向，「上一个位置」是 inbound 方向。AND (`&`) 和 OR (`|`) 作为无序容器，内部成员之间没有方向差，因此不产生互相的 inbound/outbound 关系。
-
-**AND / OR 不代表推导**：它们仅确认了组合结构（共起或替代），但绝不意味着从 A 能推导出 B。若需明确表达两个概念互为因果或完全等价，应建立两条有向边：`A → B` 与 `B → A`。
-
-**status**（应用于整个 variation）：
-- **hypothesis**：尚未验证的试探。
-- **confirmed**：验证通过。
-- **negated**：验证失败，确定不成立。遇到被 negated 的变体，编译器会将其视为“死墙”，直接绕道不予通行。
-- 例：`我的营销策略 → Nocturne发帖`（confirmed）= 我的营销策略是Nocturne发帖定义的一部分。`自恋表演 → Nocturne发帖`（negated）= 自恋表演确定不属于Nocturne发帖的定义。
-
-### 无关系
-
-没有已知关系。不等于否定（否定是确定的知识；无关系是知识的缺失）。
-
-### 身份与边界的构成
-
-在明确了关系语法后，我们可以严格界定文章开头所说的“边界”到底在系统中长什么样。一个概念的完整定义空间，由它与其他概念的关联所共同勾勒：
-
-- **圈内（流入它的东西）**：由所有确定指向它的 **`confirmed`** inbound 有向关系（CHAIN）构成。
-- **圈外（被它排斥的东西）**：由所有确定拒绝它的 **`negated`** inbound 有向关系（CHAIN）构成。否定同样是在划清界限。
-- **复合空间**：当该概念自身是一个 AND 概念时，它的内部边界为各成员的交集；当其为一个 OR 概念时，内部边界为各成员的并集。这些容器概念可以再作为一个整体去参与构成其他概念的有向关系。
-
-（注意：尚未验证的猜测（`hypothesis`）只是对边界的试探，在得到确认或否定之前，不产生实际的边界约束力。）
-
-### 两条定义路径
-
-概念的边界可以从两条路径进入，互不依赖，先后随意：
-
-- **结构路径**：通过 `add`（新增）、`set`（更新）或 `delete`（清除）操作，将概念组合为其他概念的关系，并声明该关系的 status（hypothesis / confirmed / negated）。
-- **文本路径**：通过 `update` 写入 content（内容/理由）。
-
-一个概念可以先有文字描述再被拆解为结构，也可以先有结构再补文字解释，也可以只走其中一条。两条路径画的是同一个圈的边界——一个用概念间的关系画，一个用语言画。
-
-### Concept 与 Variation：殊途同归的定义路径
-
-系统中的概念在语义上被区分为两层：
-
-- **概念实体（Concept）**：概念的公用身份与锚点（如“苹果”）。在建立关系时（如 `A → B`），我们引用的是概念实体本身。它是一个聚合多重语义的枢纽（Hub）。
-- **内部释义（Variation）**：概念在特定条件下的具体含义与结构。一个概念可以有多个变体，对应自然语言中的“一词多义”。每个变体代表了它的一种独特构成，拥有自己独立的构成要素、底层逻辑和验证状态。
-
-**示例**：“苹果”是一个共同的概念身份，但它内部可以平行存在多种释义（变体）：
-- 释义一（植物果实）：由“果树”与“结出”组合而来（状态：已确认）。
-- 释义二（科技品牌）：由“公司”与“创立”组合而来（状态：待验证的假设）。
-
-这两个变体共享“苹果”这个名字，但它们的结构和可信度完全独立。
-
-**为什么要有这两层？**
-为了实现语境的动态消歧。当把“苹果”作为条件去连接下一个节点时，我们连的是“苹果”这个整体（Concept）。至于在这个推导链条中，到底哪一个释义被激活了，不需要人工指定，而是完全由**上下文**（当前网络中其他已经被激活的节点，比如是否出现了“手机”或“果园”）来自动收敛决定。
-
-### 状态与验证标准 (Status)
-
-`status` 评估的是一个变体（variation）是否成立。无论是原子概念本身，还是概念间的组合关系，其生命周期均为：
-
-```
-假设(hypothesis)  ──→  确认(confirmed)
-                  └──→  否定(negated)
+### 1. 安装与依赖
+```bash
+git clone https://github.com/Dataojitori/horon.git
+cd horon
+pip install -r requirements.txt
 ```
 
-**审批标准：名副其实**
-变体的“实质内容”包含了它的一切构件：**表达式（如果有）、content**。审批的唯一标准是：这些实质内容的总和，是否配得上该概念的**名字（name）**。不论是原子概念还是组合概念，审核逻辑完全一致。
-例如，你建了一个组合概念，名字叫“我的史诗级重构”，表达式是“修改文档拼写 → Linux内核开发者”。
-哪怕“改拼写属于开发者工作”这个逻辑推导本身没毛病，但这丁点儿内容和它宏大的名字完全不匹配。所以这个组合概念的 status 无法被设为 confirmed。
-同样，原子概念如果没有表达式，那就拿它的 content 去和名字对账。
+### 2. 记忆沉淀与 Tag 归类
+```bash
+# 创建概念并添加书腰（Disclosure）
+python frontend/cli.py create_concept "API限流退避规范" \
+  --disclosure "当遇到外部API返回429或网络抖动时打开" \
+  --content "采用指数退避重试，初始等待1s，最大重试3次。"
 
-- **假设**：尚未经过严格验证的试探性节点或关系。
-- **确认**：证据表明该概念确实成立。
-- **否定**：证据表明该概念确实不成立。
+# 建立项目 Tag 并纳入成员
+python frontend/cli.py create_concept "网络稳定性工程" --content "提升外部服务容错能力"
+python frontend/cli.py create_tag "网络稳定性工程"
+python frontend/cli.py add "API限流退避规范" tag "网络稳定性工程"
 
-content 可以写在任何 variation 上，记录为什么打上该状态。所有确认的状态都保持可证伪性。
-
-
-### 推理 = 编译
-
-Horon 是一门需要编译的语言。**每次问路都是一次编译，编译引擎是一个状态空间规划器 (Planner)**。
-
-```
-compile --assume A C --block B --constraints D E --goal G
+# 意图模糊检索
+python frontend/cli.py intent "接口报错频次太高被封了怎么办"
 ```
 
-图里可能的路有很多条。编译始终是同一个动作：在给定上下文和约束的图谱空间里，搜索一条从已知状态通往目标的最优因果路径。
+### 3. 构建物理执行门禁 (Harness Circuit)
+```bash
+# 1. 定义前置事实与工具守卫
+python frontend/cli.py create_concept "测试已通过" --role sensor --lifespan session
+python frontend/cli.py create_concept "放行生产发布" --role guard --activation-rule "测试已通过"
+python frontend/cli.py set "放行生产发布" tool_guard deploy_prod
 
-#### 状态池与约束 (Context & Constraints)
+# 2. 此时调用 deploy_prod 会被物理拦截，并返回缺失差集
+python frontend/cli.py compile --target "放行生产发布"
+# 输出: [✗ 未就绪: 缺少前置条件 (测试已通过)]
 
-- **`--assume` (正向现状态池)**：当前直接拥有的状态。池子里的节点在本次编译中会**强制获得 confirmed（已证实）状态**，无论它们在数据库中原本的 status 是 hypothesis 还是 negated。它们作为全局生效的免费公理，在寻路的任何阶段，只要规则需要将其作为前提条件，都可以随时无条件地直接取用，无需再寻找生成它们的上游路径。
-- **`--block` (负向现状态池)**：当前被否认的状态（障碍物）。定义极度简单：**这些节点绝对不能出现在最终找到的路径里，无法对到达终点产生任何贡献**。算法底层会自动绕开所有产出它或需要它的边。由于只限制该节点本身不能出现，所以绝不会发生跨维度连坐：例如 `B` 有一个变体是 `C & D`，如果 `--block C`，只是堵死了这条内部组装配方；但若图里还有 `A → B` 且 `A` 满足，`B` 依然会被独立合法地点亮，因为这条生效的路径上压根就没有用到 `C`。
-- **`--constraints` (必经约束池)**：【可选】必须在编译路径中被用到的概念集合，**无序**。引擎在图搜索中自主负责排列组合，找出一个能收集/点亮池子里所有节点，并最终通向目标的最优拓扑路线。如果为空，则代表毫无束缚的自由寻路。
-- **`--goal` (目标)**：必须抵达的最终节点。
-
-#### 寻路规则
-- **纯粹的 AND-OR Graph 搜索**：
-  - **CHAIN 节点**：按 `order_index` 严格顺序遍历，前一个元素的到达是触发后一个元素的前提。
-  - **AND 节点**：作为容器，只有当所有子分支都被集齐并激活时，该节点才算被整体激活。
-  - **OR 节点**：作为容器，任一子分支被激活，该节点即被整体激活。
-- **死路避让**：算法遇到 `status = negated` 的关系变体，或触碰 `--block` 中的节点，直接视为死胡同并绕路退回。
-- **无序约束达成**：对于 `--constraints`，不再要求你提供严格的先后顺序。编译引擎在遍历时，会自动记录已达成的约束集合。只要能满足 `constraints ⊆ 路径所有 events 集合` 并到达 goal 即合法。
-- **有通路就不返回假设**：代价按（借道假设数，跳数）字典序——只要存在全 confirmed 的路线就绝不掺假设，哪怕假设是直连；同为全 confirmed 时跳数少者优先，直连自然胜出。只有借假设才通时才借，借了哪些全部列在警告里。
-
-#### 概念激活
-
-走过 `R = A → B` 不只是“到达 B”——关系概念 R 自身也会被激活，但它在 B **之后**出现，顺序是 `A, B, R`。如果 R 有自己的出边，完成这个表达式后可以从 R 继续。
-
-- **`concept_order`**：编译返回的实际经过节点序列（包含中继节点、成员与关系概念自身）。例如 `R = A → B → A` 展开为 `[A, B, A, R]`（重复经过不去重）；`N = B & C` (AND 节点) 展开为 `[B, C, N]` 或 `[C, B, N]`。
-- **允许穿插任意中间节点**：所有被卷进来的节点都必须由合法的起点（`--assume` 或从起点蔓延出来的节点）走到，绝不能凭空出现。只要路径合法，穿插多少图谱约束带来的副产物都是允许的。
-
-#### 编译报告
-
-报告里的路线是一棵已经拼好的**因果路线**；没有 `&` 分支时，看起来就是普通边链。Horon 里边即节点——一条 A → B 的边就是一个组合概念，所以报告里的"边"就是这个组合概念的摘要视图：
-
-```json
-{"id": 12, "name": "使蛋白质变性", "status": "hypothesis",
- "from": {"id": 6, "name": "高温"}, "to": {"id": 3, "name": "鸡蛋凝固"}}
+# 3. 外部事件满足或测试通过后，守卫自动放行
+python frontend/cli.py set "测试已通过" active 1
+python frontend/cli.py compile --target "放行生产发布"
+# 输出: [✓ 正常通电放行]
 ```
 
-`id` / `name` / `status` 是这条边（组合概念）自己的，`from` / `to` 是它的两个 compose 成员。影分身产生的路径中，相邻边的 `to` 和 `from` 可能不连续——断裂处就是概念激活引起的瞬移。
+---
 
-**通过**（passed=true）：
+## 🌌 可视化控制台 (Web UI)
 
-- **compiled_route**：整条因果路线（含系统补全的中继站和 AND/OR 的成员分支）。
-- **concept_order**：这条路线实际使用节点的严格 occurrence 顺序；表达式概念总在自己的最后一个 position 后出现。
-- **行动指引（Recommendation）**：一条系统提示，要求在实际执行行动前，务必先使用 `read_concept` 检查目标节点的完整上下文（包括周边环境与否定边界）。
-
-**断路**（passed=false）：编译器是**检测器，不是规划器**——它不替你修路，只上交这些事实：
-
-1. **断口（break）**：报告目标是否可达（`goal_reached`）以及哪些约束条件未能满足（`unmet_constraints`）。
-2. **compiled_route**：在遵守约束的前提下走得最远的最佳部分路径（满足约束最多、其次代价最小）；可能没到目标，完全无法起步时为空列表。
-3. **自由通路（detour）**：当目标**本身可达、只是被约束卡住**时，无视约束、仅从 assume 出发寻找一条到终点的路，附在这里；目标彻底不可达（撤约束也到不了）时 detour 为 null。
-
-断点就是需要架设假设的地方——用试探性的关系桥接缺口，然后验证：确认 → 路径固化；否定 → 该方向封死，边界锐化。图通过这个循环生长。
-
-## 数据模型
-
-
-### concepts 表
-
-概念的对外身份层。组合的参与单位。
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| name | TEXT UNIQUE | 概念的对外显示名称 |
-| disclosure | TEXT? | 短介绍，进入视野时显示 |
-| created_at | TEXT | ISO时间戳 |
-| updated_at | TEXT | ISO时间戳 |
-
-### variations 表
-
-同一概念的不同解释（variation）。每个 variation 是一种纯粹的推导路径（CHAIN/AND/OR），有独立的 status / content。
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| concept_id | INTEGER FK | 所属 concept |
-| short_code | TEXT | 随机 4 位 hex（不复用已删除的码） |
-| type | TEXT | 变体类型，严格限制为：`'CHAIN'`, `'AND'`, `'OR'` |
-| status | TEXT? | hypothesis / confirmed / negated；适用于所有 variation，NULL 等同于 hypothesis |
-| content | TEXT? | 支撑当前状态的理由 |
-| created_at | TEXT | ISO时间戳 |
-| updated_at | TEXT | ISO时间戳 |
-
-主键：(concept_id, short_code)
-
-### compose_members 表
-
-组合概念的成员。成员引用 concept_id（hub），不是具体 variation。
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| concept_id | INTEGER FK | 所属 variation 的 concept_id |
-| short_code | TEXT | 所属 variation 的 short_code |
-| member_concept_id | INTEGER FK | 成员 concept 的 id |
-| order_index | INTEGER | 成员排序下标（原 position） |
-
-主键：(concept_id, short_code, member_concept_id)
-
-判断规则：
-- **CHAIN**：成员数 $\ge 2$，`order_index` 必须严格唯一且递增，定义了链条的方向。
-- **AND / OR**：成员数 $\ge 2$，`order_index` 在业务层面上无实际意义（集合内部无序，前端解析忽略该字段）。
-- 不再允许一个 variation 内部同时存在不同类型的层级结构（不再兼顾顺序与并发）。
-- 没有成员 → 尚未拆解（原子概念）。
-- 全图范围内，不允许存在两个实质结构完全相同的 variation（即 `type` 相同且 `compose_members` 及其顺序完全一致）。因为如果结构完全相同，它们在图谱中就意味着同一个逻辑因果，不应该被重复创建（应用层校验）。
-- 编译器把整个 variation 作为不可分割的因果动作：要么按链条依次通过（CHAIN），要么多路同时走通（AND），要么择一走通（OR）。不会把多段链条伪拆成若干独立二元关系。
-
-### aliases 表
-
-别名到 concept 的映射。一个 concept 可以有多个别名。aliases 表是名字解析的唯一权威来源。
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| alias | TEXT PK | 别名文本 |
-| concept_id | INTEGER FK | 指向 concepts.id |
-
-- `create_concept` 时自动将 name 注册为 alias；`rename` 会把新显示名也注册进来。
-- 用 `add_name` 注册额外别名，`remove_name` 删除。
-- 不同 concept 之间不允许任何名字重复（无论主名还是别名），应用层校验。
-- 同一 concept 的主名可以同时出现在自己的 alias 中。
-
-## 操作
-
-### 概念 CRUD
-- `create_concept(name, disclosure?)` → ConceptDetail（创建概念 + 默认 variation，name 自动注册为 alias）
-- `add(target, kind, value)` — 给概念添加别名 (`name`)、组合关系变体 (`variation`)、标签 (`tag`) 或书腰 (`disclosure`)
-- `delete(target, kind?, value?)` — 删除操作。缺省删 variation，也可指定删 `name`、`expression`、`tag` 或 `disclosure` (ID)
-- `set(target, prop, value)` — 设置属性，支持 `status`, `name` (重命名) 或重写当前 variation 的 `expression`
-- `update(node, field)` — 给 variation 写 `content`。文本编辑只有两种模式，**没有全文替换**——防止 AI 不读旧内容就整体覆盖、或重写时漏掉原有信息：
-  - **patch**（`--old` + `--new`，含 `-file` 变体）：局部修改
-  - **append**（`--append`，含 `-file` 变体）：在已有内容末尾换行追加
-  - 两种模式互斥
-
-### 查询
-- `search_concepts(query)` — 模糊搜索，LIKE 匹配 name, alias, disclosure 和 content
-- `read_concept(concept)` — 展示概念全貌：concept 信息、所有 variation（各自的组合 / status / content）、定义（圈内）、边界（圈外）、假设、出边
-
-### 编译
-- `compile(--assume [...], --block [...], --constraints [...], --goal G)` — 状态空间规划器。在 assume 状态池出发、绕开 block 障碍物、收集所有 constraints、最终到达 goal。详见[推理 = 编译](#推理--编译)
-
-## 项目结构
-
-```
-horon/
-├── backend/
-│   ├── __init__.py
-│   ├── models.py        # Pydantic数据模型
-│   ├── schema.sql       # 建表SQL
-│   ├── db.py            # DB操作
-│   ├── compiler.py      # 路径编译、step校验与报告生成
-│   ├── server.py        # FastAPI REST API（可视化前端用）
-│   └── text_patch.py    # 文本模糊匹配（patch用）
-├── frontend/
-│   ├── cli.py           # Nocturne操作接口
-│   └── prompt.md        # 系统提示词
-├── web/                 # 可视化前端（Vite + React + TypeScript）
-│   ├── src/
-│   │   ├── components/
-│   │   │   ├── GalaxyView.tsx       # 宏观星系图（Canvas力导向）
-│   │   │   ├── DissectionView.tsx   # 微观解剖台（d3-force + DOM）
-│   │   │   ├── InspectorSidebar.tsx # 右侧深度检查面板
-│   │   │   └── SearchBar.tsx        # 概念搜索
-│   │   ├── api.ts       # API客户端
-│   │   ├── types.ts     # TypeScript类型定义
-│   │   ├── App.tsx      # 主应用（双模切换）
-│   │   └── main.tsx     # 入口
-│   ├── index.html
-│   ├── vite.config.ts
-│   └── package.json
-└── README.md
-```
-
-## 可视化前端
-
-双模无缝切换系统：Galaxy View（宏观力导向热力图）与 Dissection View（微观焦点容器）。
-
-### 启动
+Horon 内置基于 React + Vite 的可视化控制台：
+- **Galaxy View（宏观力导向星图）**：全景浏览概念群落、Tag 集群分布、实时通电状态与转移学习权重。
+- **Dissection View（微观解剖台）**：直观调试电路依赖、抑制源链路与时序进度。
 
 ```bash
-# 终端1：API服务器
+# 启动后端 API 服务
 python -m uvicorn backend.server:app --port 8710 --reload
 
-# 终端2：前端开发服务器
+# 启动前端控制台
 cd web && npm run dev
 ```
-
-打开 http://localhost:5173 查看。Vite 会自动将 `/api` 请求代理到后端。
