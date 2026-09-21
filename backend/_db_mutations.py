@@ -137,6 +137,9 @@ class MutationMixin:
         ).fetchone()
         old_disc = old_row["disclosure"] if old_row else None
 
+        if getattr(self, "snapshot_mode", False):
+            self.capture_snapshot(cid, "disclosure")
+
         self.conn.execute(
             "UPDATE concepts SET disclosure=?, updated_at=? WHERE id=?",
             (text, now, cid),
@@ -460,6 +463,10 @@ class MutationMixin:
         if not row or not row["disclosure"]:
             raise ValueError(f"Concept {label} has no disclosure to delete.")
         old_text = row["disclosure"]
+
+        if getattr(self, "snapshot_mode", False):
+            self.capture_snapshot(cid, "disclosure")
+
         now = _now()
         self.conn.execute(
             "UPDATE concepts SET disclosure=NULL, updated_at=? WHERE id=?",
@@ -1280,6 +1287,9 @@ class MutationMixin:
             "SELECT content FROM concepts WHERE id=?", (cid,)
         ).fetchone()
         old_val = old_row["content"] if old_row else None
+
+        if getattr(self, "snapshot_mode", False) and field == "content":
+            self.capture_snapshot(cid, "content")
 
         self.conn.execute(
             f"UPDATE concepts SET {field}=?, updated_at=? WHERE id=?",

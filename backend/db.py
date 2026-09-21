@@ -28,6 +28,7 @@ from ._db_mutations import MutationMixin
 from ._db_query import QueryMixin
 from ._db_reminders import ReminderMixin
 from ._db_compile import CompileMixin
+from ._db_snapshots import SnapshotMixin
 from .evaluator import GraphEvaluator
 from .models import EvaluationResult
 
@@ -39,8 +40,10 @@ class HoronDB(
     QueryMixin,
     ReminderMixin,
     CompileMixin,
+    SnapshotMixin,
 ):
-    def __init__(self, *, check_same_thread: bool = True):
+    def __init__(self, *, check_same_thread: bool = True, snapshot_mode: bool = False):
+        self.snapshot_mode = snapshot_mode
         is_new = not _DB_PATH.exists() or _DB_PATH.stat().st_size == 0
         self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
         self._txn_plugin_snapshot: dict[str, dict | None] = {}

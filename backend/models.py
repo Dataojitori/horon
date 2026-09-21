@@ -176,3 +176,27 @@ class CompileResult(BaseModel):
     chain_progress: ChainProgress | None = None
     diagnostic_tree: list[str] = []
 
+
+# ── Snapshot & Review 模型 ─────────────────────────────────────
+
+SnapshotField = Literal["content", "disclosure"]
+
+
+class SnapshotChange(BaseModel):
+    """单一字段的改动快照。"""
+    field: SnapshotField
+    original_value: str | None = None
+    current_value: str | None = None
+    created_at: str
+
+
+class ConceptReviewItem(BaseModel):
+    """按概念归总的人工审核项目。"""
+    concept_id: int
+    concept_name: str
+    role: str | None = None
+    is_deleted: bool = False
+    is_creation: bool = False
+    changes: list[SnapshotChange] = []
+    created_at: str
+

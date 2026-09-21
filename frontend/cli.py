@@ -948,7 +948,7 @@ def _parse_batch_commands(text: str) -> list[tuple[int, list[str], str]]:
 def main():
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB()
+    db = HoronDB(snapshot_mode=True)
 
     try:
         if args.command == "batch":

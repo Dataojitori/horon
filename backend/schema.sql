@@ -167,6 +167,18 @@ CREATE TABLE IF NOT EXISTS pending_notifications (
     created_at TEXT NOT NULL
 );
 
+-- 16. CLI 操作快照表 (Snapshots: 人工审核与回滚)
+CREATE TABLE IF NOT EXISTS snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id      INTEGER NOT NULL,
+    concept_name    TEXT    NOT NULL,
+    field           TEXT    NOT NULL CHECK(field IN ('content', 'disclosure')),
+    original_value  TEXT,                           -- 修改前的原始值（文本），若是新创建概念则为 NULL
+    is_creation     INTEGER NOT NULL DEFAULT 0,     -- 是否为新建节点标记 (1=新建, 回滚时执行整节点删除)
+    created_at      TEXT    NOT NULL,
+    UNIQUE(concept_id, field)
+);
+
 -- 索引集合
 CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_sh_lookup           ON sensor_hooks(event_type, tool);
@@ -180,6 +192,7 @@ CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 CREATE INDEX IF NOT EXISTS idx_pn_session         ON pending_notifications(session_id);
+CREATE INDEX IF NOT EXISTS idx_snapshots_concept  ON snapshots(concept_id);
 
 -- GUI 可读视图
 CREATE VIEW IF NOT EXISTS v_compose AS

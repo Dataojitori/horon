@@ -149,6 +149,9 @@ class ConceptMixin:
             eval_res = self._evaluator().evaluate()
             fired_actions = eval_res.fired_actions
 
+        if getattr(self, "snapshot_mode", False):
+            self.capture_creation_snapshot(concept_id, name)
+
         msg = f"Success. Created concept '{name}' (id={concept_id}, role={role})."
         if all_infos:
             msg += "\n" + "\n".join(all_infos)
@@ -234,6 +237,9 @@ class ConceptMixin:
         if unlinked_member_ids:
             for mid in set(unlinked_member_ids):
                 self._run_mutation_hooks(mid, diff)
+
+        if getattr(self, "snapshot_mode", False):
+            self.capture_deletion_snapshot(cid)
 
         # 执行删除（外键约束自动清理 compose_members, aliases, disclosures, reminders, sensor_hooks, tool_guards, inhibitions 等）
         self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
