@@ -42,13 +42,14 @@ class HoronDB(
     CompileMixin,
     SnapshotMixin,
 ):
-    def __init__(self, *, check_same_thread: bool = True, snapshot_mode: bool = False):
+    def __init__(self, *, db_path: str | Path | None = None, check_same_thread: bool = True, snapshot_mode: bool = False):
         self.snapshot_mode = snapshot_mode
-        is_new = not _DB_PATH.exists() or _DB_PATH.stat().st_size == 0
+        target_path = Path(db_path) if db_path else _DB_PATH
+        is_new = not target_path.exists() or target_path.stat().st_size == 0
         self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
         self._txn_plugin_snapshot: dict[str, dict | None] = {}
         self.conn = sqlite3.connect(
-            str(_DB_PATH), check_same_thread=check_same_thread)
+            str(target_path), check_same_thread=check_same_thread)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         if is_new:

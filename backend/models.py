@@ -32,6 +32,7 @@ class Concept(BaseModel):
     on_fire: str | None = None
     created_at: str
     updated_at: str
+    byte_size: int = 0
 
 
 class SearchMatch(BaseModel):
@@ -142,6 +143,7 @@ class ReadResult(BaseModel):
     activation_type: ActivationType | None = None
     activation_rule: str | None = None
     on_fire: str | None = None
+    byte_size: int = 0
     aliases: list[str] = []
     tags: list[str] = []
     tag_source_info: str | None = None

@@ -195,7 +195,13 @@ class QueryMixin:
     def get_all_concepts(self) -> list[Concept]:
         """获取所有 concept。"""
         rows = self.conn.execute("SELECT * FROM concepts ORDER BY id").fetchall()
-        return [Concept(**dict(row)) for row in rows]
+        concepts = []
+        for row in rows:
+            d = dict(row)
+            content_str = d.get("content")
+            d["byte_size"] = len(content_str.encode("utf-8")) if content_str else 0
+            concepts.append(Concept(**d))
+        return concepts
 
     def get_all_concepts_overview(
         self, tag_expr: str | None = None,
@@ -209,7 +215,12 @@ class QueryMixin:
             rows = self.conn.execute(
                 f"SELECT DISTINCT c.* FROM concepts c {join_clause} ORDER BY c.id", child_params
             ).fetchall()
-            concepts = [Concept(**dict(row)) for row in rows]
+            concepts = []
+            for row in rows:
+                d = dict(row)
+                content_str = d.get("content")
+                d["byte_size"] = len(content_str.encode("utf-8")) if content_str else 0
+                concepts.append(Concept(**d))
 
             if not concepts:
                 return []
@@ -263,6 +274,7 @@ class QueryMixin:
                 "activation_type": c.activation_type,
                 "activation_rule": rule,
                 "on_fire": c.on_fire,
+                "byte_size": c.byte_size,
                 "tags": tags_by_cid.get(c.id, []),
             }
             result.append(c_dict)
@@ -492,11 +504,13 @@ class QueryMixin:
         ]
 
         suggested_next = self._get_suggested_transitions(cid)
+        content_val = row["content"]
+        byte_size = len(content_val.encode("utf-8")) if content_val else 0
 
         return ReadResult(
             id=cid,
             name=row["name"],
-            content=row["content"],
+            content=content_val,
             disclosure=row["disclosure"],
             role=row["role"],
             is_active=row["is_active"],
@@ -504,6 +518,7 @@ class QueryMixin:
             activation_type=row["activation_type"],
             activation_rule=activation_rule,
             on_fire=row["on_fire"],
+            byte_size=byte_size,
             aliases=aliases,
             tags=tags,
             tag_source_info=tag_source_info,
