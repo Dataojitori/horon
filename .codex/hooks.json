@@ -1,0 +1,87 @@
+{
+  "description": "Horon Harness hooks for this repository only",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" SessionStart --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" SessionStart --adapter codex",
+            "statusMessage": "Initializing Horon Harness",
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" UserPromptSubmit --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" UserPromptSubmit --adapter codex",
+            "statusMessage": "Horon sensing user input",
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" PreToolUse --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" PreToolUse --adapter codex",
+            "statusMessage": "Horon checking tool guards",
+            "timeout": 30,
+            "additionalContextLimit": 5000
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" PostToolUse --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" PostToolUse --adapter codex",
+            "statusMessage": "Horon sensing tool result",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" Stop --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" Stop --adapter codex",
+            "statusMessage": "Horon evaluating turn completion",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Interrupt": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" Interrupt --adapter codex",
+            "commandWindows": "python \"C:/Users/niwatori/OneDrive/code/horon/run_gateway.py\" Interrupt --adapter codex",
+            "statusMessage": "Horon resetting interrupted turn",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
