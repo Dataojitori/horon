@@ -11,7 +11,7 @@ import {
   type SimulationLinkDatum,
 } from "d3-force";
 import { api } from "../api";
-import type { NeighborhoodData, ConceptDetail, DisclosureDetail } from "../types";
+import { formatBytes, type NeighborhoodData, type ConceptDetail } from "../types";
 import "./DissectionView.css";
 
 interface Props {
@@ -32,32 +32,26 @@ interface SimNode extends SimulationNodeDatum {
 
 interface SimLink extends SimulationLinkDatum<SimNode> {
   status: string | null;
-  kind: "directed" | "undirected" | "internal-directed" | "internal-joint" | "internal-or-joint";
+  kind: "directed" | "undirected" | "inhibition" | "internal-directed";
   short_code?: string;
   relation_id?: number;
   relation_name?: string;
 }
 
-function joinDisclosures(discs?: DisclosureDetail[]): string | null {
-  return discs && discs.length > 0 ? discs.map((d) => d.text).join("; ") : null;
-}
-
-// Helper to extract unique internal members of a focal concept's variations
+// Helper to extract unique internal members of a focal concept
 const getInternalMembers = (focalConcept: ConceptDetail) => {
   const map = new Map<number, { id: number; name: string; disclosure: string | null }>();
-  focalConcept.variations.forEach((v) => {
-    if (v.members) {
-      v.members.forEach((m) => {
-        if (m.concept_id !== focalConcept.id) {
-          map.set(m.concept_id, {
-            id: m.concept_id,
-            name: m.name,
-            disclosure: joinDisclosures(m.disclosures),
-          });
-        }
-      });
-    }
-  });
+  if (focalConcept.members) {
+    focalConcept.members.forEach((m) => {
+      if (m.concept_id !== focalConcept.id) {
+        map.set(m.concept_id, {
+          id: m.concept_id,
+          name: m.name,
+          disclosure: m.disclosure,
+        });
+      }
+    });
+  }
   return Array.from(map.values());
 };
 
@@ -174,7 +168,7 @@ export default function DissectionView({
     const focalNode: SimNode = {
       id: focalConcept.id,
       name: focalConcept.name,
-      disclosure: joinDisclosures(focalConcept.disclosures),
+      disclosure: focalConcept.disclosure,
       isFocal: true,
       isInternal: false,
       degree: 0,
@@ -189,24 +183,49 @@ export default function DissectionView({
     // 2. Internal nodes (sub-elements inside the geofence)
     const internalMembersList = getInternalMembers(focalConcept);
     const internalNodeIds = new Set(internalMembersList.map((m) => m.id));
-    const internalAngle = (2 * Math.PI) / Math.max(internalMembersList.length, 1);
-    const internalR = Math.min(60, CONTAINER_RADIUS * 0.4);
+    const count = internalMembersList.length;
 
-    internalMembersList.forEach((m, i) => {
-      nodes.push({
-        id: m.id,
-        name: m.name,
-        disclosure: m.disclosure,
-        isFocal: false,
-        isInternal: true,
-        x: cx + Math.cos(internalAngle * i) * internalR,
-        y: cy + Math.sin(internalAngle * i) * internalR,
+    if (focalConcept.activation_type === "CHAIN") {
+      // Sort members for CHAIN to arrange from top to bottom
+      const memberOrderMap = new Map(
+        (focalConcept.members || []).map((m) => [m.concept_id, m.order_index]),
+      );
+      const sortedList = [...internalMembersList].sort(
+        (a, b) => (memberOrderMap.get(a.id) ?? 0) - (memberOrderMap.get(b.id) ?? 0),
+      );
+      const stepY = count > 1 ? Math.min(65, (CONTAINER_RADIUS * 1.3) / (count - 1)) : 0;
+      const startY = cy - ((count - 1) * stepY) / 2;
+      sortedList.forEach((m, i) => {
+        nodes.push({
+          id: m.id,
+          name: m.name,
+          disclosure: m.disclosure,
+          isFocal: false,
+          isInternal: true,
+          x: cx,
+          y: startY + i * stepY,
+        });
       });
-    });
+    } else {
+      // AND / OR: circular distribution inside container
+      const internalAngle = (2 * Math.PI) / Math.max(count, 1);
+      const internalR = Math.min(CONTAINER_RADIUS * 0.45, 60 + count * 6);
+      internalMembersList.forEach((m, i) => {
+        nodes.push({
+          id: m.id,
+          name: m.name,
+          disclosure: m.disclosure,
+          isFocal: false,
+          isInternal: true,
+          x: cx + Math.cos(internalAngle * i - Math.PI / 2) * internalR,
+          y: cy + Math.sin(internalAngle * i - Math.PI / 2) * internalR,
+        });
+      });
+    }
 
     // 3. External nodes (neighbors outside the geofence)
     const externalNeighbors = data.neighbors.filter(
-      (n) => !internalNodeIds.has(n.id) && n.id !== focalConcept.id
+      (n) => !internalNodeIds.has(n.id) && n.id !== focalConcept.id,
     );
     const externalAngle = (2 * Math.PI) / Math.max(externalNeighbors.length, 1);
     const orbitR = CONTAINER_RADIUS + 90;
@@ -215,7 +234,7 @@ export default function DissectionView({
       nodes.push({
         id: n.id,
         name: n.name,
-        disclosure: joinDisclosures(n.disclosures),
+        disclosure: n.disclosure,
         isFocal: false,
         isInternal: false,
         degree: n.degree,
@@ -227,57 +246,28 @@ export default function DissectionView({
     // 4. Build links
     const links: SimLink[] = [];
 
-    // Add internal links (composition relations), type-aware
-    focalConcept.variations.forEach((v) => {
-      const members = v.members;
-      if (!members || members.length === 0) return;
-
+    // Add internal links ONLY for CHAIN (directed flow between consecutive steps)
+    // AND / OR do NOT draw pairwise criss-cross links to avoid visual clutter.
+    const members = focalConcept.members;
+    if (members && members.length > 0 && focalConcept.activation_type === "CHAIN") {
       const sorted = [...members].sort((a, b) => a.order_index - b.order_index);
-
-      if (v.type === "CHAIN") {
-        // CHAIN: directed arrows between consecutive members
-        for (let i = 0; i < sorted.length - 1; i++) {
-          links.push({
-            source: sorted[i].concept_id,
-            target: sorted[i + 1].concept_id,
-            status: v.status ?? "hypothesis",
-            kind: "internal-directed",
-            short_code: v.short_code,
-          });
-        }
-      } else if (v.type === "AND") {
-        // AND: undirected joint links between all pairs
-        for (let i = 0; i < sorted.length; i++) {
-          for (let j = i + 1; j < sorted.length; j++) {
-            links.push({
-              source: sorted[i].concept_id,
-              target: sorted[j].concept_id,
-              status: v.status ?? "hypothesis",
-              kind: "internal-joint",
-              short_code: v.short_code,
-            });
-          }
-        }
-      } else if (v.type === "OR") {
-        // OR: alternatives — connected by a distinct visual dotted/dashed link
-        // so they are grouped together in force simulation but styled as alternative options.
-        for (let i = 0; i < sorted.length; i++) {
-          for (let j = i + 1; j < sorted.length; j++) {
-            links.push({
-              source: sorted[i].concept_id,
-              target: sorted[j].concept_id,
-              status: v.status ?? "hypothesis",
-              kind: "internal-or-joint",
-              short_code: v.short_code,
-            });
-          }
-        }
+      const status = focalConcept.is_active ? "active" : "inactive";
+      for (let i = 0; i < sorted.length - 1; i++) {
+        links.push({
+          source: sorted[i].concept_id,
+          target: sorted[i + 1].concept_id,
+          status: status,
+          kind: "internal-directed",
+        });
       }
-    });
+    }
 
     // Add external links (connecting external neighbors to focal concept)
+    // Defensive check: ignore any links connecting internal nodes directly to focal boundary
     data.internal_links.forEach((l) => {
-      // Add links involving the focal concept
+      if (internalNodeIds.has(l.source) || internalNodeIds.has(l.target)) {
+        return;
+      }
       if (l.target === focalConcept.id && l.source !== focalConcept.id) {
         links.push({
           source: l.source,
@@ -646,9 +636,7 @@ export default function DissectionView({
                 textEl.setAttribute("y", String(labelY));
                 if (rectEl) {
                   const labelText = isInternal
-                    ? link.kind === "internal-or-joint"
-                      ? `${link.short_code} (OR)`
-                      : (link.short_code || "")
+                    ? (link.short_code || "")
                     : (link.relation_name || "");
                   const textLen = estimateStringWidth(labelText, 10) + 12;
                   const rectH = 18;
@@ -833,6 +821,7 @@ export default function DissectionView({
   }
 
   const focal = data.focal;
+  const internalMembersList = getInternalMembers(focal);
   const cx = dimensions.width / 2;
   const cy = dimensions.height / 2;
 
@@ -912,66 +901,54 @@ export default function DissectionView({
           {simLinks.map((link, i) => {
             const isInternal = link.kind.startsWith("internal");
             const isNegated = link.status === "negated";
-                const hasLabel = (isInternal && link.short_code) || (!isInternal && link.relation_name);
-                return (
-                  <g key={i}>
-                    <line
-                      stroke={statusColor(link.status)}
-                      strokeWidth={isInternal ? 1.5 : 1.5}
-                      strokeOpacity={isInternal ? 0.6 : 0.6}
-                      strokeDasharray={
-                        link.kind === "internal-or-joint"
-                          ? "2 6"
-                          : link.status === "hypothesis"
-                          ? "4 4"
-                          : undefined
+            const hasLabel = (isInternal && link.short_code) || (!isInternal && link.relation_name);
+            return (
+              <g key={i}>
+                <line
+                  stroke={statusColor(link.status)}
+                  strokeWidth={isInternal ? 1.8 : 1.5}
+                  strokeOpacity={isInternal ? 0.8 : 0.6}
+                  strokeDasharray={
+                    link.status === "hypothesis"
+                      ? "4 4"
+                      : undefined
+                  }
+                  markerEnd={
+                    link.kind === "directed" || link.kind === "internal-directed"
+                      ? `url(#arrowhead-${["confirmed", "hypothesis", "negated"].includes(link.status ?? "") ? link.status : "default"})`
+                      : undefined
+                  }
+                />
+                {hasLabel && (
+                  <g
+                    className={`link-label-group ${!isInternal ? "clickable" : ""}`}
+                    onClick={(e) => {
+                      if (!isInternal && link.relation_id) {
+                        e.stopPropagation();
+                        onNavigate(link.relation_id);
                       }
-                      markerEnd={
-                        link.kind !== "internal-joint" && link.kind !== "internal-or-joint"
-                          ? `url(#arrowhead-${link.status || "default"})`
-                          : undefined
+                    }}
+                    onMouseEnter={() => {
+                      if (!isInternal && link.relation_id) {
+                        onInspect(link.relation_id);
                       }
-                    />
-                    {hasLabel && (
-                      <g
-                        className={`link-label-group ${!isInternal ? "clickable" : ""}`}
-                        onClick={(e) => {
-                          if (!isInternal && link.relation_id) {
-                            e.stopPropagation();
-                            onNavigate(link.relation_id);
-                          }
-                        }}
-                        onMouseEnter={() => {
-                          if (!isInternal && link.relation_id) {
-                            onInspect(link.relation_id);
-                          }
-                        }}
-                      >
-                        <rect className="link-label-bg" style={!isInternal ? { opacity: 0.92 } : undefined} />
-                        <text
-                          className="link-label"
-                          fill={
-                            isInternal
-                              ? link.kind === "internal-or-joint"
-                                ? "var(--accent-purple)"
-                                : "var(--accent-blue)"
-                              : "var(--text-secondary)"
-                          }
-                          fontSize="10px"
-                          fontFamily={isInternal ? "var(--font-mono)" : "var(--font-sans)"}
-                          fontWeight={isInternal ? "600" : "500"}
-                          textAnchor="middle"
-                          dominantBaseline="middle"
-                          opacity={0.9}
-                        >
-                          {isInternal
-                            ? link.kind === "internal-or-joint"
-                              ? `${link.short_code} (OR)`
-                              : link.short_code
-                            : link.relation_name}
-                        </text>
-                      </g>
-                    )}
+                    }}
+                  >
+                    <rect className="link-label-bg" style={!isInternal ? { opacity: 0.92 } : undefined} />
+                    <text
+                      className="link-label"
+                      fill={isInternal ? "var(--accent-blue)" : "var(--text-secondary)"}
+                      fontSize="10px"
+                      fontFamily={isInternal ? "var(--font-mono)" : "var(--font-sans)"}
+                      fontWeight={isInternal ? "600" : "500"}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      opacity={0.9}
+                    >
+                      {isInternal ? link.short_code : link.relation_name}
+                    </text>
+                  </g>
+                )}
                 {isNegated && (
                   <g className="negated-badge">
                     <circle r="8" className="negated-badge-circle" />
@@ -985,7 +962,7 @@ export default function DissectionView({
 
         {/* Circular Geofence Container */}
         <div
-          className="geofence-circle"
+          className={`geofence-circle ${focal.activation_type ? `mode-${focal.activation_type.toLowerCase()}` : ""}`}
           style={{
             position: "absolute",
             left: cx,
@@ -994,15 +971,12 @@ export default function DissectionView({
             height: CONTAINER_RADIUS * 2,
             transform: "translate(-50%, -50%)",
             borderRadius: "50%",
-            border: "2px dashed rgba(74, 158, 255, 0.25)",
-            background: "radial-gradient(circle, rgba(74, 158, 255, 0.03) 0%, rgba(0, 0, 0, 0.2) 100%)",
-            boxShadow: "inset 0 0 40px rgba(74, 158, 255, 0.05), 0 0 30px rgba(74, 158, 255, 0.02)",
             pointerEvents: "none",
             zIndex: 1,
           }}
         >
           <div
-            className="geofence-title"
+            className="geofence-header"
             onClick={(e) => {
               e.stopPropagation();
               onInspect(focal.id);
@@ -1013,7 +987,37 @@ export default function DissectionView({
               cursor: "pointer",
             }}
           >
-            {focal.name}
+            <div className="geofence-title">{focal.name}</div>
+            <div className="geofence-sub-badges">
+              {focal.activation_type && (
+                <span className={`geofence-badge mode-${focal.activation_type.toLowerCase()}`}>
+                  {focal.activation_type === "CHAIN" && "➔ CHAIN"}
+                  {focal.activation_type === "AND" && "⯌ AND (ALL)"}
+                  {focal.activation_type === "OR" && "⯎ OR (ANY)"}
+                </span>
+              )}
+              <span className={`geofence-badge status-${focal.is_active ? "active" : "inactive"}`}>
+                {focal.is_active ? "ACTIVE" : "INACTIVE"}
+              </span>
+              {focal.byte_size !== undefined && focal.byte_size > 0 && (
+                <span
+                  className="geofence-badge"
+                  style={
+                    focal.byte_size >= 4800
+                      ? { color: "#f87171", borderColor: "rgba(239, 68, 68, 0.4)", background: "rgba(239, 68, 68, 0.15)" }
+                      : { color: "#94a3b8", borderColor: "rgba(255, 255, 255, 0.12)", background: "rgba(255, 255, 255, 0.04)" }
+                  }
+                  title={`正文大小: ${formatBytes(focal.byte_size)}`}
+                >
+                  {focal.byte_size >= 4800 ? `⚠ ${formatBytes(focal.byte_size)}` : formatBytes(focal.byte_size)}
+                </span>
+              )}
+              {internalMembersList.length > 0 && (
+                <span className="geofence-badge members-count">
+                  {internalMembersList.length} MEMBERS
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

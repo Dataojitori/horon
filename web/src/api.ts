@@ -1,9 +1,9 @@
-import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult } from "./types";
+import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult, ConceptReviewItem } from "./types";
 
 const BASE = "/api";
 
-async function fetchJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(url, options);
   if (!res.ok) {
     const detail = await res.text();
     throw new Error(`API ${res.status}: ${detail}`);
@@ -22,4 +22,17 @@ export const api = {
 
   searchConcepts: (q: string) =>
     fetchJSON<ConceptSearchResult[]>(`${BASE}/concepts/search?q=${encodeURIComponent(q)}`),
+
+  getReviews: () =>
+    fetchJSON<ConceptReviewItem[]>(`${BASE}/reviews`),
+
+  approveReview: (conceptId: number) =>
+    fetchJSON<{ message: string; concept_id: number }>(`${BASE}/reviews/${conceptId}/approve`, {
+      method: "POST",
+    }),
+
+  rollbackReview: (conceptId: number) =>
+    fetchJSON<{ message: string; concept_id: number }>(`${BASE}/reviews/${conceptId}/rollback`, {
+      method: "POST",
+    }),
 };

@@ -5,6 +5,7 @@ import GalaxyView from "./components/GalaxyView";
 import DissectionView from "./components/DissectionView";
 import InspectorSidebar from "./components/InspectorSidebar";
 import SearchBar from "./components/SearchBar";
+import ReviewView from "./components/ReviewView";
 import "./App.css";
 
 export default function App() {
@@ -14,15 +15,31 @@ export default function App() {
   const [inspectedConcept, setInspectedConcept] =
     useState<ConceptDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [pendingReviewCount, setPendingReviewCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const reloadGraph = useCallback(() => {
     api
       .getGraph()
       .then(setGraphData)
+      .catch((e) => setError(e.message));
+
+    api
+      .getReviews()
+      .then((items) => setPendingReviewCount(items.length))
+      .catch((e) => console.error("Failed to fetch review count", e));
+  }, []);
+
+  useEffect(() => {
+    api.getGraph()
+      .then(setGraphData)
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
+
+    api.getReviews()
+      .then((items) => setPendingReviewCount(items.length))
+      .catch((e) => console.error("Failed to fetch review count", e));
   }, []);
 
   const inspectRequestId = useRef(0);
@@ -45,15 +62,11 @@ export default function App() {
 
   const handleNodeClick = useCallback(
     (nodeId: number) => {
-      if (mode === "galaxy") {
-        setFocalId(nodeId);
-        setMode("dissection");
-      } else {
-        setFocalId(nodeId);
-      }
+      setFocalId(nodeId);
+      setMode("dissection");
       inspectNode(nodeId);
     },
-    [mode, inspectNode],
+    [inspectNode],
   );
 
   const handleBackToGalaxy = useCallback(() => {
@@ -121,6 +134,18 @@ export default function App() {
             >
               Dissect
             </button>
+            <button
+              className={`mode-btn ${mode === "review" ? "active" : ""}`}
+              onClick={() => {
+                setMode("review");
+                setFocalId(null);
+              }}
+            >
+              Review
+              {pendingReviewCount > 0 && (
+                <span className="mode-btn-badge">{pendingReviewCount}</span>
+              )}
+            </button>
           </div>
         </div>
         <div className="topbar-center">
@@ -152,12 +177,23 @@ export default function App() {
             onBack={handleBackToGalaxy}
           />
         )}
+        {mode === "review" && (
+          <ReviewView
+            onRefreshGraph={reloadGraph}
+            onNavigateToNode={(nodeId) => {
+              setFocalId(nodeId);
+              setMode("dissection");
+              inspectNode(nodeId);
+            }}
+          />
+        )}
       </main>
 
       <InspectorSidebar
         concept={inspectedConcept}
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onNavigate={handleNodeClick}
       />
     </div>
   );

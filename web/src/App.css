@@ -82,6 +82,26 @@
   color: #fff;
 }
 
+.mode-btn-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  background: var(--accent-amber);
+  color: #12121a;
+  border-radius: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.mode-btn.active .mode-btn-badge {
+  background: #fff;
+  color: var(--accent-blue);
+}
+
 .stat {
   font-size: 11px;
   color: var(--text-dim);
