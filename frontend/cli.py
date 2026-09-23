@@ -20,7 +20,10 @@ from dotenv import load_dotenv
 from backend.db import HoronDB
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
+    MAX_SPANS,
+    find_patch_spans,
     normalize_literal_newlines,
+    preview,
     try_normalized_patch,
 )
 
@@ -285,16 +288,23 @@ def _read_file(path):
 
 
 def _resolve_text(old, old_file, new, new_file,
-                  append, append_file, field_name, current_value):
+                  append, append_file, field_name, current_value,
+                  notices=None):
     """
     Resolve a text field from one of three modes:
       1. Patch mode:   --old "x" --new "y"  (with -file variants)
+                       --old may use "..." to elide a long middle:
+                       "Start of para...end of para." replaces the whole
+                       span from the first marker to the end marker.
+                       Must resolve to exactly one span. On success a
+                       "[Matched N chars]: ..." line is appended to
+                       *notices* (if given) so the caller can echo it.
       2. Append mode:  --append "text"  or  --append-file path
                        On an empty field this IS the initial write.
       3. None:         field not touched
 
-    There is no full-replace mode. To rewrite entirely, patch with the
-    full current text as old — which forces you to have actually read it.
+    There is no full-replace mode; to rewrite entirely, patch with
+    "<start of field>...<end of field>" as old.
 
     Returns the resolved string, or None if not provided.
     Raises ValueError on conflicts or patch failures.
@@ -339,28 +349,23 @@ def _resolve_text(old, old_file, new, new_file,
             raise ValueError(
                 f"Cannot patch {field_name}: no existing {field_name}")
 
-        # 1. Exact match
-        count = current_value.count(old)
-        if count == 1:
-            return current_value.replace(old, new, 1)
-        if count > 1:
+        # 1+2. Exact (raw / literal-\n), then "start...end" block match.
+        spans, via_normalized = find_patch_spans(current_value, old)
+        if len(spans) > 1:
+            shown = "\n".join(
+                f"  {s}-{e}: {preview(current_value[s:e])}"
+                for s, e in spans[:MAX_SPANS])
             raise ValueError(
-                f"--old matched {count} times in {field_name}. "
-                f"Provide more context to make it unique")
-
-        # 2. Literal \n normalization (AI sends "\\n" instead of real newlines)
-        if "\\n" in old:
-            norm_old = normalize_literal_newlines(old)
-            if norm_old != old:
-                norm_count = current_value.count(norm_old)
-                if norm_count == 1:
-                    norm_new = normalize_literal_newlines(new) if "\\n" in new else new
-                    return current_value.replace(norm_old, norm_new, 1)
-                if norm_count > 1:
-                    raise ValueError(
-                        f"--old matched {norm_count} times in {field_name} "
-                        f"(after newline normalization). "
-                        f"Provide more context to make it unique")
+                f"--old matched {len(spans)} spans in {field_name}. "
+                f"Provide more context to make it unique:\n{shown}")
+        if spans:
+            s, e = spans[0]
+            if via_normalized:
+                new = normalize_literal_newlines(new)
+            if notices is not None:
+                notices.append(
+                    f"[Matched {e - s} chars]: {preview(current_value[s:e])}")
+            return current_value[:s] + new + current_value[e:]
 
         # 3. Unicode normalization (curly quotes, dash variants, whitespace)
         patched = try_normalized_patch(current_value, old, new)
@@ -714,6 +719,7 @@ def _dispatch(args, db):
     elif args.command == "update":
         # 使用 DB 提供的 helper 获取当前值，避免在 CLI 层重复查询
         _, _, current_value = db.get_concept_field(args.node, args.field)
+        notices = []
         resolved = _resolve_text(
             old=args.old,
             old_file=args.old_file,
@@ -723,11 +729,15 @@ def _dispatch(args, db):
             append_file=args.append_file,
             field_name=args.field,
             current_value=current_value,
+            notices=notices,
         )
         if resolved is None:
             raise ValueError(
                 "Provide --old/--new (patch) or --append.")
-        return db.update(args.node, args.field, resolved)
+        result = db.update(args.node, args.field, resolved)
+        if notices:
+            result.message += "\n" + "\n".join(notices)
+        return result
 
     elif args.command == "read_concept":
         result = db.read_concept(args.concept)

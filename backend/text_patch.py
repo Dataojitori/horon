@@ -246,6 +246,69 @@ def try_normalized_patch(
     return content[:orig_start] + new_string + content[orig_end:]
 
 
+BLOCK_SEPARATOR = "..."
+MAX_SPANS = 5
+
+
+def find_patch_spans(
+    content: str, old_string: str
+) -> Tuple[List[Tuple[int, int]], bool]:
+    """Find where *old_string* matches in *content*.
+
+    Input: current field text, and the --old text (may contain literal
+    ``\\n`` and/or ``...`` to elide a middle section).
+    Behavior: exact match first (raw, then literal-``\\n`` normalized). Only
+    if neither hits is ``...`` treated as a block: text before the first
+    ``...`` is the start, text after the last ``...`` is the end, and every
+    start->later-end pair is a span. Exact-first means prose that really
+    contains "..." is not turned ambiguous by block matching.
+    Output: (sorted unique spans, capped a bit past MAX_SPANS;
+    via_normalized — True if the hit needed ``\\n`` normalization, so the
+    caller should normalize new_string too).
+    """
+    variants = [(old_string, False)]
+    norm = normalize_literal_newlines(old_string)
+    if norm != old_string:
+        variants.append((norm, True))
+
+    for text, via_norm in variants:
+        spans = []
+        pos = content.find(text)
+        while pos != -1:
+            spans.append((pos, pos + len(text)))
+            pos = content.find(text, pos + 1)
+        if spans:
+            return spans, via_norm
+
+    for text, via_norm in variants:
+        if BLOCK_SEPARATOR not in text:
+            continue
+        start = text[: text.find(BLOCK_SEPARATOR)]
+        end = text[text.rfind(BLOCK_SEPARATOR) + len(BLOCK_SEPARATOR):]
+        if not start or not end:
+            continue
+        spans = []
+        s_pos = content.find(start)
+        while s_pos != -1 and len(spans) <= MAX_SPANS:
+            e_pos = content.find(end, s_pos + len(start))
+            while e_pos != -1 and len(spans) <= MAX_SPANS:
+                spans.append((s_pos, e_pos + len(end)))
+                e_pos = content.find(end, e_pos + 1)
+            s_pos = content.find(start, s_pos + 1)
+        if spans:
+            return spans, via_norm
+
+    return [], False
+
+
+def preview(text: str, limit: int = 80) -> str:
+    """Shorten *text* to about *limit* chars as 'head...tail' for messages."""
+    if len(text) > limit:
+        half = limit // 2
+        text = text[:half] + " ... " + text[-(limit - half - 3):]
+    return repr(text)
+
+
 UNESCAPED_NEWLINE_RE = re.compile(r"(?<!\\)\\n")
 
 
