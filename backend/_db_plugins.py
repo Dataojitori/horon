@@ -1,11 +1,17 @@
 """Plugin infrastructure mixin for HoronDB."""
 from __future__ import annotations
 
+from typing import Any, Callable
+
 from . import tag_sandbox
 from .tag_sandbox import (
-    load_plugin, TagPluginError, HookRejection,
-    MutationContext, AuditContext,
-    ConceptProxy, VariationProxy, ClusterProxy,
+    AuditContext,
+    ClusterProxy,
+    ConceptProxy,
+    HookRejection,
+    MutationContext,
+    TagPluginError,
+    load_plugin,
 )
 
 
@@ -40,22 +46,31 @@ class PluginMixin:
         return plugin
 
     def _make_concept_proxy(self, concept_id: int) -> ConceptProxy:
-        """Factory: build a ConceptProxy with fetcher closures capturing self.conn."""
+        """Factory: build a lazy ConceptProxy for `concept_id`.
+
+        Input: a concept id (may not exist).
+        Behavior: scalar fields (name/content/role/...) come from ONE
+        `SELECT * FROM concepts` row, fetched on first access and shared by
+        all scalar fetchers; tags / inputs / downstream are separate queries.
+        Output: ConceptProxy. For a missing id, scalars fall back to the
+        proxy defaults ("" name, "plain" role, 0 is_active, None otherwise)
+        and list fields are empty.
+        """
         conn = self.conn
+        _row_cache: dict[str, Any] = {}
 
-        def fetch_name():
-            row = conn.execute(
-                "SELECT name FROM concepts WHERE id=?", (concept_id,)
-            ).fetchone()
-            return row["name"] if row else ""
+        def row():
+            if "row" not in _row_cache:
+                _row_cache["row"] = conn.execute(
+                    "SELECT * FROM concepts WHERE id=?", (concept_id,)
+                ).fetchone()
+            return _row_cache["row"]
 
-        def fetch_disclosures():
-            rows = conn.execute(
-                "SELECT text FROM disclosures "
-                "WHERE concept_id=? ORDER BY id",
-                (concept_id,)
-            ).fetchall()
-            return [r["text"] for r in rows]
+        def field(col: str, default: Any) -> Callable[[], Any]:
+            def fetch():
+                r = row()
+                return r[col] if r else default
+            return fetch
 
         def fetch_tags():
             rows = conn.execute(
@@ -64,86 +79,37 @@ class PluginMixin:
             ).fetchall()
             return [r["tag"] for r in rows]
 
-        def fetch_variations():
-            rows = conn.execute(
-                "SELECT concept_id, short_code FROM variations "
-                "WHERE concept_id=? ORDER BY short_code",
-                (concept_id,)
-            ).fetchall()
-            return [self._make_variation_proxy(r["concept_id"], r["short_code"]) for r in rows]
-
-        def fetch_used_in_variations():
-            rows = conn.execute(
-                "SELECT DISTINCT cm.concept_id, cm.short_code "
-                "FROM compose_members cm "
-                "WHERE cm.member_concept_id=? AND cm.concept_id != ?",
-                (concept_id, concept_id)
-            ).fetchall()
-            return [self._make_variation_proxy(r["concept_id"], r["short_code"]) for r in rows]
-
-        return ConceptProxy(
-            concept_id,
-            fetch_name=fetch_name,
-            fetch_disclosures=fetch_disclosures,
-            fetch_tags=fetch_tags,
-            fetch_variations=fetch_variations,
-            fetch_used_in_variations=fetch_used_in_variations,
-        )
-
-    def _make_variation_proxy(self, concept_id: int, short_code: str) -> VariationProxy:
-        """Factory: build a VariationProxy with fetcher closures."""
-        conn = self.conn
-
-        def fetch_concept_name():
-            row = conn.execute(
-                "SELECT name FROM concepts WHERE id=?", (concept_id,)
-            ).fetchone()
-            return row["name"] if row else ""
-
-        def fetch_type():
-            row = conn.execute(
-                "SELECT type FROM variations WHERE concept_id=? AND short_code=?",
-                (concept_id, short_code)
-            ).fetchone()
-            return row["type"] if row else None
-
-        def fetch_status():
-            row = conn.execute(
-                "SELECT status FROM variations WHERE concept_id=? AND short_code=?",
-                (concept_id, short_code)
-            ).fetchone()
-            return row["status"] if row else None
-
-        def fetch_content():
-            row = conn.execute(
-                "SELECT content FROM variations WHERE concept_id=? AND short_code=?",
-                (concept_id, short_code)
-            ).fetchone()
-            return row["content"] if row else None
-
-        def fetch_valence():
-            row = conn.execute(
-                "SELECT valence FROM variations WHERE concept_id=? AND short_code=?",
-                (concept_id, short_code)
-            ).fetchone()
-            return row["valence"] if row else None
-
-        def fetch_members():
+        def fetch_inputs():
+            # Duplicates kept on purpose: CHAIN order and revisits (A -> B -> A) are meaningful.
             rows = conn.execute(
                 "SELECT member_concept_id FROM compose_members "
-                "WHERE concept_id=? AND short_code=? ORDER BY order_index",
-                (concept_id, short_code)
+                "WHERE parent_concept_id=? ORDER BY order_index",
+                (concept_id,)
             ).fetchall()
             return [self._make_concept_proxy(r["member_concept_id"]) for r in rows]
 
-        return VariationProxy(
-            concept_id, short_code,
-            fetch_concept_name=fetch_concept_name,
-            fetch_type=fetch_type,
-            fetch_status=fetch_status,
-            fetch_content=fetch_content,
-            fetch_valence=fetch_valence,
-            fetch_members=fetch_members,
+        def fetch_downstream():
+            # DISTINCT: a CHAIN may list this concept at several order_index slots.
+            rows = conn.execute(
+                "SELECT DISTINCT parent_concept_id FROM compose_members "
+                "WHERE member_concept_id=? ORDER BY parent_concept_id",
+                (concept_id,)
+            ).fetchall()
+            return [self._make_concept_proxy(r["parent_concept_id"]) for r in rows]
+
+        return ConceptProxy(
+            concept_id,
+            fetch_name=field("name", ""),
+            fetch_content=field("content", None),
+            fetch_role=field("role", "plain"),
+            fetch_is_active=field("is_active", 0),
+            fetch_lifespan=field("lifespan", None),
+            fetch_activation_type=field("activation_type", None),
+            fetch_on_fire=field("on_fire", None),
+            fetch_disclosure=field("disclosure", None),
+            fetch_tags=fetch_tags,
+            fetch_inputs=fetch_inputs,
+            fetch_downstream=fetch_downstream,
         )
 
     def _make_cluster_proxy(self, tag_name: str) -> ClusterProxy:
@@ -167,12 +133,14 @@ class PluginMixin:
         return ClusterProxy(fetch_concepts=fetch_concepts, fetch_count=fetch_count)
 
     def _run_mutation_hook_for_tag(self, concept_id: int, tag: str,
-                                   changed: dict | None = None) -> list[str]:
+                                   changed: dict | None = None,
+                                   proxy: ConceptProxy | None = None) -> list[str]:
         """Run on_mutation for a specific tag on a concept."""
         plugin = self._get_plugin(tag)
         if plugin is None:
             return []
-        proxy = self._make_concept_proxy(concept_id)
+        if proxy is None:
+            proxy = self._make_concept_proxy(concept_id)
         ctx = MutationContext(tag, proxy, changed, get_concept=self._make_concept_proxy)
         try:
             plugin["on_mutation"](ctx)

@@ -173,18 +173,34 @@ def load_plugin(tag_name: str) -> dict | None:
 class ConceptProxy:
     """Lazy, read-only proxy for a concept. No sqlite3.Connection stored."""
 
-    def __init__(self, concept_id: int, *,
-                 fetch_name: Callable[[], str],
-                 fetch_disclosures: Callable[[], list[str]] | None = None,
-                 fetch_tags: Callable[[], list[str]],
-                 fetch_variations: Callable[[], list],
-                 fetch_used_in_variations: Callable[[], list]):
+    def __init__(
+        self,
+        concept_id: int,
+        *,
+        fetch_name: Callable[[], str],
+        fetch_content: Callable[[], str | None] | None = None,
+        fetch_role: Callable[[], str] | None = None,
+        fetch_is_active: Callable[[], int] | None = None,
+        fetch_lifespan: Callable[[], str | None] | None = None,
+        fetch_activation_type: Callable[[], str | None] | None = None,
+        fetch_on_fire: Callable[[], str | None] | None = None,
+        fetch_disclosure: Callable[[], str | None] | None = None,
+        fetch_tags: Callable[[], list[str]],
+        fetch_inputs: Callable[[], list[ConceptProxy]] | None = None,
+        fetch_downstream: Callable[[], list[ConceptProxy]] | None = None,
+    ):
         self.concept_id = concept_id
         self._fetch_name = fetch_name
-        self._fetch_disclosures = fetch_disclosures
+        self._fetch_content = fetch_content
+        self._fetch_role = fetch_role
+        self._fetch_is_active = fetch_is_active
+        self._fetch_lifespan = fetch_lifespan
+        self._fetch_activation_type = fetch_activation_type
+        self._fetch_on_fire = fetch_on_fire
+        self._fetch_disclosure = fetch_disclosure
         self._fetch_tags = fetch_tags
-        self._fetch_variations = fetch_variations
-        self._fetch_used_in_variations = fetch_used_in_variations
+        self._fetch_inputs = fetch_inputs
+        self._fetch_downstream = fetch_downstream
         self._cache: dict[str, Any] = {}
 
     @property
@@ -194,10 +210,46 @@ class ConceptProxy:
         return self._cache["name"]
 
     @property
-    def disclosures(self) -> list[str]:
-        if "disclosures" not in self._cache:
-            self._cache["disclosures"] = self._fetch_disclosures() if self._fetch_disclosures is not None else []
-        return self._cache["disclosures"]
+    def content(self) -> str | None:
+        if "content" not in self._cache:
+            self._cache["content"] = self._fetch_content() if self._fetch_content else None
+        return self._cache["content"]
+
+    @property
+    def role(self) -> str:
+        if "role" not in self._cache:
+            self._cache["role"] = self._fetch_role() if self._fetch_role else "plain"
+        return self._cache["role"]
+
+    @property
+    def is_active(self) -> int:
+        if "is_active" not in self._cache:
+            self._cache["is_active"] = self._fetch_is_active() if self._fetch_is_active else 0
+        return self._cache["is_active"]
+
+    @property
+    def lifespan(self) -> str | None:
+        if "lifespan" not in self._cache:
+            self._cache["lifespan"] = self._fetch_lifespan() if self._fetch_lifespan else None
+        return self._cache["lifespan"]
+
+    @property
+    def activation_type(self) -> str | None:
+        if "activation_type" not in self._cache:
+            self._cache["activation_type"] = self._fetch_activation_type() if self._fetch_activation_type else None
+        return self._cache["activation_type"]
+
+    @property
+    def on_fire(self) -> str | None:
+        if "on_fire" not in self._cache:
+            self._cache["on_fire"] = self._fetch_on_fire() if self._fetch_on_fire else None
+        return self._cache["on_fire"]
+
+    @property
+    def disclosure(self) -> str | None:
+        if "disclosure" not in self._cache:
+            self._cache["disclosure"] = self._fetch_disclosure() if self._fetch_disclosure else None
+        return self._cache["disclosure"]
 
     @property
     def tags(self) -> list[str]:
@@ -206,81 +258,29 @@ class ConceptProxy:
         return self._cache["tags"]
 
     @property
-    def variations(self) -> list[VariationProxy]:
-        if "variations" not in self._cache:
-            self._cache["variations"] = self._fetch_variations()
-        return self._cache["variations"]
+    def inputs(self) -> list[ConceptProxy]:
+        """上游输入引脚（激活规则依赖的前置概念列表）。"""
+        if "inputs" not in self._cache:
+            self._cache["inputs"] = self._fetch_inputs() if self._fetch_inputs else []
+        return self._cache["inputs"]
 
     @property
-    def used_in_variations(self) -> list[VariationProxy]:
-        if "used_in_variations" not in self._cache:
-            self._cache["used_in_variations"] = self._fetch_used_in_variations()
-        return self._cache["used_in_variations"]
-
-
-class VariationProxy:
-    """Lazy, read-only proxy for a variation. No sqlite3.Connection stored."""
-
-    def __init__(self, concept_id: int, short_code: str, *,
-                 fetch_concept_name: Callable[[], str],
-                 fetch_type: Callable[[], str | None],
-                 fetch_status: Callable[[], str | None],
-                 fetch_content: Callable[[], str | None],
-                 fetch_valence: Callable[[], float | None],
-                 fetch_members: Callable[[], list]):
-        self.concept_id = concept_id
-        self.short_code = short_code
-        self._fetch_concept_name = fetch_concept_name
-        self._fetch_type = fetch_type
-        self._fetch_status = fetch_status
-        self._fetch_content = fetch_content
-        self._fetch_valence = fetch_valence
-        self._fetch_members = fetch_members
-        self._cache: dict[str, Any] = {}
-
-    @property
-    def concept_name(self) -> str:
-        if "concept_name" not in self._cache:
-            self._cache["concept_name"] = self._fetch_concept_name()
-        return self._cache["concept_name"]
-
-    @property
-    def type(self) -> str | None:
-        if "type" not in self._cache:
-            self._cache["type"] = self._fetch_type()
-        return self._cache["type"]
-
-    @property
-    def status(self) -> str | None:
-        if "status" not in self._cache:
-            self._cache["status"] = self._fetch_status()
-        return self._cache["status"]
-
-    @property
-    def content(self) -> str | None:
-        if "content" not in self._cache:
-            self._cache["content"] = self._fetch_content()
-        return self._cache["content"]
-
-    @property
-    def valence(self) -> float | None:
-        if "valence" not in self._cache:
-            self._cache["valence"] = self._fetch_valence()
-        return self._cache["valence"]
-
-    @property
-    def members(self) -> list[ConceptProxy]:
-        if "members" not in self._cache:
-            self._cache["members"] = self._fetch_members()
-        return self._cache["members"]
+    def downstream(self) -> list[ConceptProxy]:
+        """下游汇聚节点（将本概念作为输入前置引用的下游逻辑/守卫列表）。"""
+        if "downstream" not in self._cache:
+            self._cache["downstream"] = self._fetch_downstream() if self._fetch_downstream else []
+        return self._cache["downstream"]
 
 
 class ClusterProxy:
     """Lazy proxy for all concepts carrying a given tag."""
 
-    def __init__(self, *,
-                 fetch_concepts: Callable[[], list[ConceptProxy]],
-                 fetch_count: Callable[[], int]):
+    def __init__(
+        self,
+        *,
+        fetch_concepts: Callable[[], list[ConceptProxy]],
+        fetch_count: Callable[[], int],
+    ):
         self._fetch_concepts = fetch_concepts
         self._fetch_count = fetch_count
         self._cache: dict[str, Any] = {}
@@ -303,9 +303,13 @@ class ClusterProxy:
 class MutationContext:
     """Context passed to on_mutation(ctx)."""
 
-    def __init__(self, tag_name: str, this_proxy: ConceptProxy,
-                 changed: dict | None,
-                 get_concept: Callable[[int], ConceptProxy] | None = None):
+    def __init__(
+        self,
+        tag_name: str,
+        this_proxy: ConceptProxy,
+        changed: dict | None,
+        get_concept: Callable[[int], ConceptProxy] | None = None,
+    ):
         self.tag_name = tag_name
         self.this = this_proxy
         self.changed = changed if changed is not None else {}
@@ -326,14 +330,19 @@ class MutationContext:
     def warn(self, msg: str) -> None:
         raise RuntimeError(
             "warn() is not available in on_mutation context. "
-            "Use reject() to block or info() to advise.")
+            "Use reject() to block or info() to advise."
+        )
 
 
 class AuditContext:
     """Context passed to audit_cluster(ctx)."""
 
-    def __init__(self, tag_name: str, cluster_proxy: ClusterProxy,
-                 get_concept: Callable[[int], ConceptProxy] | None = None):
+    def __init__(
+        self,
+        tag_name: str,
+        cluster_proxy: ClusterProxy,
+        get_concept: Callable[[int], ConceptProxy] | None = None,
+    ):
         self.tag_name = tag_name
         self.cluster = cluster_proxy
         self._get_concept = get_concept
@@ -350,9 +359,11 @@ class AuditContext:
     def reject(self, msg: str) -> None:
         raise RuntimeError(
             "reject() is not available in audit_cluster context. "
-            "Use warn() to report issues.")
+            "Use warn() to report issues."
+        )
 
     def info(self, msg: str) -> None:
         raise RuntimeError(
             "info() is not available in audit_cluster context. "
-            "Use warn() to report issues.")
+            "Use warn() to report issues."
+        )
