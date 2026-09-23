@@ -26,7 +26,7 @@ class ReminderMixin:
 
         _validate_condition_ast(condition)
 
-        cid, _ = self._resolve_id(concept)
+        cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         now = _now()
         cursor = self.conn.execute(
@@ -83,9 +83,9 @@ class ReminderMixin:
             name_or_expr = name_or_expr.strip()
             if any(op in name_or_expr for op in ("\u2192", "&", "|")):
                 try:
-                    vtype, member_ids = self._parse_expression(
-                        name_or_expr, allow_single=False)
-                    return self._find_composition_variation(
+                    vtype, member_ids = self._parse_activation_rule(
+                        name_or_expr)
+                    return self._find_composition_concept(
                         vtype, member_ids) is not None
                 except ValueError:
                     return False
@@ -96,39 +96,39 @@ class ReminderMixin:
                 return False
 
         def _status(name_or_expr: str) -> str | None:
+            """Returns "active" / "inactive" based on concepts.is_active.
+            NOTE: v3 semantic break from v2's "confirmed"/"hypothesis"/"negated".
+            No existing reminders in the database use status() as of the v3 migration,
+            so no data compatibility issue. New conditions should use status("X") == "active".
+            """
             name_or_expr = name_or_expr.strip()
             if any(op in name_or_expr for op in ("\u2192", "&", "|")):
                 try:
-                    vtype, member_ids = self._parse_expression(
-                        name_or_expr, allow_single=False)
-                    result = self._find_composition_variation(
+                    vtype, member_ids = self._parse_activation_rule(
+                        name_or_expr)
+                    cid = self._find_composition_concept(
                         vtype, member_ids)
-                    if result is None:
+                    if cid is None:
                         return None
-                    return result[2] or "hypothesis"
                 except ValueError:
                     return None
-            try:
-                cid, _ = self._resolve_id(name_or_expr)
-            except ValueError:
-                return None
-            rows = self.conn.execute(
-                "SELECT status FROM variations WHERE concept_id = ?",
+            else:
+                try:
+                    cid = self._resolve_id(name_or_expr)
+                except ValueError:
+                    return None
+            row = self.conn.execute(
+                "SELECT is_active FROM concepts WHERE id = ?",
                 (cid,),
-            ).fetchall()
-            if not rows:
+            ).fetchone()
+            if not row:
                 return None
-            statuses = {r["status"] or "hypothesis" for r in rows}
-            if "confirmed" in statuses:
-                return "confirmed"
-            if "hypothesis" in statuses:
-                return "hypothesis"
-            return "negated"
+            return "active" if row["is_active"] else "inactive"
 
         def _tags(concept_name: str) -> set:
             concept_name = concept_name.strip()
             try:
-                cid, _ = self._resolve_id(concept_name)
+                cid = self._resolve_id(concept_name)
             except ValueError:
                 return set()
             rows = self.conn.execute(
