@@ -150,22 +150,34 @@ class QueryMixin:
         ORDER BY concept_id
         """
 
+        rows = self.conn.execute(
+            sql, tag_params + [like, like, like, like]).fetchall()
+
+        # Rank each concept by its best-matching field, then cut to limit.
+        # Lower is better: name/alias equal < starts with < contains
+        # < disclosure < content. Ties: more total occurrences of the query
+        # (case-insensitive, across all matched fields) first, then id.
+        q_lower = query.lower()
+
+        def field_rank(field: str, text: str) -> int:
+            if field in ("name", "alias"):
+                t = text.lower()
+                return 0 if t == q_lower else 1 if t.startswith(q_lower) else 2
+            return 3 if field == "disclosure" else 4
+
+        best: dict[int, int] = {}
+        hits: dict[int, int] = {}
+        for r in rows:
+            rank = field_rank(r["field"], r["text"])
+            cid = r["concept_id"]
+            if rank < best.get(cid, 99):
+                best[cid] = rank
+            hits[cid] = hits.get(cid, 0) + r["text"].lower().count(q_lower)
+        order = sorted(best, key=lambda cid: (best[cid], -hits[cid], cid))
         if limit is not None and limit > 0:
-            sql = f"""
-            WITH raw AS ({sql.strip()}),
-            top_concepts AS (
-                SELECT DISTINCT concept_id FROM raw ORDER BY concept_id LIMIT ?
-            )
-            SELECT raw.* FROM raw
-            JOIN top_concepts tc ON raw.concept_id = tc.concept_id
-            ORDER BY raw.concept_id
-            """
-            sql_params = tag_params + [like, like, like, like, limit]
-        else:
-            sql_params = tag_params + [like, like, like, like]
+            order = order[:limit]
 
-        rows = self.conn.execute(sql, sql_params).fetchall()
-
+        kept = set(order)
         results_by_cid: dict[int, ConceptSearchResult] = {}
         for r in rows:
             cid = r["concept_id"]
@@ -174,9 +186,9 @@ class QueryMixin:
             target_id = r["target_id"]
             text = r["text"]
 
+            if cid not in kept:
+                continue
             if cid not in results_by_cid:
-                if limit is not None and limit > 0 and len(results_by_cid) >= limit:
-                    continue
                 results_by_cid[cid] = ConceptSearchResult(
                     concept_id=cid, concept_name=cname, matches=[]
                 )
@@ -190,7 +202,7 @@ class QueryMixin:
                 )
             )
 
-        return list(results_by_cid.values())
+        return [results_by_cid[cid] for cid in order]
 
     def get_all_concepts(self) -> list[Concept]:
         """获取所有 concept。"""
