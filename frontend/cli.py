@@ -49,13 +49,15 @@ def _format_compile(result: CompileResult) -> str:
             lines.append(
                 f"[⏳ 序列等待] 概念 '{target}' 进行至第 {cp.current_step}/{cp.total_steps} 步，等待: '{cp.waiting_for}'"
             )
-        elif result.missing_prerequisites:
-            missing_str = ", ".join(f"'{name}'" for name in result.missing_prerequisites)
-            lines.append(
-                f"[✗ 缺少前置] 概念 '{target}' 未就绪，缺少输入: {missing_str}"
-            )
         else:
-            lines.append(f"[✗ 未就绪] 概念 '{target}' 前置条件未满足。")
+            lines.append(f"[✗ 缺少前置] 概念 '{target}' 未就绪。")
+        if result.active_inhibitors:
+            inh_str = ", ".join(f"'{name}'" for name in result.active_inhibitors)
+            lines.append(f"  同时受活跃抑制源 ({inh_str}) 压制。")
+        if result.missing_prerequisites:
+            lines.append("  还需要（逐项都要做到）:")
+            for req in result.missing_prerequisites:
+                lines.append(f"    - {req}")
     else:
         lines.append(f"[? 状态未知: {status}] 概念 '{target}'")
 
@@ -561,7 +563,7 @@ def _build_parser():
     p.add_argument("--target", required=True,
                    help="Target concept to diagnose (why it is active / inactive)")
     p.add_argument("--assume", nargs="*", default=[],
-                   help="Additional hypothetical active concepts")
+                   help="Sensors to hypothetically light, in the given order (sensor only; logic/guard potentials are derived)")
 
     # read_memory — read from nocturne_memory.db
     p = sub.add_parser("read_memory", allow_abbrev=False,
@@ -825,17 +827,10 @@ def _dispatch(args, db):
         return RawOutput("\n".join(lines))
 
     elif args.command == "compile":
-        try:
-            return db.compile(
-                target=args.target,
-                assume=args.assume,
-            )
-        except NotImplementedError:
-            return RawOutput(
-                f"[Step 3 Pending] Backward solver for 'compile --target' will be implemented in Step 3.\n"
-                f"Target: '{args.target}'\n"
-                f"Assumed: {', '.join(args.assume) if args.assume else '(none)'}"
-            )
+        return db.compile(
+            target=args.target,
+            assume=args.assume,
+        )
 
     elif args.command == "intent":
         results = db.search_by_intent(args.query, limit=args.limit)

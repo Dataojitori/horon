@@ -15,6 +15,7 @@ import logging
 import re
 from typing import Any
 
+from backend._db_common import OFFLINE_DEV_SESSION_ID
 from backend.db import HoronDB
 
 logger = logging.getLogger("horon.harness")
@@ -116,6 +117,73 @@ def sense(
     return messages
 
 
+def _deny_reason(db: HoronDB, cid: int, guard_name: str) -> str:
+    """守卫未通电时的拒绝理由（只看守卫的直接成员与抑制源，不下钻）。
+
+    输入：守卫概念 id 与名字。
+    行为：按守卫自身的 activation_type 选说法——
+      AND   列出熄灭的传感器 / 未通电的前置节点（全部都要满足）；
+      OR    列出熄灭成员，注明任一满足即可；
+      CHAIN 报告序列进度与正在等待的成员（该成员已亮时，提示需要它重新发生一次）。
+      未通电的 logic 成员可能缺前置也可能被抑制，这里不替它下结论，指路给 compile。
+    输出：一句中文理由（不含"工具被拦截"前缀）。
+    """
+    inhs = db._get_inhibitions(cid, direction="incoming")
+    active_inhs = [i.inhibitor_name for i in inhs if i.inhibitor_is_active == 1]
+    if active_inhs:
+        return f"当前被活跃抑制源 ({', '.join(active_inhs)}) 强制锁死"
+
+    members = db._get_compose_members(cid)
+    if not members:
+        return "[系统配置错误] 该守卫未配置任何前置条件（孤岛死锁）"
+
+    target = guard_name.replace('"', '\\"')
+    hint = f"（原因请运行 `python frontend/cli.py compile --target \"{target}\"` 查看）"
+    row = db.conn.execute("SELECT activation_type FROM concepts WHERE id = ?", (cid,)).fetchone()
+    act = row["activation_type"] if row else None
+
+    if act == "CHAIN":
+        session = db.get_current_session() or OFFLINE_DEV_SESSION_ID
+        steps = {
+            r["current_order"]
+            for r in db.conn.execute(
+                "SELECT current_order FROM active_chain_instances "
+                "WHERE chain_concept_id = ? AND session_id = ?",
+                (cid, session),
+            ).fetchall()
+        }
+        total = max(m.order_index for m in members)
+        k = max(steps) if steps else 0
+        waiting = next((m for m in members if m.order_index == k + 1), None)
+        if waiting is None:
+            if k >= total:
+                return "[系统内部Bug] 序列已走完但守卫电位未同步（求值状态不一致）"
+            return f"[系统配置错误] 序列步骤编号不连续，找不到第 {k + 1}/{total} 步"
+        if waiting.is_active == 1:
+            return (
+                f"序列进行至第 {k}/{total} 步，等待 '{waiting.name}' 重新发生一次"
+                f"（它当前已处于点亮状态，只有 0→1 的变化才能推进序列）"
+            )
+        reason = f"序列进行至第 {k}/{total} 步，等待: {waiting.name}"
+        return reason + (hint if waiting.role != "sensor" else "")
+
+    unlit_sensors = [m.name for m in members if m.is_active == 0 and m.role == "sensor"]
+    unlit_logic = [m.name for m in members if m.is_active == 0 and m.role != "sensor"]
+    if not unlit_sensors and not unlit_logic:
+        return "[系统内部Bug] 前置已全部满足但守卫电位未同步（求值状态不一致）"
+
+    if act == "OR":
+        names = unlit_sensors + unlit_logic
+        return f"以下前置任一满足即可，目前都未满足: {', '.join(names)}" + (hint if unlit_logic else "")
+
+    parts = []
+    if unlit_sensors:
+        parts.append(f"传感器未点亮: {', '.join(unlit_sensors)}")
+    if unlit_logic:
+        parts.append(f"前置节点未通电: {', '.join(unlit_logic)}{hint}")
+    return "；".join(parts)
+
+
 def guard(
     db: HoronDB,
     tool_name: str,
@@ -163,21 +231,8 @@ def guard(
                 continue
 
         if g["is_active"] == 0:
-            cid = g["guard_concept_id"]
             try:
-                members = db._get_compose_members(cid)
-                unmet = [m.name for m in members if m.is_active == 0]
-                inhs = db._get_inhibitions(cid, direction="incoming")
-                active_inhs = [i.inhibitor_name for i in inhs if i.inhibitor_is_active == 1]
-
-                if active_inhs:
-                    reason = f"当前被活跃抑制源 ({', '.join(active_inhs)}) 强制锁死"
-                elif unmet:
-                    reason = f"当前缺少必要前置: {', '.join(unmet)}"
-                elif not members:
-                    reason = "[系统配置错误] 该守卫未配置任何前置条件（孤岛死锁）"
-                else:
-                    reason = "[系统内部Bug] 前置已全部满足但守卫电位未同步（求值状态不一致）"
+                reason = _deny_reason(db, g["guard_concept_id"], g["name"])
             except Exception as e:
                 reason = f"[系统内部异常] 守卫状态校验失败: {e}"
 
