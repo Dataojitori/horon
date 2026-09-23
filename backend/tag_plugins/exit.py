@@ -1,12 +1,12 @@
 """
 Tag: exit
 
-Each tag cluster (e.g. 求職, 変現, Bluesky) may have at most ONE concept
+Each tag cluster (e.g. job-search, side-project) may have at most ONE concept
 carrying this tag. The exit is the single convergence point where all paths
 in a domain must flow — like rivers converging into the sea.
 
 Naming rule: exit-tagged concepts must be named "{tag_group_name}-exit".
-Examples: Salem的求職project-exit, 我的变现探索-exit.
+Examples: job-search-exit, side-project-exit.
 The concept must also carry the corresponding group tag.
 
 on_mutation: when exit tag is added, validate name format + group tag.

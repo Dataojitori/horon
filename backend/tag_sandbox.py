@@ -151,15 +151,16 @@ def load_plugin(tag_name: str) -> dict | None:
             raise TagPluginError(
                 f"{filepath_str}: missing required function '{fn_name}'")
 
-    # Optional human description shown in `list_tags`. ONE place, natural
+    # Required human description shown in `list_tags`. ONE place, natural
     # language, covering BOTH hooks (what on_mutation does at write time +
     # what an audit reports). Not split per-hook: a reader always needs the
     # whole effect before relying on the tag, so half of it is never useful.
     # Convention: module-level `DESCRIPTION = "..."` (multi-line allowed).
     description = namespace.get("DESCRIPTION")
-    if description is not None and not isinstance(description, str):
+    if not isinstance(description, str) or not description.strip():
         raise TagPluginError(
-            f"{filepath_str}: DESCRIPTION must be a string if defined")
+            f"{filepath_str}: missing required module-level DESCRIPTION "
+            "(non-empty string covering both on_mutation and audit_cluster)")
 
     return {
         "on_mutation": namespace["on_mutation"],
