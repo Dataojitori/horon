@@ -27,7 +27,7 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
-SYSTEM_TAGS = {"result", "exit", "state", "action"}
+SYSTEM_TAGS = {"result", "exit", "state", "action", "boot"}
 VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
 OFFLINE_DEV_SESSION_ID = "devonly"
 

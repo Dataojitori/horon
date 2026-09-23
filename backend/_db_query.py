@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+from datetime import datetime, timedelta
 from typing import Any, Literal
 
 import numpy as np
@@ -738,3 +739,73 @@ class QueryMixin:
                 "DO UPDATE SET weight = ?, last_accessed_at = ?",
                 (from_id, to_id, new_weight, _now(), new_weight, _now()),
             )
+
+    # ── Recent mutations ────────────────────────────────────────────────────
+
+    # 会改变图谱内容的 CLI 命令（读、检索、审计、编译不算）
+    _MUTATING_COMMANDS = (
+        "create_concept", "update", "set", "add", "delete",
+        "create_tag", "delete_tag",
+    )
+
+    # 同一节点相邻两次写操作间隔超过它，就算不同的修改批次。
+    # 离线 CLI 全部记在 OFFLINE_DEV_SESSION_ID 下，只按 session 分组会把几天的改动并成一批。
+    _RECENT_BATCH_GAP = timedelta(minutes=30)
+
+    def recent_mutations(self, limit: int = 10) -> list[dict[str, Any]]:
+        """最近被修改过的节点，按最后一次修改时间倒序。
+
+        输入: limit — 最多返回多少个不同节点。
+        行为: 读 cli_audit_log 中成功的写命令（见 _MUTATING_COMMANDS），按
+              concept_id 去重。从每个节点最后一条写操作往回数，同一 session 且相邻
+              两条间隔不超过 _RECENT_BATCH_GAP 的算同一批，只汇总这一批——即"上次
+              动它时做了什么"，不带整段历史（离线模式 session 恒为 devonly，必须靠
+              时间间隔划界）。
+              不用 concepts.updated_at，因为求值器每回合重置 turn/session 传感器、
+              电位变化时都会刷新它，而加 Tag/别名又不会刷新。
+        输出: dict 列表，每项含 concept_id, name（节点已删除时为日志里最后的名字）,
+              deleted (bool), last_at, actions（该批次内 [("命令:子动作", 次数)]，
+              最近优先）, disclosure。
+        """
+        ph = ",".join("?" for _ in self._MUTATING_COMMANDS)
+        rows = self.conn.execute(
+            f"SELECT a.concept_id, a.session_id, a.timestamp AS last_at, "
+            f"       a.concept_name AS logged_name, "
+            f"       c.name AS cur_name, c.disclosure AS disclosure "
+            f"FROM cli_audit_log a "
+            f"JOIN (SELECT concept_id, MAX(id) AS max_id FROM cli_audit_log "
+            f"      WHERE success = 1 AND concept_id IS NOT NULL AND command IN ({ph}) "
+            f"      GROUP BY concept_id) last ON last.max_id = a.id "
+            f"LEFT JOIN concepts c ON c.id = a.concept_id "
+            f"ORDER BY a.id DESC LIMIT ?",
+            (*self._MUTATING_COMMANDS, limit),
+        ).fetchall()
+
+        results = []
+        for r in rows:
+            acts = self.conn.execute(
+                f"SELECT command, sub_action, timestamp FROM cli_audit_log "
+                f"WHERE concept_id = ? AND session_id = ? AND success = 1 "
+                f"  AND command IN ({ph}) ORDER BY id DESC",
+                (r["concept_id"], r["session_id"], *self._MUTATING_COMMANDS),
+            ).fetchall()
+            counts: dict[str, int] = {}
+            prev_ts = None
+            for a in acts:
+                ts = datetime.fromisoformat(a["timestamp"])
+                if prev_ts is not None and prev_ts - ts > self._RECENT_BATCH_GAP:
+                    break
+                prev_ts = ts
+                label = a["command"] + (f":{a['sub_action']}" if a["sub_action"] else "")
+                counts[label] = counts.get(label, 0) + 1
+            actions = list(counts.items())
+            deleted = r["cur_name"] is None
+            results.append({
+                "concept_id": r["concept_id"],
+                "name": r["logged_name"] if deleted else r["cur_name"],
+                "deleted": deleted,
+                "last_at": r["last_at"],
+                "actions": actions,
+                "disclosure": r["disclosure"],
+            })
+        return results

@@ -257,6 +257,68 @@ def _format_list_concepts(overviews) -> str:
     return "\n".join(lines)
 
 
+def _format_recent(rows) -> str:
+    """recent_mutations 的结果 → 每个节点两行：最后修改时间 + 那次会话里做的操作，然后是书腰。"""
+    if not rows:
+        return "(no mutations recorded)"
+    lines = []
+    for r in rows:
+        tag = " [已删除]" if r["deleted"] else ""
+        lines.append(
+            f"[{r['concept_id']}] {r['name']}{tag}  — {r['last_at'].replace('T', ' ')}"
+            f"  ({', '.join(a if n == 1 else f'{a}×{n}' for a, n in r['actions'])})")
+        if r.get("disclosure"):
+            d = " ".join(r["disclosure"].split())
+            lines.append(f"    ↳ When: {d[:120]}{'…' if len(d) > 120 else ''}")
+    return "\n".join(lines)
+
+
+# 用随仓库分发的副本；.claude/ 被 gitignore，克隆下来的仓库里没有
+_SKILL_PATH = Path(__file__).parent.parent / ".agents" / "skills" / "horon-cli" / "SKILL.md"
+
+
+def _format_login(db, recent_n: int) -> str:
+    """会话开场一次拿齐：说明书正文 + boot 节点全文 + 最近修改的节点。
+
+    输入: db, recent_n（recent 条数，0 表示不显示）。
+    行为: 读 .agents/skills/horon-cli/SKILL.md（去掉 frontmatter）原样输出，
+          文件不存在时只打一行提示，不影响后两段；
+          对挂了系统 Tag `boot` 的节点逐个 read_concept 并记录注意力转移；
+          最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
+    输出: 拼好的纯文本。
+    """
+    parts = []
+    try:
+        manual = _SKILL_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        manual = f"(找不到说明书 {_SKILL_PATH}，跳过这一段)"
+    if manual.startswith("---"):
+        end = manual.find("\n---", 3)
+        if end != -1:
+            manual = manual[end + 4:].lstrip("\r\n")
+    parts.append("════════ [1/3] Horon 使用说明书 ════════\n" + manual.rstrip())
+
+    boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
+    header = f"════════ [2/3] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
+    if not boot_ids:
+        parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
+    else:
+        bodies = []
+        for cid in boot_ids:
+            res = db.read_concept(cid)
+            try:
+                db.record_transition(res.id)
+            except Exception:
+                logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
+            bodies.append(_format_read_concept(res))
+        parts.append(header + "\n" + "\n\n".join(bodies))
+
+    if recent_n > 0:
+        parts.append(f"════════ [3/3] 最近修改的 {recent_n} 个节点 ════════\n"
+                     + _format_recent(db.recent_mutations(recent_n)))
+    return "\n\n".join(parts)
+
+
 class RawOutput:
     def __init__(self, content: str):
         self.content = content
@@ -601,6 +663,18 @@ def _build_parser():
     p.add_argument("--limit", type=int, default=10,
         help="Maximum number of results to return (default: 10)")
 
+    # recent — 最近修改过的节点
+    p = sub.add_parser("recent", allow_abbrev=False,
+        help="List the most recently mutated concepts (from the CLI audit log).")
+    p.add_argument("n", nargs="?", type=int, default=10,
+        help="Number of distinct concepts to show (default: 10)")
+
+    # login — 会话开场：说明书 + boot 节点 + recent
+    sub.add_parser("login", allow_abbrev=False,
+        help="Session start: print the horon-cli manual, all concepts tagged 'boot', and recent mutations."
+    ).add_argument("--recent", type=int, default=10, dest="recent_n",
+        help="How many recent concepts to show (default: 10, 0 to hide)")
+
     # batch
     p = sub.add_parser("batch", allow_abbrev=False,
         help="Run multiple commands. Reads from stdin or --file. "
@@ -831,6 +905,12 @@ def _dispatch(args, db):
             target=args.target,
             assume=args.assume,
         )
+
+    elif args.command == "recent":
+        return RawOutput(_format_recent(db.recent_mutations(args.n)))
+
+    elif args.command == "login":
+        return RawOutput(_format_login(db, args.recent_n))
 
     elif args.command == "intent":
         results = db.search_by_intent(args.query, limit=args.limit)
