@@ -13,9 +13,9 @@ reviewer mutate.
 
 Usage (same shape as cli.py, minus every write command):
     python frontend/review_cli.py read_concept <name>
-    python frontend/review_cli.py search_concepts <query>
-    python frontend/review_cli.py list_concepts
-    python frontend/review_cli.py compile --assume A --goal G [--block ...] [--constraints ...]
+    python frontend/review_cli.py search_concepts <query> [--tag <tag>] [--limit <n>]
+    python frontend/review_cli.py list_concepts [--tag <tag>]
+    python frontend/review_cli.py compile --target <name> [--assume ...]
     python frontend/review_cli.py read_memory <uri>
 """
 
@@ -28,8 +28,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from backend.db import HoronDB
-from frontend.cli import (  # reuse the exact read-side formatters
+from frontend.cli import (
     RawOutput,
+    _format_list_concepts,
+    _format_search_concepts,
     _print,
     _read_nocturne_memory,
 )
@@ -47,22 +49,36 @@ def _build_parser() -> argparse.ArgumentParser:
         allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # read_concept
     p = sub.add_parser("read_concept", allow_abbrev=False)
     p.add_argument("concept")
 
+    # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
-    p.add_argument("query")
+    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
+    p.add_argument("--tag", default=None,
+                   help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
+    p.add_argument("--limit", type=int, default=50,
+                   help="Maximum number of concepts to return (default: 50)")
 
-    sub.add_parser("list_concepts", allow_abbrev=False)
+    # list_concepts
+    p = sub.add_parser("list_concepts", allow_abbrev=False)
+    p.add_argument("--tag", default=None,
+                   help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
-    p = sub.add_parser("compile", allow_abbrev=False)
-    p.add_argument("--assume", nargs="+", required=True)
-    p.add_argument("--block", nargs="*", default=[])
-    p.add_argument("--constraints", nargs="*", default=[])
-    p.add_argument("--goal", required=True)
+    # compile
+    p = sub.add_parser("compile", allow_abbrev=False,
+                       help="Backward solver diagnostics for target concept.")
+    p.add_argument("--target", required=True,
+                   help="Target concept to diagnose (why it is active / inactive)")
+    p.add_argument("--assume", nargs="*", default=[],
+                   help="Sensors to hypothetically light, in the given order (sensor only; logic/guard potentials are derived)")
 
+    # read_memory
     p = sub.add_parser("read_memory", allow_abbrev=False)
     p.add_argument("uri")
+    # No --out here (unlike cli.py): a file-write path would let the reviewer
+    # overwrite horon.db / opencode.json and break the read-only hard lock.
 
     return parser
 
@@ -75,53 +91,27 @@ def _dispatch(args: argparse.Namespace, db: HoronDB):
         db: An open HoronDB handle.
 
     Returns:
-        A ReadResult / list / dict / RawOutput suitable for `_print`.
+        A ReadResult / CompileResult / RawOutput suitable for `_print`.
 
     Raises:
-        ValueError: on a compile input error or an unknown command.
+        ValueError: on an unknown command.
     """
     if args.command == "read_concept":
         return db.read_concept(args.concept)
 
     if args.command == "search_concepts":
-        results = db.search_concepts(args.query)
-        if not results:
-            return RawOutput("(no results)")
-        lines = []
-        for r in results:
-            lines.append(f"[{r.concept_id}] {r.concept_name}")
-            for m in r.matches:
-                if m.field == "name":
-                    lines.append("     \u21b3 Name")
-                elif m.field == "alias":
-                    lines.append(f'     \u21b3 Alias: "{m.snippet}"')
-                elif m.field == "disclosure":
-                    lines.append(
-                        f'     \u21b3 Disclosure #{m.target_id}: "{m.snippet}"')
-                elif m.field == "content":
-                    lines.append(
-                        f'     \u21b3 Content: "{m.snippet}"')
-        return RawOutput("\n".join(lines))
+        results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
+        return RawOutput(_format_search_concepts(results))
 
     if args.command == "list_concepts":
-        overviews = db.get_all_concepts_overview()
-        lines = []
-        for c in overviews:
-            lines.append(f"[{c['id']}] {c['name']}")
-            rule = c.get("activation_rule")
-            role = c.get("role", "plain")
-            if rule:
-                lines.append(f"      = {rule} ({role})")
-            else:
-                lines.append(f"      = [Atomic] ({role})")
-        return RawOutput("\n".join(lines))
+        overviews = db.get_all_concepts_overview(tag_expr=args.tag)
+        return RawOutput(_format_list_concepts(overviews))
 
     if args.command == "compile":
-        result = db.compile(
-            args.assume, args.block, args.constraints, args.goal)
-        if result["errors"]:
-            raise ValueError("; ".join(result["errors"]))
-        return result
+        return db.compile(
+            target=args.target,
+            assume=args.assume,
+        )
 
     if args.command == "read_memory":
         return RawOutput(_read_nocturne_memory(args.uri))

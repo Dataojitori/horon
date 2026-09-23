@@ -185,7 +185,7 @@ def _format_read_concept(result: ReadResult) -> str:
     lines.append("-" * 60)
 
     # ── 正文内容 ──
-    lines.append(f"Content:\n{result.content}" if result.content else "Content: (empty)")
+    lines.append(result.content if result.content else "(empty)")
 
     # ── 页脚（仅包含运行时附着物：Reminders 与 联想推荐） ──
     footer_blocks: list[list[str]] = []
