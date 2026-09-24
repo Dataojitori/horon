@@ -1,5 +1,9 @@
 # Horon
 
+[![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
+[![Interface](https://img.shields.io/badge/interface-CLI-4EAA25?logo=gnubash&logoColor=white)](.agents/skills/horon-cli/SKILL.md)
+
 > **让 AI 把吃过的亏，搭成会拦住自己的红石电路。**
 
 <table>
