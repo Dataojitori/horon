@@ -2,13 +2,16 @@
 
 > **让 AI 把吃过的亏，搭成会拦住自己的红石电路。**
 
-<img src="docs/pv/snail/readme/gif1_note.webp" alt="蜗牛写下纸条贴在壳上，一阵风就把纸条吹走了" width="720">
-
-AI 记下了教训，下次照样犯。
-
-<img src="docs/pv/snail/readme/gif2_chain.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="720">
-
-给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。
+<table>
+<tr>
+<td width="50%"><img src="docs/pv/snail/readme/gif1_note.webp" alt="蜗牛写下纸条贴在壳上，一阵风就把纸条吹走了" width="400"></td>
+<td width="50%"><img src="docs/pv/snail/readme/gif2_chain.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="400"></td>
+</tr>
+<tr>
+<td>AI 记下了教训，下次照样犯。</td>
+<td>给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。</td>
+</tr>
+</table>
 
 > [!WARNING]
 > **Horon 还在开发早期。** 更新后可能会破坏已有数据，你的 AI 以前搭好的电路也可能因此失效。
