@@ -6,7 +6,7 @@
 
 AI 记下了教训，下次照样犯。
 
-<img src="docs/pv/snail/readme/gif2_chain_v3.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="720">
+<img src="docs/pv/snail/readme/gif2_chain.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="720">
 
 给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。
 

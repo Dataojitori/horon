@@ -1,0 +1,16 @@
+{
+  "name": "pv_snail2",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "SEE LICENSE IN ../../../LICENSE",
+  "description": "",
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  },
+  "private": true
+}
