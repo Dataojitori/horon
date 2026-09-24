@@ -1,0 +1,6 @@
+python-dotenv
+numpy
+pydantic
+json_repair
+fastapi
+uvicorn
