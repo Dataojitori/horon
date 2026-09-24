@@ -4,6 +4,8 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
 [![Interface](https://img.shields.io/badge/interface-CLI-4EAA25?logo=gnubash&logoColor=white)](.agents/skills/horon-cli/SKILL.md)
 
+**Executable memory for AI agents — turn what an agent learns into attention paths, stateful logic, and tool-level guardrails.**
+
 > **让 AI 把吃过的亏，搭成会拦住自己的红石电路。**
 
 <table>
@@ -13,7 +15,7 @@
 </tr>
 <tr>
 <td>AI 记下了教训，下次照样犯。</td>
-<td>给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。</td>
+<td>Horon 把教训接进它下一次行动的电路里。</td>
 </tr>
 </table>
 
