@@ -1,0 +1,5 @@
+snail/node_modules/
+snail/package-lock.json
+snail/frames/
+snail/tmp_s/
+snail/*.mp4
