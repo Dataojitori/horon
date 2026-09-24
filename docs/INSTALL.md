@@ -44,7 +44,7 @@ cd <HORON_DIR>
 | Agent | `<FUNC>` | `<ADAPTER>` | 写到哪里 |
 | :--- | :--- | :--- | :--- |
 | Claude Code | `get_claude_code_hooks_config` | `claude-code` | `~/.claude/settings.json`（全局）或 `<项目>/.claude/settings.json` 的 `hooks` 字段 |
-| Codex | `get_codex_hooks_config` | `codex` | `~/.codex/hooks.json`（全局）或 `<项目>/.codex/hooks.json`；首次运行时 Codex 会要求用户确认信任这些钩子 |
+| Codex | `get_codex_hooks_config` | `codex` | `~/.codex/hooks.json`（全局）或 `<项目>/.codex/hooks.json`。钩子写好后要经用户信任才会生效：命令行版 Codex 首次运行时会弹出确认；ChatGPT 桌面版不会自动弹出，需要提醒用户去「设置」的钩子页面里手动信任 Horon 的钩子。写在项目里的 `.codex/hooks.json`，要这个项目本身已被信任才会加载；以后重新生成配置，钩子内容一变就要重新信任 |
 | Antigravity | `get_antigravity_hooks_config` | `antigravity` | Antigravity 读取的 hooks 配置（项目内为 `.agents/hooks.json`） |
 
 **合并，不要覆盖**：用户原有的钩子要保留，把 Horon 的条目加进去。改之前先把原文件给用户看一眼。如果你不确定自己这个版本的配置文件在哪，请查阅你自己的官方文档，不要猜。

@@ -50,7 +50,7 @@
 不用你自己动手。把下面这段话发给你的 AI：
 
 ```text
-请帮我安装 Horon：阅读 https://github.com/Dataojitori/horon/blob/main/docs/INSTALL.md 并照做。
+请帮我安装 Horon：阅读 https://github.com/Dataojitori/horon/blob/master/docs/INSTALL.md 并照做。
 ```
 
 支持 **Claude Code**、**Codex**、**Antigravity**。
