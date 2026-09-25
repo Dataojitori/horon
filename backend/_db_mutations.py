@@ -223,9 +223,9 @@ class MutationMixin:
         hook_id = cursor.lastrowid
         tool_info = f", tool: '{clean_tool}'" if clean_tool else ""
         if old_hook:
-            msg = f"Success. Replaced sensor hook #{old_hook['id']} on {label} with #{hook_id} ({event_type}: {match_pattern}{tool_info})."
+            msg = f"Success. Replaced sensor hook #{old_hook['id']} on {label} with #{hook_id} (event: {event_type}{tool_info})."
         else:
-            msg = f"Success. Set sensor hook #{hook_id} on {label} ({event_type}: {match_pattern}{tool_info})."
+            msg = f"Success. Set sensor hook #{hook_id} on {label} (event: {event_type}{tool_info})."
         return MutationResult(
             message=msg,
             concept_id=cid, concept_name=cname,
@@ -843,7 +843,8 @@ class MutationMixin:
         old_role = row["role"]
         old_lifespan = row["lifespan"]
         old_is_active = row["is_active"]
-        had_members = self.conn.execute(
+        self._check_role_change_keeps_members_valid(cid, new_role)
+        had_members =self.conn.execute(
             "SELECT 1 FROM compose_members WHERE parent_concept_id = ?", (cid,)
         ).fetchone() is not None
         had_hooks = self.conn.execute(
@@ -973,6 +974,7 @@ class MutationMixin:
                 vtype, member_ids = self._parse_activation_rule(clean_rule)
                 if cid in member_ids:
                     raise ValueError("A concept cannot appear in its own activation rule.")
+                self._check_circuit_members(member_ids)
                 # 全局激活规则唯一性校验（仅限 logic 节点）
                 if new_role == "logic":
                     existing_cid = self._find_composition_concept(vtype, member_ids, role="logic")
@@ -1083,6 +1085,8 @@ class MutationMixin:
 
         if cid in member_ids:
             raise ValueError("A concept cannot appear in its own activation rule.")
+
+        self._check_circuit_members(member_ids)
 
         # 全局激活规则唯一性校验（仅限 logic 节点）
         if target_role == "logic":

@@ -335,6 +335,51 @@ class HoronDB(
 
     # ── Helpers ──────────────────────────────────────────────────────────────
 
+    _CIRCUIT_MEMBER_ROLES = ("sensor", "logic")
+
+    def _check_circuit_members(self, member_ids: list[int]) -> None:
+        """校验激活规则的成员角色。
+
+        输入：已解析的成员概念 ID 列表。
+        行为：逐个查角色；只有 sensor / logic 有电位可向下游传递
+        （求值器把 plain 电位恒置 0，guard 是工具放行出口），
+        其余角色作为成员会让规则永远无法满足。
+        输出：无；遇到第一个不合规成员即抛 ValueError，说明其名称、ID 与角色。
+        """
+        for mid in member_ids:
+            m_row = self.conn.execute(
+                "SELECT name, role FROM concepts WHERE id = ?", (mid,)
+            ).fetchone()
+            if m_row and m_row["role"] not in self._CIRCUIT_MEMBER_ROLES:
+                raise ValueError(
+                    f"激活规则成员只能是 sensor 或 logic 角色（具备电位传递能力）。"
+                    f"概念 '{m_row['name']}' (id={mid}) 的角色为 '{m_row['role']}'，无法参与电路激活。"
+                )
+
+    def _check_role_change_keeps_members_valid(self, cid: int, new_role: str) -> None:
+        """角色切换前，校验该概念若仍被上游规则引用，新角色是否还能当成员。
+
+        输入：待切换概念 ID、目标角色。
+        行为：新角色属于 sensor / logic 时直接通过；否则查 compose_members
+        中以它为成员的上游节点。
+        输出：无；若存在上游引用则抛 ValueError，列出上游节点，
+        提示先从这些规则中移除它再切换角色。
+        """
+        if new_role in self._CIRCUIT_MEMBER_ROLES:
+            return
+        parents = self.conn.execute(
+            "SELECT DISTINCT p.id, p.name FROM compose_members cm "
+            "JOIN concepts p ON cm.parent_concept_id = p.id "
+            "WHERE cm.member_concept_id = ? ORDER BY p.id",
+            (cid,),
+        ).fetchall()
+        if parents:
+            listing = ", ".join(f"'{p['name']}' (id={p['id']})" for p in parents)
+            raise ValueError(
+                f"该概念仍是以下节点激活规则的成员：{listing}。"
+                f"切换为 '{new_role}' 后它将无法传递电位，请先从这些规则中移除它，再切换角色。"
+            )
+
     def _parse_activation_rule(self, activation_rule: str) -> tuple[str, list[int]]:
         """拆分激活规则，解析为 (activation_type, member_concept_ids)。
 
@@ -428,5 +473,24 @@ class HoronDB(
                 lines.append(f"    - Synced {success_count}/{len(rows)} embeddings (failed: {failed_count}).")
             else:
                 lines.append(f"    - Synced {success_count}/{len(rows)} embeddings.")
+
+        # Check circuit composition contract (members must be sensor or logic)
+        invalid_cm = self.conn.execute(
+            """
+            SELECT cm.parent_concept_id, p.name AS parent_name, p.role AS parent_role,
+                   cm.member_concept_id, m.name AS member_name, m.role AS member_role
+            FROM compose_members cm
+            JOIN concepts p ON cm.parent_concept_id = p.id
+            JOIN concepts m ON cm.member_concept_id = m.id
+            WHERE m.role NOT IN ('sensor', 'logic')
+            ORDER BY cm.parent_concept_id
+            """
+        ).fetchall()
+        if not invalid_cm:
+            lines.append("  - Circuit Contracts: All composition members are circuit nodes (sensor/logic) ✓")
+        else:
+            lines.append(f"  - Circuit Contracts: Found {len(invalid_cm)} composition violations (members with role not in sensor/logic):")
+            for r in invalid_cm:
+                lines.append(f"    - [{r['parent_concept_id']}] '{r['parent_name']}' ({r['parent_role']}) -> Member [{r['member_concept_id']}] '{r['member_name']}' ({r['member_role']})")
             
         return "\n".join(lines)

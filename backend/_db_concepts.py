@@ -63,6 +63,8 @@ class ConceptMixin:
                 )
             vtype, member_ids = self._parse_activation_rule(rule_str.strip())
 
+            self._check_circuit_members(member_ids)
+
             # 全局激活规则唯一性校验（仅限 logic 节点，guard 节点对应不同物理工具出口，允许共享相同激活规则）
             if role == "logic":
                 existing_cid = self._find_composition_concept(vtype, member_ids, role="logic")
