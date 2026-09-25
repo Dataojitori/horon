@@ -634,27 +634,34 @@ class QueryMixin:
         ]
 
     @transactional
-    def record_transition(self, to_id: int) -> None:
+    def record_transition(self, to_ids: list[int]) -> None:
         """Record an attention transition A → B with surprise-weighted update.
 
-        Traces back up to 3 recent distinct successful reads. The most recent
-        read has relevance 1.0, the second 0.5, and the third 0.25.
-        
+        一个节点的出边权重是"从这里出发、下一步读什么"的分布。每次读取，给每个来源
+        记一次观察：to_ids 是这次读到的节点（单读传一个，read_concept 批量读取传整批，
+        批内顺序不建边）；去向是一批时，这一次观察的份量在批内 N 个节点间平摊。
+        一批在往回追溯时算一次读取（审计日志里 sub_action 相同的相邻行），批内每个
+        节点各自是一个完整的来源——它们各自都观察到了"下一步是这次读取"。
+
+        Traces back up to 3 recent distinct reads (a batch counts as one read).
+        The most recent read has relevance 1.0, the second 0.5, and the third 0.25.
+
         Algorithm for each traced 'from_id' (order matters):
         1. Decay all outgoing weights from A by γ (0.95)
         2. Prune dead edges (weight < 0.05)
-        3. P' = max(w₀, 0.05) / (W_total + 1.0)   — smoothed prior
+        3. P' = max(w₀, 0.05) / (W_total + 1.0)   — smoothed prior; W_total is
+           taken once per source, so the result does not depend on batch order
         4. I  = -log₂(P')                         — surprise
-        5. new_weight = w₀ + (I * relevance)
+        5. new_weight = w₀ + I * relevance / N    — N = len(to_ids)
         """
         sess = self.get_current_session()
         if not sess:
             return
 
         recent_reads = self.conn.execute(
-            "SELECT concept_id, timestamp FROM cli_audit_log "
+            "SELECT id, concept_id, timestamp, sub_action FROM cli_audit_log "
             "WHERE command = 'read_concept' AND success = 1 AND session_id = ? "
-            "ORDER BY id DESC LIMIT 10",
+            "ORDER BY id DESC LIMIT 30",
             (sess,),
         ).fetchall()
 
@@ -670,36 +677,43 @@ class QueryMixin:
         now_time = _parse_ts(_now())
         last_time = now_time
 
-        distinct_from_ids = []
+        # 把日志行按读取归组：sub_action 相同的相邻行是同一批，其余一行一次读取
+        reads: list[tuple[list[int], object]] = []
         for row in recent_reads:
-            cid = row["concept_id"]
             row_time = _parse_ts(row["timestamp"])
-            
+
             # If the gap between this read and the next (or current) read is > 30 mins, break the chain
             if (last_time - row_time).total_seconds() > 30 * 60:
                 break
 
             last_time = row_time
 
-            if cid == to_id:
-                continue
+            key = row["sub_action"] or row["id"]
+            if reads and reads[-1][1] == key:
+                reads[-1][0].append(row["concept_id"])
+            else:
+                reads.append(([row["concept_id"]], key))
 
-            if cid not in distinct_from_ids:
-                distinct_from_ids.append(cid)
-            if len(distinct_from_ids) == 3:
+        # 取最近 3 次读取作为来源。本次读到的节点和更近的读取里已出现过的节点不当来源
+        sources: list[tuple[int, float]] = []  # (from_id, relevance)
+        used: set[int] = set(to_ids)
+        n_reads = 0
+        for members, _ in reads:
+            fresh = [m for m in dict.fromkeys(members) if m not in used]
+            if not fresh:
+                continue
+            used.update(fresh)
+            sources.extend((m, 0.5 ** n_reads) for m in fresh)
+            n_reads += 1
+            if n_reads == 3:
                 break
 
-        for i, from_id in enumerate(distinct_from_ids):
-            if from_id == to_id:
-                continue
-
+        for from_id, relevance in sources:
             exists = self.conn.execute(
                 "SELECT 1 FROM concepts WHERE id = ?", (from_id,)
             ).fetchone()
             if not exists:
                 continue
-
-            relevance = 0.5 ** i
 
             self.conn.execute(
                 "UPDATE concept_transitions SET weight = weight * ? "
@@ -713,13 +727,6 @@ class QueryMixin:
                 (from_id, _PRUNING_THRESHOLD),
             )
 
-            row = self.conn.execute(
-                "SELECT weight FROM concept_transitions "
-                "WHERE from_concept_id = ? AND to_concept_id = ?",
-                (from_id, to_id),
-            ).fetchone()
-            w0 = row["weight"] if row else 0.0
-
             total_row = self.conn.execute(
                 "SELECT COALESCE(SUM(weight), 0.0) AS total "
                 "FROM concept_transitions WHERE from_concept_id = ?",
@@ -727,18 +734,26 @@ class QueryMixin:
             ).fetchone()
             w_total = total_row["total"]
 
-            p_prime = max(w0, _PRUNING_THRESHOLD) / (w_total + 1.0)
-            surprise = -math.log2(p_prime)
-            new_weight = w0 + (surprise * relevance)
+            for to_id in to_ids:
+                row = self.conn.execute(
+                    "SELECT weight FROM concept_transitions "
+                    "WHERE from_concept_id = ? AND to_concept_id = ?",
+                    (from_id, to_id),
+                ).fetchone()
+                w0 = row["weight"] if row else 0.0
 
-            self.conn.execute(
-                "INSERT INTO concept_transitions "
-                "(from_concept_id, to_concept_id, weight, last_accessed_at) "
-                "VALUES (?, ?, ?, ?) "
-                "ON CONFLICT (from_concept_id, to_concept_id) "
-                "DO UPDATE SET weight = ?, last_accessed_at = ?",
-                (from_id, to_id, new_weight, _now(), new_weight, _now()),
-            )
+                p_prime = max(w0, _PRUNING_THRESHOLD) / (w_total + 1.0)
+                surprise = -math.log2(p_prime)
+                new_weight = w0 + surprise * relevance / len(to_ids)
+
+                self.conn.execute(
+                    "INSERT INTO concept_transitions "
+                    "(from_concept_id, to_concept_id, weight, last_accessed_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT (from_concept_id, to_concept_id) "
+                    "DO UPDATE SET weight = ?, last_accessed_at = ?",
+                    (from_id, to_id, new_weight, _now(), new_weight, _now()),
+                )
 
     # ── Recent mutations ────────────────────────────────────────────────────
 

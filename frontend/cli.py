@@ -12,6 +12,7 @@ import os
 import shlex
 import sqlite3
 import sys
+import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -283,7 +284,7 @@ def _format_login(db, recent_n: int) -> str:
     输入: db, recent_n（recent 条数，0 表示不显示）。
     行为: 先打一行说明书路径（.agents/skills/horon-cli/SKILL.md），正文要读者自己去读——
           说明书很长，和记忆拼在一起会让不少宿主截断输出，截掉的往往正是后面的 boot 节点；
-          对挂了系统 Tag `boot` 的节点逐个 read_concept 并记录注意力转移；
+          对挂了系统 Tag `boot` 的节点逐个 read_concept，整批记一次注意力转移；
           最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
     输出: 拼好的纯文本。
     """
@@ -299,14 +300,12 @@ def _format_login(db, recent_n: int) -> str:
     if not boot_ids:
         parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
     else:
-        bodies = []
-        for cid in boot_ids:
-            res = db.read_concept(cid)
-            try:
-                db.record_transition(res.id)
-            except Exception:
-                logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
-            bodies.append(_format_read_concept(res))
+        results = [db.read_concept(cid) for cid in boot_ids]
+        try:
+            db.record_transition([r.id for r in results])
+        except Exception:
+            logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
+        bodies = [_format_read_concept(r) for r in results]
         parts.append(header + "\n" + "\n\n".join(bodies))
 
     if recent_n > 0:
@@ -318,6 +317,14 @@ def _format_login(db, recent_n: int) -> str:
 class RawOutput:
     def __init__(self, content: str):
         self.content = content
+
+
+class BatchReadOutput(RawOutput):
+    """read_concept 一次读多个节点的结果：打印各节点正文，results 供审计日志逐条记录。"""
+
+    def __init__(self, results: list[ReadResult]):
+        self.results = results
+        super().__init__("\n\n".join(_format_read_concept(r) for r in results))
 
 
 def _print(obj):
@@ -613,7 +620,8 @@ def _build_parser():
 
     # read_concept
     p = sub.add_parser("read_concept", allow_abbrev=False)
-    p.add_argument("concept")
+    p.add_argument("concept", nargs="+",
+                   help="一个或多个节点名/别名/ID。一次读多个时整批算一次读取，批内顺序不记注意力转移。")
 
     # compile — backward solver diagnostics for target concept
     p = sub.add_parser("compile", allow_abbrev=False,
@@ -812,13 +820,14 @@ def _dispatch(args, db):
         return result
 
     elif args.command == "read_concept":
-        result = db.read_concept(args.concept)
+        # 同一节点传了多次（含名字与别名混用）只保留一份
+        results = list({r.id: r for r in map(db.read_concept, args.concept)}.values())
         try:
-            db.record_transition(result.id)
+            db.record_transition([r.id for r in results])
         except Exception:
             logging.getLogger(__name__).debug(
                 "record_transition failed", exc_info=True)
-        return result
+        return results[0] if len(results) == 1 else BatchReadOutput(results)
 
     elif args.command == "read_memory":
         content = _read_nocturne_memory(args.uri)
@@ -944,6 +953,14 @@ def _audited_dispatch(args, db):
     except Exception:
         db.log_action(command=cmd, sub_action=sub_action, success=False)
         raise
+
+    if isinstance(result, BatchReadOutput):
+        # 同一批的行共用一个 sub_action，record_transition 据此把这批算作一次读取
+        batch_tag = f"batch:{uuid.uuid4().hex}"
+        for r in result.results:
+            db.log_action(command=cmd, concept_id=r.id, concept_name=r.name,
+                          sub_action=batch_tag, success=True)
+        return result
 
     concept_id = None
     concept_name = None
