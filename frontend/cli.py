@@ -278,28 +278,24 @@ _SKILL_PATH = Path(__file__).parent.parent / ".agents" / "skills" / "horon-cli" 
 
 
 def _format_login(db, recent_n: int) -> str:
-    """会话开场一次拿齐：说明书正文 + boot 节点全文 + 最近修改的节点。
+    """会话开场：boot 节点全文 + 最近修改的节点。说明书不在这里输出。
 
     输入: db, recent_n（recent 条数，0 表示不显示）。
-    行为: 读 .agents/skills/horon-cli/SKILL.md（去掉 frontmatter）原样输出，
-          文件不存在时只打一行提示，不影响后两段；
+    行为: 先打一行说明书路径（.agents/skills/horon-cli/SKILL.md），正文要读者自己去读——
+          说明书很长，和记忆拼在一起会让不少宿主截断输出，截掉的往往正是后面的 boot 节点；
           对挂了系统 Tag `boot` 的节点逐个 read_concept 并记录注意力转移；
           最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
     输出: 拼好的纯文本。
     """
-    parts = []
-    try:
-        manual = _SKILL_PATH.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        manual = f"(找不到说明书 {_SKILL_PATH}，跳过这一段)"
-    if manual.startswith("---"):
-        end = manual.find("\n---", 3)
-        if end != -1:
-            manual = manual[end + 4:].lstrip("\r\n")
-    parts.append("════════ [1/3] Horon 使用说明书 ════════\n" + manual.rstrip())
+    if _SKILL_PATH.exists():
+        pointer = (f"Horon 使用说明书（怎么读写记忆、建节点、搭电路）不随 login 输出。本会话还没读过的话，读完它再开始操作：{_SKILL_PATH.resolve()}"
+                   "（已安装为 skill 的宿主可直接调用 horon-cli skill）")
+    else:
+        pointer = f"(找不到 Horon 使用说明书 {_SKILL_PATH})"
+    parts = [pointer]
 
     boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
-    header = f"════════ [2/3] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
+    header = f"════════ [1/2] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
     if not boot_ids:
         parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
     else:
@@ -314,7 +310,7 @@ def _format_login(db, recent_n: int) -> str:
         parts.append(header + "\n" + "\n\n".join(bodies))
 
     if recent_n > 0:
-        parts.append(f"════════ [3/3] 最近修改的 {recent_n} 个节点 ════════\n"
+        parts.append(f"════════ [2/2] 最近修改的 {recent_n} 个节点 ════════\n"
                      + _format_recent(db.recent_mutations(recent_n)))
     return "\n\n".join(parts)
 
@@ -669,9 +665,9 @@ def _build_parser():
     p.add_argument("n", nargs="?", type=int, default=10,
         help="Number of distinct concepts to show (default: 10)")
 
-    # login — 会话开场：说明书 + boot 节点 + recent
+    # login — 会话开场：boot 节点 + recent（说明书只给路径）
     sub.add_parser("login", allow_abbrev=False,
-        help="Session start: print the horon-cli manual, all concepts tagged 'boot', and recent mutations."
+        help="Session start: print all concepts tagged 'boot' and recent mutations. The manual is NOT printed; only its path."
     ).add_argument("--recent", type=int, default=10, dest="recent_n",
         help="How many recent concepts to show (default: 10, 0 to hide)")
 

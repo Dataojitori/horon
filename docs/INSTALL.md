@@ -30,7 +30,7 @@ cp .env.example .env    # 有 key 就填进 OPENROUTER_API_KEY
 <PYTHON> <HORON_DIR>/frontend/cli.py login
 ```
 
-能打印出「Horon 使用说明书」就说明装好了。第一次运行会自动建空库 `horon.db`。
+能打印出说明书路径和「启动节点」一段就说明装好了。第一次运行会自动建空库 `horon.db`。
 
 ## 2. 接上钩子
 
@@ -57,7 +57,7 @@ cd <HORON_DIR>
 
 ```text
 我的长期记忆是 Horon，位于 <HORON_DIR>，命令入口是 <PYTHON> <HORON_DIR>/frontend/cli.py。
-每次新会话开始时，先运行 login 并读完输出。
+每次新会话开始时，先运行 login 并读完输出，再读 horon-cli 说明书（login 只给路径，不输出正文）。
 ```
 
 ## 4. 验证
