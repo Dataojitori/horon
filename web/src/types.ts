@@ -169,3 +169,10 @@ export interface ConceptReviewItem {
 }
 
 export type ViewMode = "galaxy" | "dissection" | "review";
+
+/** 顶栏会话下拉菜单的一项。节点的激活状态按选中的会话显示。 */
+export interface SessionInfo {
+  session_id: string;
+  adapter: string | null; // 宿主：claude-code / codex / antigravity；不知道时为 null
+  last_active_at: string;
+}

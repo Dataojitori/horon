@@ -16,6 +16,7 @@ import "./DissectionView.css";
 
 interface Props {
   focalId: number;
+  session: string; // 激活状态按这个会话显示
   onNavigate: (id: number) => void;
   onInspect: (id: number) => void;
   onBack: () => void;
@@ -70,6 +71,7 @@ const estimateStringWidth = (str: string, fontSize: number) => {
 
 export default function DissectionView({
   focalId,
+  session,
   onNavigate,
   onInspect,
   onBack,
@@ -116,7 +118,7 @@ export default function DissectionView({
     setData(null);
     setLoadError(null);
     api
-      .getNeighborhood(focalId)
+      .getNeighborhood(focalId, session)
       .then((result) => {
         if (current) setData(result);
       })
@@ -124,7 +126,7 @@ export default function DissectionView({
         if (current) setLoadError(e instanceof Error ? e.message : String(e));
       });
     return () => { current = false; };
-  }, [focalId]);
+  }, [focalId, session]);
 
   // Calculate geofence radius dynamically based on internal sub-elements count and sizes
   const getDynamicContainerRadius = () => {

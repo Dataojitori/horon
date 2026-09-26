@@ -11,7 +11,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from ._db_common import OFFLINE_DEV_SESSION_ID
 from .db import HoronDB
+from .evaluator import load_active_states
 
 db: HoronDB | None = None
 # 同步 endpoint 跑在 FastAPI 线程池里，共用同一个 sqlite 连接（check_same_thread=False）。
@@ -37,24 +39,47 @@ app.add_middleware(
 )
 
 
+@app.get("/api/sessions")
+def get_sessions():
+    """网页顶栏的会话下拉菜单：最近活跃的 5 个宿主会话，再加离线会话 devonly 放在最后。
+
+    输出：[{session_id, adapter, last_active_at}]，按最后活跃时间从新到旧。
+      adapter 是宿主名（claude-code / codex / antigravity），不知道时为 null。
+    """
+    assert db is not None
+    with _db_lock:
+        rows = db.conn.execute(
+            "SELECT session_id, adapter, last_active_at FROM sessions "
+            "WHERE session_id != ? ORDER BY last_active_at DESC LIMIT 5",
+            (OFFLINE_DEV_SESSION_ID,),
+        ).fetchall()
+        offline = db.conn.execute(
+            "SELECT session_id, adapter, last_active_at FROM sessions WHERE session_id = ?",
+            (OFFLINE_DEV_SESSION_ID,),
+        ).fetchall()
+    return [dict(r) for r in [*rows, *offline]]
+
+
 @app.get("/api/graph")
-def get_graph():
+def get_graph(session_id: str = OFFLINE_DEV_SESSION_ID):
     """Full graph for Galaxy View.
 
     Returns nodes (concepts) with degree centrality,
     and links (compose_member and inhibition relationships).
+    节点和连线的激活状态按 session_id 这个会话显示。
     """
     assert db is not None
 
     with _db_lock:
         concepts = db.get_all_concepts()
+        states = load_active_states(db.conn, session_id)
 
         degree: Counter[int] = Counter()
         links: list[dict] = []
 
         # 1. 组合与链条关系（CHAIN, AND, OR）
         rows = db.conn.execute(
-            "SELECT c.id AS parent_id, c.name, c.activation_type, c.is_active, cm.member_concept_id, cm.order_index "
+            "SELECT c.id AS parent_id, c.name, c.activation_type, cm.member_concept_id, cm.order_index "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.parent_concept_id = c.id "
             "ORDER BY cm.parent_concept_id, cm.order_index"
@@ -64,7 +89,7 @@ def get_graph():
             pid = r["parent_id"]
             mid = r["member_concept_id"]
             atype = r["activation_type"]
-            status = "active" if r["is_active"] else "inactive"
+            status = "active" if states[pid] else "inactive"
 
             if atype == "CHAIN":
                 kind = "directed"
@@ -115,7 +140,7 @@ def get_graph():
                 "id": cid,
                 "name": c.name,
                 "role": c.role,
-                "is_active": c.is_active,
+                "is_active": states[cid],
                 "lifespan": c.lifespan,
                 "activation_type": c.activation_type,
                 "disclosure": c.disclosure,
@@ -148,26 +173,27 @@ def search_concepts(q: str = Query(..., min_length=1)):
 
 
 @app.get("/api/concepts/{concept_id}")
-def get_concept(concept_id: int):
-    """Full concept detail for Inspector / Dissection View."""
+def get_concept(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
+    """Full concept detail for Inspector / Dissection View（激活状态按 session_id 显示）。"""
     assert db is not None
     try:
         with _db_lock:
-            result = db.read_concept(concept_id)
+            result = db.read_concept(concept_id, session_id)
         return result.model_dump()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @app.get("/api/neighborhood/{concept_id}")
-def get_neighborhood(concept_id: int):
-    """解剖视图使用的邻域接口。"""
+def get_neighborhood(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
+    """解剖视图使用的邻域接口（激活状态按 session_id 显示）。"""
     assert db is not None
     try:
         with _db_lock:
-            focal = db.read_concept(concept_id)
+            focal = db.read_concept(concept_id, session_id)
+            states = load_active_states(db.conn, session_id)
             parent_rows = db.conn.execute(
-                "SELECT DISTINCT c.id, c.name, c.activation_type, c.is_active "
+                "SELECT DISTINCT c.id, c.name, c.activation_type "
                 "FROM compose_members cm "
                 "JOIN concepts c ON c.id = cm.parent_concept_id "
                 "WHERE cm.member_concept_id = ? "
@@ -220,7 +246,7 @@ def get_neighborhood(concept_id: int):
             "source": focal.id,
             "target": parent["id"],
             "variation_code": "",
-            "status": "active" if parent["is_active"] else "inactive",
+            "status": "active" if states[parent["id"]] else "inactive",
             "kind": "directed" if parent["activation_type"] == "CHAIN" else "undirected",
             "relation_id": parent["id"],
             "relation_name": parent["name"],

@@ -1,4 +1,4 @@
-import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult, ConceptReviewItem } from "./types";
+import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult, ConceptReviewItem, SessionInfo } from "./types";
 
 const BASE = "/api";
 
@@ -12,13 +12,17 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  getGraph: () => fetchJSON<GraphData>(`${BASE}/graph`),
+  getSessions: () => fetchJSON<SessionInfo[]>(`${BASE}/sessions`),
 
-  getConcept: (id: number) =>
-    fetchJSON<ConceptDetail>(`${BASE}/concepts/${id}`),
+  // 以下三个接口返回的激活状态按 session 这个会话显示
+  getGraph: (session: string) =>
+    fetchJSON<GraphData>(`${BASE}/graph?session_id=${encodeURIComponent(session)}`),
 
-  getNeighborhood: (id: number) =>
-    fetchJSON<NeighborhoodData>(`${BASE}/neighborhood/${id}`),
+  getConcept: (id: number, session: string) =>
+    fetchJSON<ConceptDetail>(`${BASE}/concepts/${id}?session_id=${encodeURIComponent(session)}`),
+
+  getNeighborhood: (id: number, session: string) =>
+    fetchJSON<NeighborhoodData>(`${BASE}/neighborhood/${id}?session_id=${encodeURIComponent(session)}`),
 
   searchConcepts: (q: string) =>
     fetchJSON<ConceptSearchResult[]>(`${BASE}/concepts/search?q=${encodeURIComponent(q)}`),
