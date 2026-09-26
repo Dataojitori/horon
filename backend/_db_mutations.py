@@ -523,6 +523,9 @@ class MutationMixin:
             "DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,)
         )
         self.conn.execute(
+            "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+        )
+        self.conn.execute(
             "UPDATE concepts SET role = 'plain', activation_type = NULL, lifespan = NULL, is_active = 0, on_fire = NULL, updated_at = ? "
             "WHERE id = ?",
             (_now(), cid),
@@ -761,6 +764,11 @@ class MutationMixin:
         fired_actions = []
         old_ls = row["lifespan"]
         old_is_active = row["is_active"]
+        if ls != old_ls:
+            # 换了生命周期，各会话里记着的「这个传感器已激活」都作废
+            self.conn.execute(
+                "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+            )
         if ls != old_ls and ls in ("turn", "session"):
             self.conn.execute(
                 "UPDATE concepts SET lifespan = ?, is_active = 0, updated_at = ? WHERE id = ?",
@@ -894,6 +902,9 @@ class MutationMixin:
                 "DELETE FROM active_chain_instances WHERE chain_concept_id = ?", (cid,)
             )
             self.conn.execute(
+                "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+            )
+            self.conn.execute(
                 "UPDATE concepts SET role = 'plain', activation_type = NULL, lifespan = NULL, is_active = 0, on_fire = NULL, updated_at = ? "
                 "WHERE id = ?",
                 (now, cid),
@@ -941,6 +952,13 @@ class MutationMixin:
                 new_is_active = old_is_active
             else:
                 new_is_active = 0
+                self.conn.execute(
+                    "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+                )
+            if ls == "permanent":
+                self.conn.execute(
+                    "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+                )
 
             self.conn.execute(
                 "UPDATE concepts SET role = 'sensor', activation_type = NULL, lifespan = ?, is_active = ?, updated_at = ? "
@@ -969,6 +987,9 @@ class MutationMixin:
                 self.conn.execute(
                     "DELETE FROM inhibitions WHERE inhibitor_concept_id = ?", (cid,)
                 )
+            self.conn.execute(
+                "DELETE FROM session_active_sensors WHERE concept_id = ?", (cid,)
+            )
             if rule_str and rule_str.strip():
                 clean_rule = rule_str.strip()
                 vtype, member_ids = self._parse_activation_rule(clean_rule)
@@ -1001,8 +1022,8 @@ class MutationMixin:
                             (cid, mid, idx),
                         )
                 self.conn.execute(
-                    "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
-                    (new_role, vtype, old_is_active, now, cid),
+                    "UPDATE concepts SET role = ?, activation_type = ?, lifespan = NULL, is_active = 0, updated_at = ? WHERE id = ?",
+                    (new_role, vtype, now, cid),
                 )
                 side_effects.append(f"activation rule set to: {clean_rule}")
 
@@ -1031,8 +1052,8 @@ class MutationMixin:
                             f"Concept '{exist_name}' (id={existing_cid}) already has the same composition: {old_rule}"
                         )
                 self.conn.execute(
-                    "UPDATE concepts SET role = ?, lifespan = NULL, is_active = ?, updated_at = ? WHERE id = ?",
-                    (new_role, old_is_active, now, cid),
+                    "UPDATE concepts SET role = ?, lifespan = NULL, is_active = 0, updated_at = ? WHERE id = ?",
+                    (new_role, now, cid),
                 )
                 if old_role != new_role:
                     diff["role"] = {"concept_id": cid, "old": old_role, "new": new_role}

@@ -83,7 +83,7 @@ CREATE TABLE IF NOT EXISTS inhibitions (
 CREATE TABLE IF NOT EXISTS active_chain_instances (
     chain_concept_id INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
     current_order    INTEGER NOT NULL DEFAULT 0,   -- 处于活跃状态的步骤编号 (1, 2, 3...)
-    session_id       TEXT    NOT NULL,
+    session_id       TEXT    NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     PRIMARY KEY (chain_concept_id, current_order, session_id)
 );
 
@@ -145,11 +145,25 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     applied_at TEXT NOT NULL
 );
 
--- 13. 当前活跃会话状态表
-CREATE TABLE IF NOT EXISTS current_session (
-    session_id TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL
+-- 13. 多会话注册与状态表 (Multi-session Support)
+CREATE TABLE IF NOT EXISTS sessions (
+    session_id      TEXT PRIMARY KEY,
+    created_at      TEXT NOT NULL,
+    last_active_at  TEXT NOT NULL,
+    adapter         TEXT             -- 来自哪个宿主（claude-code / codex / antigravity），只供网页显示
 );
+
+-- 每个会话里当前处于激活状态的 turn/session 传感器：有这一行 = 激活，熄灭即删除。
+-- 永久传感器存在 concepts.is_active；逻辑节点和守卫不存，读取时按规则现算。
+CREATE TABLE IF NOT EXISTS session_active_sensors (
+    session_id      TEXT    NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    concept_id      INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
+    activated_at    TEXT    NOT NULL,
+    PRIMARY KEY (session_id, concept_id)
+);
+
+INSERT OR IGNORE INTO sessions (session_id, created_at, last_active_at)
+VALUES ('devonly', strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'), strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'));
 
 -- 14. 概念书腰向量表 (冷热分离，1:1 挂载于 concepts)
 CREATE TABLE IF NOT EXISTS concept_embeddings (
@@ -162,7 +176,7 @@ CREATE TABLE IF NOT EXISTS concept_embeddings (
 -- 15. 会话待消费通知队列表 (跨生命周期 Hook 消息暂存)
 CREATE TABLE IF NOT EXISTS pending_notifications (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT NOT NULL,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
     message    TEXT NOT NULL,
     created_at TEXT NOT NULL
 );

@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 from backend.db import HoronDB
+from backend._db_common import OFFLINE_DEV_SESSION_ID
+from backend.harness.core import sync_session
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
     MAX_SPANS,
@@ -29,6 +31,23 @@ from backend.text_patch import (
 )
 
 load_dotenv(Path(__file__).parent.parent / ".env")
+
+# 这条命令属于哪个会话。
+# 输入：宿主给它启动的命令设的环境变量（Claude Code / Codex / Antigravity 各一个，
+#   后两个名字尚未在真实宿主里实测）。
+# 输出：SESSION_ID 取第一个非空的变量值，ADAPTER 是对应的宿主名（只供网页显示）；
+#   都没有 = 用户在终端手敲，记在离线会话 devonly，ADAPTER 为 None。
+# 读取记录、审计日志、激活状态显示、compile、inbox 都按这个会话算。
+# 嵌套启动（在一个宿主里启动另一个宿主）时可能同时存在多个变量，暂不处理。
+_ADAPTER_SESSION_VARS = {
+    "CLAUDE_CODE_SESSION_ID": "claude-code",
+    "CODEX_THREAD_ID": "codex",
+    "ANTIGRAVITY_CONVERSATION_ID": "antigravity",
+}
+SESSION_ID, ADAPTER = next(
+    ((os.environ[k].strip(), adapter) for k, adapter in _ADAPTER_SESSION_VARS.items() if os.environ.get(k, "").strip()),
+    (OFFLINE_DEV_SESSION_ID, None),
+)
 
 
 def _format_compile(result: CompileResult) -> str:
@@ -295,14 +314,14 @@ def _format_login(db, recent_n: int) -> str:
         pointer = f"(找不到 Horon 使用说明书 {_SKILL_PATH})"
     parts = [pointer]
 
-    boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
+    boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot", session_id=SESSION_ID)]
     header = f"════════ [1/2] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
     if not boot_ids:
         parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
     else:
-        results = [db.read_concept(cid) for cid in boot_ids]
+        results = [db.read_concept(cid, session_id=SESSION_ID) for cid in boot_ids]
         try:
-            db.record_transition([r.id for r in results])
+            db.record_transition([r.id for r in results], session_id=SESSION_ID)
         except Exception:
             logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
         bodies = [_format_read_concept(r) for r in results]
@@ -694,12 +713,8 @@ def _build_parser():
 def _dispatch(args, db):
     """Execute a single command, return result object."""
     if args.command == "reset":
-        sess = db.get_current_session()
-        if not sess:
-            sess = db.init_session("devonly")
-        else:
-            db.session_reset()
-        return RawOutput(f"Success. Session '{sess}' reset (ephemeral sensors & chains cleared).")
+        db.session_reset(session_id=SESSION_ID)
+        return RawOutput(f"Success. Session '{SESSION_ID}' reset (ephemeral sensors & chains cleared).")
 
     elif args.command == "create_concept":
         content = args.content
@@ -769,7 +784,7 @@ def _dispatch(args, db):
         return RawOutput(_format_search_concepts(results))
 
     elif args.command == "list_concepts":
-        overviews = db.get_all_concepts_overview(tag_expr=args.tag)
+        overviews = db.get_all_concepts_overview(tag_expr=args.tag, session_id=SESSION_ID)
         return RawOutput(_format_list_concepts(overviews))
 
     elif args.command == "add":
@@ -821,9 +836,9 @@ def _dispatch(args, db):
 
     elif args.command == "read_concept":
         # 同一节点传了多次（含名字与别名混用）只保留一份
-        results = list({r.id: r for r in map(db.read_concept, args.concept)}.values())
+        results = list({r.id: r for r in (db.read_concept(c, session_id=SESSION_ID) for c in args.concept)}.values())
         try:
-            db.record_transition([r.id for r in results])
+            db.record_transition([r.id for r in results], session_id=SESSION_ID)
         except Exception:
             logging.getLogger(__name__).debug(
                 "record_transition failed", exc_info=True)
@@ -876,7 +891,7 @@ def _dispatch(args, db):
                 "  remind --del <id>")
 
     elif args.command == "inbox":
-        result = db.evaluate_inbox()
+        result = db.evaluate_inbox(session_id=SESSION_ID)
         triggered = result["triggered"]
         errors = result["errors"]
         quiet = result["quiet_count"]
@@ -909,6 +924,7 @@ def _dispatch(args, db):
         return db.compile(
             target=args.target,
             assume=args.assume,
+            session_id=SESSION_ID,
         )
 
     elif args.command == "recent":
@@ -951,7 +967,7 @@ def _audited_dispatch(args, db):
     try:
         result = _dispatch(args, db)
     except Exception:
-        db.log_action(command=cmd, sub_action=sub_action, success=False)
+        db.log_action(command=cmd, sub_action=sub_action, session_id=SESSION_ID, success=False)
         raise
 
     if isinstance(result, BatchReadOutput):
@@ -959,7 +975,7 @@ def _audited_dispatch(args, db):
         batch_tag = f"batch:{uuid.uuid4().hex}"
         for r in result.results:
             db.log_action(command=cmd, concept_id=r.id, concept_name=r.name,
-                          sub_action=batch_tag, success=True)
+                          sub_action=batch_tag, session_id=SESSION_ID, success=True)
         return result
 
     concept_id = None
@@ -981,6 +997,7 @@ def _audited_dispatch(args, db):
         concept_id=concept_id,
         concept_name=concept_name,
         sub_action=sub_action,
+        session_id=SESSION_ID,
         success=True,
     )
     return result
@@ -1053,6 +1070,9 @@ def main():
     parser = _build_parser()
     args = parser.parse_args()
     db = HoronDB(snapshot_mode=True)
+    if SESSION_ID != OFFLINE_DEV_SESSION_ID:
+        # 宿主没装钩子时这个会话还没登记；首次登记会顺带算一遍它的电路状态
+        sync_session(db, SESSION_ID, ADAPTER)
 
     try:
         if args.command == "batch":

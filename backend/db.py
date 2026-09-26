@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from ._db_common import (
@@ -63,6 +64,7 @@ class HoronDB(
             self._apply_migrations()
         for tag in SYSTEM_TAGS:
             self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
+        self.cleanup_expired_sessions(days=7)
         self.conn.commit()
 
     def close(self):
@@ -139,56 +141,64 @@ class HoronDB(
 
     # ── Session & Evaluation Lifecycle ───────────────────────────────────────
 
-    def init_session(self, session_id: str) -> str:
-        """初始化/开辟新会话：校验并覆写 current_session，并执行会话状态复位。
+    def cleanup_expired_sessions(self, days: int = 7) -> int:
+        """删除超过指定天数未活跃的会话及其关联状态。
 
-        强制要求外部明确传入 session_id（如 Antigravity conversationId），
-        确立会话标识由宿主信道赋予的 Harness 边界契约。
+        排除 devonly 离线开发会话。
         """
-        if not session_id or not isinstance(session_id, str) or not session_id.strip():
-            raise ValueError("session_id 必须为非空字符串。")
+        # 和 _now() 同一种时间（本地时间、同一格式），字符串比较才成立
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - days * 86400))
+        rows = self.conn.execute(
+            "SELECT session_id FROM sessions "
+            "WHERE session_id != ? AND last_active_at < ?",
+            (OFFLINE_DEV_SESSION_ID, cutoff),
+        ).fetchall()
+        if not rows:
+            return 0
+        expired_ids = [r["session_id"] for r in rows]
+        placeholders = ",".join("?" for _ in expired_ids)
 
-        clean_id = session_id.strip()
+        self.conn.execute(f"DELETE FROM session_active_sensors WHERE session_id IN ({placeholders})", expired_ids)
+        self.conn.execute(f"DELETE FROM active_chain_instances WHERE session_id IN ({placeholders})", expired_ids)
+        self.conn.execute(f"DELETE FROM pending_notifications WHERE session_id IN ({placeholders})", expired_ids)
+        self.conn.execute(f"DELETE FROM sessions WHERE session_id IN ({placeholders})", expired_ids)
+        self.conn.commit()
+        return len(expired_ids)
+
+    def init_session(self, session_id: str, adapter: str | None = None) -> None:
+        """登记一个新会话，清空它的临时状态（turn/session 传感器、CHAIN 进度、待发通知），再求值一遍。
+        adapter：来自哪个宿主，只供网页显示。"""
+        self.touch_session(session_id, adapter)
+        self.session_reset(session_id)
+
+    def touch_session(self, session_id: str, adapter: str | None = None) -> None:
+        """登记会话；已登记的只更新最后活跃时间（过期清理按这个时间算）。
+        adapter：来自哪个宿主，只供网页显示；传了就记下，没传不覆盖已有值。"""
         now = _now()
-
-        # 1. 彻底清空所有历史会话残留的时序链实例与未消费通知队列
-        self.conn.execute("DELETE FROM active_chain_instances")
-        self.conn.execute("DELETE FROM pending_notifications")
-
-        # 2. 覆盖写入当前活跃会话 ID
-        self.conn.execute("DELETE FROM current_session")
         self.conn.execute(
-            "INSERT INTO current_session (session_id, created_at) VALUES (?, ?)",
-            (clean_id, now),
+            "INSERT INTO sessions (session_id, created_at, last_active_at, adapter) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET last_active_at = excluded.last_active_at, "
+            "adapter = COALESCE(excluded.adapter, adapter)",
+            (session_id, now, now, adapter),
         )
+        self.conn.commit()
 
-        # 3. 复用 session_reset 执行状态复位与全图拓扑重算
-        self.session_reset()
+    def _evaluator(self, session_id: str = OFFLINE_DEV_SESSION_ID) -> GraphEvaluator:
+        """求值器工厂：按指定会话读写激活状态。
+        不指定时用离线会话 devonly——CLI 的改动命令（set/add/delete 等）都走这个默认值，
+        其他会话在自己下次 sync_session 时重算跟上。"""
+        return GraphEvaluator(self.conn, session_id=session_id)
 
-        return clean_id
-
-
-    def _evaluator(self) -> GraphEvaluator:
-        """内部求值器工厂：绑定当前活跃会话 ID。未初始化活跃会话时透明回退至离线开发专用会话 (devonly)。"""
-        sess = self.get_current_session()
-        if not sess:
-            sess = OFFLINE_DEV_SESSION_ID
-            self.conn.execute("DELETE FROM current_session")
-            self.conn.execute(
-                "INSERT INTO current_session (session_id, created_at) VALUES (?, ?)",
-                (sess, _now()),
-            )
-        return GraphEvaluator(self.conn, session_id=sess)
-
-    def session_reset(self) -> EvaluationResult:
-        """重置会话：清空 CHAIN 状态机、未读通知队列与 session/turn 传感器，并重新求值全图。"""
-        res = self._evaluator().reset_session()
+    def session_reset(self, session_id: str) -> EvaluationResult:
+        """重置指定会话：清空它的 CHAIN 进度、待发通知与已激活的 turn/session 传感器。"""
+        res = self._evaluator(session_id).reset_session()
         self.conn.commit()
         return res
 
-    def turn_end(self) -> EvaluationResult:
-        """单回合结束：熄灭 turn 传感器，并重新求值全图。"""
-        res = self._evaluator().end_turn()
+    def turn_end(self, session_id: str) -> EvaluationResult:
+        """单回合结束：熄灭指定会话里的 turn 传感器。"""
+        res = self._evaluator(session_id).end_turn()
         self.conn.commit()
         return res
 
@@ -196,23 +206,15 @@ class HoronDB(
         self,
         activated_sensors: list[int] | None = None,
         deactivated_sensors: list[int] | None = None,
+        session_id: str = OFFLINE_DEV_SESSION_ID,
     ) -> EvaluationResult:
-        """执行单趟 Kahn 拓扑排序求值与时序/抑制计算。"""
-        res = self._evaluator().evaluate(
+        """在指定会话下执行单趟 Kahn 拓扑排序求值与时序/抑制计算。"""
+        res = self._evaluator(session_id).evaluate(
             activated_sensors=activated_sensors,
             deactivated_sensors=deactivated_sensors,
         )
         self.conn.commit()
         return res
-
-    def get_current_session(self) -> str | None:
-        """获取当前活跃会话 ID。若未初始化或处于脱机状态则返回 None。"""
-        row = self.conn.execute(
-            "SELECT session_id FROM current_session LIMIT 1"
-        ).fetchone()
-        if row and row["session_id"]:
-            return row["session_id"]
-        return None
 
     def push_pending_notifications(self, session_id: str, messages: list[str]) -> None:
         """向指定会话的待消费通知队列追加一条或多条消息。"""
@@ -303,17 +305,17 @@ class HoronDB(
                    concept_id: int | None = None,
                    concept_name: str | None = None,
                    sub_action: str | None = None,
+                   session_id: str = OFFLINE_DEV_SESSION_ID,
                    success: bool = True,
                    **kwargs) -> None:
         """INSERT into cli_audit_log. 审计写失败不打断主操作。"""
         try:
-            sess = self.get_current_session() or OFFLINE_DEV_SESSION_ID
             self.conn.execute(
                 "INSERT INTO cli_audit_log"
                 " (session_id, timestamp, command, concept_id, concept_name,"
                 "  sub_action, success)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (sess, _now(), command, concept_id, concept_name,
+                (session_id, _now(), command, concept_id, concept_name,
                  sub_action, int(success)),
             )
             self.conn.commit()
@@ -492,5 +494,6 @@ class HoronDB(
             lines.append(f"  - Circuit Contracts: Found {len(invalid_cm)} composition violations (members with role not in sensor/logic):")
             for r in invalid_cm:
                 lines.append(f"    - [{r['parent_concept_id']}] '{r['parent_name']}' ({r['parent_role']}) -> Member [{r['member_concept_id']}] '{r['member_name']}' ({r['member_role']})")
+
             
         return "\n".join(lines)

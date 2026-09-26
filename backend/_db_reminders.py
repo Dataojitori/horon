@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import time
 
-from ._db_common import _validate_condition_ast, _now, transactional
+from ._db_common import OFFLINE_DEV_SESSION_ID, _validate_condition_ast, _now, transactional
+from .evaluator import load_active_states
 from .models import MutationResult
 
 
@@ -76,8 +77,10 @@ class ReminderMixin:
         ).fetchall()
         return [dict(r) for r in rows]
 
-    def _build_sandbox_globals(self) -> dict:
-        """Build the restricted globals dict for reminder condition eval."""
+    def _build_sandbox_globals(self, states: dict[int, int]) -> dict:
+        """Build the restricted globals dict for reminder condition eval.
+
+        states: load_active_states 的结果，status() 按它回答节点是否激活。"""
 
         def _exists(name_or_expr: str) -> bool:
             name_or_expr = name_or_expr.strip()
@@ -96,7 +99,7 @@ class ReminderMixin:
                 return False
 
         def _status(name_or_expr: str) -> str | None:
-            """Returns "active" / "inactive" based on concepts.is_active.
+            """Returns "active" / "inactive" based on the node's activation state in this session (states).
             NOTE: v3 semantic break from v2's "confirmed"/"hypothesis"/"negated".
             No existing reminders in the database use status() as of the v3 migration,
             so no data compatibility issue. New conditions should use status("X") == "active".
@@ -117,13 +120,9 @@ class ReminderMixin:
                     cid = self._resolve_id(name_or_expr)
                 except ValueError:
                     return None
-            row = self.conn.execute(
-                "SELECT is_active FROM concepts WHERE id = ?",
-                (cid,),
-            ).fetchone()
-            if not row:
+            if cid not in states:
                 return None
-            return "active" if row["is_active"] else "inactive"
+            return "active" if states[cid] else "inactive"
 
         def _tags(concept_name: str) -> set:
             concept_name = concept_name.strip()
@@ -150,8 +149,10 @@ class ReminderMixin:
         }
 
     @transactional
-    def evaluate_inbox(self) -> dict:
+    def evaluate_inbox(self, session_id: str = OFFLINE_DEV_SESSION_ID) -> dict:
         """Pull all reminders, eval conditions in sandbox, return inbox.
+
+        条件里的 status() 按 session_id 这个会话的激活状态回答。
 
         Returns dict with keys: triggered (list), errors (list),
         quiet_count (int).  Triggered reminders get last_fired_at updated.
@@ -165,7 +166,7 @@ class ReminderMixin:
         if not rows:
             return {"triggered": [], "errors": [], "quiet_count": 0}
 
-        sandbox_globals = self._build_sandbox_globals()
+        sandbox_globals = self._build_sandbox_globals(load_active_states(self.conn, session_id))
         triggered: list[dict] = []
         errors: list[dict] = []
         quiet_count = 0

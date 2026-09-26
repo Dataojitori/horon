@@ -16,6 +16,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
+from ._db_common import OFFLINE_DEV_SESSION_ID
+from .evaluator import load_active_states
 from .models import ChainProgress, CompileResult
 
 _SAVEPOINT = "horon_compile_probe"
@@ -44,6 +46,7 @@ class CompileMixin:
         self,
         target: str | int,
         assume: list[str | int] | None = None,
+        session_id: str = OFFLINE_DEV_SESSION_ID,
     ) -> CompileResult:
         """逆推诊断目标节点的电位。
 
@@ -51,6 +54,7 @@ class CompileMixin:
           target: 目标概念（名字 / 别名 / ID）。必须是 sensor、logic 或 guard。
           assume: 额外假设点亮的传感器（名字 / 别名 / ID）。只接受 role='sensor'；
                   logic/guard 的电位由规则推导，想假设它们亮请改为假设其上游传感器。
+          session_id: 会话 ID（默认为离线开发专用会话）
         行为：
           在 savepoint 中以 assume 为输入跑一趟真实拓扑求值，读取结果后回滚，
           再从目标向下递归诊断。不写入任何表。
@@ -76,7 +80,7 @@ class CompileMixin:
                 f"'{target_row['name']}' 是 plain 砖块，不参与电路，没有可诊断的电位。"
             )
         assume_ids = self._resolve_assumptions(assume or [])
-        snap = self._probe_snapshot(assume_ids)
+        snap = self._probe_snapshot(assume_ids, session_id)
 
         row = snap.concepts[target_id]
         name = row["name"]
@@ -142,16 +146,13 @@ class CompileMixin:
                 ids.append(cid)
         return ids
 
-    def _probe_snapshot(self, assume_ids: list[int]) -> _Snapshot:
-        """在 savepoint 内用真实求值器跑一趟假设求值，读出快照后整体回滚。"""
+    def _probe_snapshot(self, assume_ids: list[int], session_id: str) -> _Snapshot:
+        """在 savepoint 内用真实求值器跑一趟假设求值，读出该会话的快照后整体回滚。"""
         conn: sqlite3.Connection = self.conn
-        baseline = {
-            r["id"]: r["is_active"]
-            for r in conn.execute("SELECT id, is_active FROM concepts").fetchall()
-        }
+        baseline = load_active_states(conn, session_id)
         conn.execute(f"SAVEPOINT {_SAVEPOINT}")
         try:
-            evaluator = self._evaluator()  # 可能写 current_session（devonly 兜底），同样会被回滚
+            evaluator = self._evaluator(session_id=session_id)
             # 按用户给出的顺序逐个点亮：假设的语义是"依次发生"，CHAIN 的推进因此与 --assume 顺序一致，
             # 而不是取决于同一趟求值里 Kahn 队列的出队顺序（那实际上跟 concept id 走）。
             # 已亮的传感器先熄灭再点亮：假设它"再发生一次"，产生真正的 0→1 上升沿
@@ -161,14 +162,14 @@ class CompileMixin:
                 if baseline.get(sid) == 1:
                     evaluator.evaluate(deactivated_sensors=[sid])
                 evaluator.evaluate(activated_sensors=[sid])
-            session_id = evaluator.session_id
 
             concepts = {
                 r["id"]: r
                 for r in conn.execute(
-                    "SELECT id, name, role, is_active, lifespan, activation_type FROM concepts"
+                    "SELECT id, name, role, lifespan, activation_type FROM concepts"
                 ).fetchall()
             }
+            active = load_active_states(conn, session_id)
             members: dict[int, list[tuple[int, int]]] = {}
             for r in conn.execute(
                 "SELECT parent_concept_id, member_concept_id, order_index "
@@ -204,7 +205,7 @@ class CompileMixin:
 
         return _Snapshot(
             concepts=concepts,
-            active={cid: r["is_active"] for cid, r in concepts.items()},
+            active=active,
             members=members,
             inhibitors=inhibitors,
             chain_steps=chain_steps,

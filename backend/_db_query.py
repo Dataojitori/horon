@@ -8,6 +8,7 @@ from typing import Any, Literal
 import numpy as np
 
 from ._db_common import _now, transactional, OFFLINE_DEV_SESSION_ID
+from .evaluator import load_active_states
 from .embedding import get_embedding, EMBEDDING_DIMENSIONS
 from .models import (
     Concept, ComposeMemberDetail, ReadResult,
@@ -217,10 +218,11 @@ class QueryMixin:
         return concepts
 
     def get_all_concepts_overview(
-        self, tag_expr: str | None = None,
+        self, tag_expr: str | None = None, session_id: str = OFFLINE_DEV_SESSION_ID,
     ) -> list[dict]:
         """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。
-        tag_expr: 可选 tag 过滤表达式（"A & B" = AND, "A | B" = OR）。"""
+        tag_expr: 可选 tag 过滤表达式（"A & B" = AND, "A | B" = OR）。
+        session_id: 返回的 is_active 是这个会话下的激活状态。"""
         if tag_expr:
             subq, child_params = self._build_tag_filter_subquery(tag_expr)
             join_clause = f"JOIN ({subq}) ct_filter ON c.id = ct_filter.concept_id"
@@ -269,6 +271,7 @@ class QueryMixin:
             tags_by_cid.setdefault(r["concept_id"], []).append(r["tag"])
 
         _OP = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
+        states = load_active_states(self.conn, session_id)
 
         result = []
         for c in concepts:
@@ -282,7 +285,7 @@ class QueryMixin:
                 "content": c.content,
                 "disclosure": c.disclosure,
                 "role": c.role,
-                "is_active": c.is_active,
+                "is_active": states[c.id],
                 "lifespan": c.lifespan,
                 "activation_type": c.activation_type,
                 "activation_rule": rule,
@@ -376,9 +379,10 @@ class QueryMixin:
 
     # ── Compose members ──────────────────────────────────────────────────────
 
-    def _get_compose_members(self, concept_id: int) -> list[ComposeMemberDetail]:
+    def _get_compose_members(self, concept_id: int, states: dict[int, int]) -> list[ComposeMemberDetail]:
+        """列出组合节点的成员。states 是 load_active_states 的结果，用来填每个成员的激活状态。"""
         rows = self.conn.execute(
-            "SELECT c.id AS concept_id, c.name, c.disclosure, c.is_active, c.role, cm.order_index "
+            "SELECT c.id AS concept_id, c.name, c.disclosure, c.role, cm.order_index "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "WHERE cm.parent_concept_id = ? "
@@ -391,7 +395,7 @@ class QueryMixin:
                 name=r["name"],
                 order_index=r["order_index"],
                 disclosure=r["disclosure"],
-                is_active=r["is_active"],
+                is_active=states[r["concept_id"]],
                 role=r["role"],
             )
             for r in rows
@@ -414,12 +418,14 @@ class QueryMixin:
         return [ToolGuardDetail(**dict(r)) for r in rows]
 
     def _get_inhibitions(
-        self, concept_id: int, direction: Literal["incoming", "outgoing"] = "incoming"
+        self, concept_id: int, states: dict[int, int],
+        direction: Literal["incoming", "outgoing"] = "incoming",
     ) -> list[InhibitionDetail]:
         """查询概念的抑制关系。
 
         - direction="incoming": 谁抑制了当前概念 (inhibitor -> current)
         - direction="outgoing": 当前概念抑制了谁 (current -> target)
+        states 是 load_active_states 的结果，用来填抑制源和被抑制节点的激活状态。
         """
         if direction == "incoming":
             filter_col = "i.target_concept_id"
@@ -433,7 +439,6 @@ class QueryMixin:
         rows = self.conn.execute(
             f"SELECT i.target_concept_id, i.inhibitor_concept_id, "
             f"c_inh.name AS inhibitor_name, c_tgt.name AS target_name, "
-            f"c_inh.is_active AS inhibitor_is_active, c_tgt.is_active AS target_is_active, "
             f"c_inh.role AS inhibitor_role, c_tgt.role AS target_role, "
             f"i.created_at "
             f"FROM inhibitions i "
@@ -442,12 +447,19 @@ class QueryMixin:
             f"WHERE {filter_col} = ? ORDER BY {order_col}",
             (concept_id,),
         ).fetchall()
-        return [InhibitionDetail(**dict(r)) for r in rows]
+        return [
+            InhibitionDetail(
+                **dict(r),
+                inhibitor_is_active=states[r["inhibitor_concept_id"]],
+                target_is_active=states[r["target_concept_id"]],
+            )
+            for r in rows
+        ]
 
     # ── read_concept ─────────────────────────────────────────────────────────
 
-    def read_concept(self, concept) -> ReadResult:
-        """读取概念的完整视图。"""
+    def read_concept(self, concept, session_id: str = OFFLINE_DEV_SESSION_ID) -> ReadResult:
+        """读取概念的完整视图。激活状态与 CHAIN 进度按 session_id 这个会话显示。"""
         cid = self._resolve_id(concept)
         row = self.conn.execute(
             "SELECT * FROM concepts WHERE id = ?", (cid,)
@@ -455,21 +467,21 @@ class QueryMixin:
         if not row:
             raise ValueError(f"Concept not found: {concept}")
 
+        states = load_active_states(self.conn, session_id)
         activation_rule = self._get_activation_rule(cid)
-        members = self._get_compose_members(cid)
+        members = self._get_compose_members(cid, states)
         sensor_hooks = self._get_sensor_hooks(cid)
         tool_guards = self._get_tool_guards(cid)
-        inhibitions = self._get_inhibitions(cid, direction="incoming")
-        inhibiting = self._get_inhibitions(cid, direction="outgoing")
+        inhibitions = self._get_inhibitions(cid, states, direction="incoming")
+        inhibiting = self._get_inhibitions(cid, states, direction="outgoing")
 
         active_chain_orders: list[int] = []
         if row["activation_type"] == "CHAIN":
-            sess = self.get_current_session() or OFFLINE_DEV_SESSION_ID
             ac_rows = self.conn.execute(
                 "SELECT current_order FROM active_chain_instances "
                 "WHERE chain_concept_id = ? AND session_id = ? "
                 "ORDER BY current_order",
-                (cid, sess),
+                (cid, session_id),
             ).fetchall()
             active_chain_orders = [r["current_order"] for r in ac_rows]
 
@@ -526,7 +538,7 @@ class QueryMixin:
             content=content_val,
             disclosure=row["disclosure"],
             role=row["role"],
-            is_active=row["is_active"],
+            is_active=states[cid],
             lifespan=row["lifespan"],
             activation_type=row["activation_type"],
             activation_rule=activation_rule,
@@ -634,7 +646,7 @@ class QueryMixin:
         ]
 
     @transactional
-    def record_transition(self, to_ids: list[int]) -> None:
+    def record_transition(self, to_ids: list[int], session_id: str = OFFLINE_DEV_SESSION_ID) -> None:
         """Record an attention transition A → B with surprise-weighted update.
 
         一个节点的出边权重是"从这里出发、下一步读什么"的分布。每次读取，给每个来源
@@ -654,15 +666,14 @@ class QueryMixin:
         4. I  = -log₂(P')                         — surprise
         5. new_weight = w₀ + I * relevance / N    — N = len(to_ids)
         """
-        sess = self.get_current_session()
-        if not sess:
+        if not to_ids:
             return
 
         recent_reads = self.conn.execute(
             "SELECT id, concept_id, timestamp, sub_action FROM cli_audit_log "
             "WHERE command = 'read_concept' AND success = 1 AND session_id = ? "
             "ORDER BY id DESC LIMIT 30",
-            (sess,),
+            (session_id,),
         ).fetchall()
 
         if not recent_reads:
