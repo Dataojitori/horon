@@ -67,11 +67,8 @@ def handle_codex(
     Returns:
         tuple[exit_code, stdout_dict, stderr_content]
     """
-    session_id = payload.get("session_id") or payload.get("turn_id") or payload.get("conversationId") or "default"
-    clean_id = session_id.strip() if isinstance(session_id, str) else "default"
-
     if event_name == "SessionStart":
-        init_msg = sync_session(db, clean_id)
+        init_msg = sync_session(db, "codex")
         if init_msg:
             return 0, {
                 "hookSpecificOutput": {
@@ -83,18 +80,20 @@ def handle_codex(
 
     elif event_name == "UserPromptSubmit":
         notifications: list[str] = []
-        if init_msg := sync_session(db, clean_id):
+        if init_msg := sync_session(db, "codex"):
             notifications.append(init_msg)
 
+        end_turn(db)
+
         user_text = _first_str(payload, ("prompt", "message", "user_prompt", "user_input"))
-        if user_text.startswith(HARNESS_PREFIX) or user_text.startswith("【Horon Harness"):
+        if user_text.startswith((HARNESS_PREFIX, "【Horon Harness")):
             user_text = ""
 
         if user_text:
             fired = sense(db, event_type="user_message", text=user_text)
             notifications.extend(fired)
 
-        banner = drain(db, session_id=clean_id, extra_messages=notifications)
+        banner = drain(db, extra_messages=notifications)
         if banner:
             return 0, {
                 "hookSpecificOutput": {
@@ -105,7 +104,7 @@ def handle_codex(
         return 0, {}, None
 
     elif event_name == "PreToolUse":
-        sync_session(db, clean_id)
+        sync_session(db, "codex")
         tool_name = payload.get("tool_name") or payload.get("tool", "")
         tool_input = payload.get("tool_input")
         if tool_input is None:
@@ -115,7 +114,7 @@ def handle_codex(
         # Do not defer these notifications to Stop: unlike Antigravity, Codex
         # has no PreInvocation hook that drains the queue before every model
         # continuation.
-        allowed, deny_reason, fired = guard(db, tool_name, tool_input, session_id="")
+        allowed, deny_reason, fired = guard(db, tool_name, tool_input)
         if not allowed:
             reason = deny_reason or "Blocked by Horon guard policy."
             deny_items = [*fired, reason] if fired else [reason]
@@ -127,11 +126,11 @@ def handle_codex(
                 }
             }, None
 
-        if fired:
+        if banner := drain(db, extra_messages=fired):
             return 0, {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "additionalContext": wrap_harness_message(fired),
+                    "additionalContext": banner,
                 }
             }, None
 
@@ -140,28 +139,28 @@ def handle_codex(
         return 0, {}, None
 
     elif event_name == "PostToolUse":
-        sync_session(db, clean_id)
+        sync_session(db, "codex")
         tool_name = payload.get("tool_name") or payload.get("tool", "")
         combined = _stringify_tool_result(payload) or EMPTY_TOOL_RESULT
 
-        fired = sense(db, event_type="tool_result", text=combined, tool_name=tool_name, session_id="")
-        if fired:
+        fired = sense(db, event_type="tool_result", text=combined, tool_name=tool_name)
+        if banner := drain(db, extra_messages=fired):
             return 0, {
                 "hookSpecificOutput": {
                     "hookEventName": "PostToolUse",
-                    "additionalContext": wrap_harness_message(fired),
+                    "additionalContext": banner,
                 }
             }, None
         return 0, {}, None
 
     elif event_name == "Stop":
-        sync_session(db, clean_id)
+        sync_session(db, "codex")
         last_msg = _first_str(payload, _ASSISTANT_MSG_KEYS)
         fired_msgs: list[str] = []
         if last_msg.strip():
             fired_msgs = sense(db, event_type="model_message", text=last_msg)
 
-        pending = db.pop_pending_notifications(clean_id)
+        pending = db.pop_pending_notifications()
         all_warnings = [*fired_msgs, *pending]
         # Codex 在 Stop 续写产生的下一次 Stop 中会设置 stop_hook_active。
         # 若不判这个字段，同一 model_message 传感器可能反复点火造成无限续写。
@@ -176,7 +175,7 @@ def handle_codex(
         if all_warnings:
             # 本轮已经续写过，不再 block；通知放回队列，由下一次用户输入排空，
             # 避免防循环的同时把仍有价值的广播吞掉。
-            db.push_pending_notifications(clean_id, all_warnings)
+            db.push_pending_notifications(all_warnings)
 
         end_turn(db)
         return 0, {}, None
@@ -185,7 +184,7 @@ def handle_codex(
         # Interrupt is distinct from Stop in Codex.  Without this reset,
         # lifespan='turn' sensors from a cancelled turn leak into the next
         # prompt in the same session.
-        sync_session(db, clean_id)
+        sync_session(db, "codex")
         end_turn(db)
         return 0, {}, None
 

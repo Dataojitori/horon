@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.db import HoronDB
-from backend.harness.core import HARNESS_PREFIX, drain, end_turn, guard, sense, sync_session, wrap_harness_message
+from backend.harness.core import drain, end_turn, guard, sense, sync_session, wrap_harness_message
 
 logger = logging.getLogger("horon.harness.adapters.antigravity")
 
@@ -106,55 +106,65 @@ def get_latest_transcript_entries(transcript_path: str | None, max_entries: int 
 
 def handle_antigravity(event_name: str, payload: dict[str, Any], db: HoronDB) -> dict[str, Any]:
     """处理 Antigravity / Cursor 的 Hook 事件并返回响应字典。"""
-    conv_id = payload.get("conversationId")
-
     if event_name == "PreInvocation":
         notifications: list[str] = []
-        if init_msg := sync_session(db, conv_id):
+        if init_msg := sync_session(db, "antigravity"):
             notifications.append(init_msg)
 
-        clean_id = conv_id.strip()
+        # PreInvocation 在同一回合的每次模型调用前都会发生。只有第一次调用
+        # 代表新的用户回合；否则会在工具调用之间误清 turn 传感器，并重复感知同一条用户消息。
+        if payload.get("invocationNum") == 0:
+            end_turn(db)
 
-        # 从 transcript 提取用户最新真实输入
-        transcript_path = payload.get("transcriptPath")
-        entries = get_latest_transcript_entries(transcript_path, max_entries=5)
-        user_text = ""
-        for entry in entries:
-            if entry.get("source") in ("USER_EXPLICIT", "USER") or entry.get("type") == "USER_INPUT":
-                content = _extract_text(entry.get("content", ""))
-                if content and (content.startswith(HARNESS_PREFIX) or content.startswith("【Horon Harness")):
-                    continue
-                user_text = content
-                break
+            # 从 transcript 提取用户最新真实输入
+            transcript_path = payload.get("transcriptPath")
+            entries = get_latest_transcript_entries(transcript_path, max_entries=5)
+            user_text = ""
+            for entry in entries:
+                if entry.get("source") in ("USER_EXPLICIT", "USER"):
+                    content = _extract_text(entry.get("content", ""))
+                    if not content:
+                        continue
+                    user_text = content
+                    break
 
-        if user_text:
-            fired = sense(db, event_type="user_message", text=user_text)
-            notifications.extend(fired)
+            if user_text:
+                fired = sense(db, event_type="user_message", text=user_text)
+                notifications.extend(fired)
 
-        if broadcast := drain(db, session_id=clean_id, extra_messages=notifications):
+        if broadcast := drain(db, extra_messages=notifications):
             return {"injectSteps": [{"userMessage": broadcast}]}
         return {}
 
     elif event_name == "PreToolUse":
-        sync_session(db, conv_id)
-        clean_id = conv_id.strip()
+        sync_session(db, "antigravity")
 
         tool_call = payload.get("toolCall", {})
-        tool_name = tool_call.get("name", "")
-        tool_args = tool_call.get("args", {})
+        tool_name = tool_call.get("name") or payload.get("toolName") or payload.get("tool", "")
+        tool_args = (
+            tool_call.get("args")
+            or tool_call.get("arguments")
+            or tool_call.get("parameters")
+            or tool_call.get("input")
+            or payload.get("toolInput")
+            or payload.get("args")
+            or {}
+        )
 
-        allowed, deny_reason, fired = guard(db, tool_name, tool_args, session_id=clean_id)
+        allowed, deny_reason, fired = guard(db, tool_name, tool_args)
         if not allowed:
             deny_items = [*fired, deny_reason] if deny_reason else fired
             return {
                 "decision": "deny",
                 "reason": wrap_harness_message(deny_items),
             }
+
+        if fired:
+            db.push_pending_notifications(fired)
         return {"decision": "allow"}
 
     elif event_name == "PostToolUse":
-        sync_session(db, conv_id)
-        clean_id = conv_id.strip()
+        sync_session(db, "antigravity")
 
         tool_call = payload.get("toolCall", {})
         tool_name = tool_call.get("name") or payload.get("toolName") or payload.get("tool", "")
@@ -166,11 +176,13 @@ def handle_antigravity(event_name: str, payload: dict[str, Any], db: HoronDB) ->
         result_str = json.dumps(result, ensure_ascii=False) if isinstance(result, (dict, list)) else (str(result) if result is not None else "")
         combined = f"{error}\n{result_str}" if error else result_str
 
-        sense(db, event_type="tool_result", text=combined, tool_name=tool_name, session_id=clean_id)
+        fired = sense(db, event_type="tool_result", text=combined, tool_name=tool_name)
+        if fired:
+            db.push_pending_notifications(fired)
         return {}
 
     elif event_name == "PostInvocation":
-        sync_session(db, conv_id)
+        sync_session(db, "antigravity")
 
         transcript_path = payload.get("transcriptPath")
         entries = get_latest_transcript_entries(transcript_path, max_entries=5)
@@ -194,10 +206,9 @@ def handle_antigravity(event_name: str, payload: dict[str, Any], db: HoronDB) ->
         return {}
 
     elif event_name == "Stop":
-        sync_session(db, conv_id)
-        clean_id = conv_id.strip()
+        sync_session(db, "antigravity")
 
-        pending = db.pop_pending_notifications(clean_id)
+        pending = db.pop_pending_notifications()
         if pending:
             return {
                 "decision": "continue",
