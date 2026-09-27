@@ -21,4 +21,5 @@ backend/tag_plugins/*
 !backend/tag_plugins/action.py
 !backend/tag_plugins/result.py
 !backend/tag_plugins/exit.py
-/.codex/
+# User-specific Codex hooks contain absolute local paths.
+/.codex/hooks.json
