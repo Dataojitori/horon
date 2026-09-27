@@ -158,18 +158,15 @@ def handle_claude_code(
     Returns:
         tuple[exit_code, stdout_content, stderr_content]
     """
-    session_id = payload.get("session_id") or payload.get("conversationId") or "default"
-    clean_id = session_id.strip() if isinstance(session_id, str) else "default"
-
     if event_name == "SessionStart":
-        init_msg = sync_session(db, clean_id)
+        init_msg = sync_session(db, "claude-code")
         if init_msg:
             return 0, wrap_harness_message([init_msg]), None
         return 0, None, None
 
     elif event_name == "UserPromptSubmit":
         notifications: list[str] = []
-        if init_msg := sync_session(db, clean_id):
+        if init_msg := sync_session(db, "claude-code"):
             notifications.append(init_msg)
 
         # 新的用户输入 = 新回合，不管上一回合有没有正常收尾。Esc 打断、API 报错时
@@ -178,24 +175,24 @@ def handle_claude_code(
         end_turn(db)
 
         user_text = _first_str(payload, _PROMPT_KEYS)
-        if user_text.startswith(HARNESS_PREFIX) or user_text.startswith("【Horon Harness"):
+        if user_text.startswith((HARNESS_PREFIX, "【Horon Harness")):
             user_text = ""
 
         if user_text:
             fired = sense(db, event_type="user_message", text=user_text)
             notifications.extend(fired)
 
-        banner = drain(db, session_id=clean_id, extra_messages=notifications)
+        banner = drain(db, extra_messages=notifications)
         return 0, banner or None, None
 
     elif event_name == "PreToolUse":
-        sync_session(db, clean_id)
+        sync_session(db, "claude-code")
         tool_name = payload.get("tool_name") or payload.get("tool", "")
         tool_input = payload.get("tool_input")
         if tool_input is None:
             tool_input = payload.get("args") or payload.get("parameters") or {}
 
-        allowed, deny_reason, fired = guard(db, tool_name, tool_input, session_id=clean_id)
+        allowed, deny_reason, fired = guard(db, tool_name, tool_input)
         if not allowed:
             reason = deny_reason or "Blocked by Horon guard policy."
             deny_items = [*fired, reason] if fired else [reason]
@@ -218,14 +215,16 @@ def handle_claude_code(
 
         # No Horon guard blocked the call.  Stay silent so Claude Code still
         # applies its normal permission flow instead of auto-approving it.
+        if fired:
+            db.push_pending_notifications(fired)
         return 0, None, None
 
     elif event_name in ("PostToolUse", "PostToolUseFailure"):
-        sync_session(db, clean_id)
+        sync_session(db, "claude-code")
         tool_name = payload.get("tool_name") or payload.get("tool", "")
         combined = _stringify_tool_result(payload) or EMPTY_TOOL_RESULT
 
-        sense(db, event_type="tool_result", text=combined, tool_name=tool_name, session_id=clean_id)
+        fired = sense(db, event_type="tool_result", text=combined, tool_name=tool_name)
 
         # 反重力在每次模型调用前（PreInvocation）排空 pending，所以工具结果点亮的
         # 通知、以及 PreToolUse 放行时暂存的 tool_call 通知，下一步就能看到。
@@ -233,7 +232,7 @@ def handle_claude_code(
         # Stop 才出来，那时模型已经带着错误前提说完了整段话。
         # PostToolUse / PostToolUseFailure 都接受 hookSpecificOutput.additionalContext，
         # 会以 system reminder 的形式贴在工具结果旁边。
-        if banner := drain(db, session_id=clean_id):
+        if banner := drain(db, extra_messages=fired):
             return 0, {
                 "hookSpecificOutput": {
                     "hookEventName": event_name,
@@ -243,14 +242,14 @@ def handle_claude_code(
         return 0, None, None
 
     elif event_name == "Stop":
-        sync_session(db, clean_id)
+        sync_session(db, "claude-code")
 
         last_msg = _first_str(payload, _ASSISTANT_MSG_KEYS)
         fired_msgs: list[str] = []
         if last_msg.strip():
             fired_msgs = sense(db, event_type="model_message", text=last_msg)
 
-        pending = db.pop_pending_notifications(clean_id)
+        pending = db.pop_pending_notifications()
         all_warnings = [*fired_msgs, *pending]
 
         # 死循环闸门：block 会把话语权交还给模型，它的下一段回复又会经过同一个
