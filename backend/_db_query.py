@@ -627,20 +627,59 @@ class QueryMixin:
     def _get_suggested_transitions(
         self, concept_id: int, limit: int = 10,
     ) -> list[TransitionSuggestion]:
+        """按转移权重取推荐跳转；当前节点是 plain 时，顺带给其中的 plain 推荐算书腰相似度和是否同 Tag。
+
+        输入：当前节点 ID、推荐条数上限。
+        输出：TransitionSuggestion 列表（按权重降序）。disclosure_similarity / shares_tag 只在
+        当前节点与该推荐都是 plain、且两边都有书腰向量时填写，其余为 None。只用库里已存的向量，不调 API。
+        """
         rows = self.conn.execute(
-            "SELECT ct.to_concept_id, c.name, c.disclosure, ct.weight "
+            "SELECT ct.to_concept_id, c.name, c.disclosure, c.role, ct.weight "
             "FROM concept_transitions ct "
             "JOIN concepts c ON ct.to_concept_id = c.id "
             "WHERE ct.from_concept_id = ? "
             "ORDER BY ct.weight DESC LIMIT ?",
             (concept_id, limit),
         ).fetchall()
+
+        sims: dict[int, float] = {}
+        shared: dict[int, bool] = {}
+        plain_ids = [r["to_concept_id"] for r in rows if r["role"] == "plain"]
+        own = self.conn.execute(
+            "SELECT c.role, ce.embedding FROM concepts c "
+            "LEFT JOIN concept_embeddings ce ON ce.concept_id = c.id WHERE c.id = ?",
+            (concept_id,),
+        ).fetchone()
+        expected_bytes = EMBEDDING_DIMENSIONS * 4
+        if (plain_ids and own and own["role"] == "plain"
+                and own["embedding"] and len(own["embedding"]) == expected_bytes):
+            own_vec = np.frombuffer(own["embedding"], dtype=np.float32)
+            own_vec = own_vec / np.linalg.norm(own_vec)
+            ph = ",".join("?" * len(plain_ids))
+            for e in self.conn.execute(
+                f"SELECT concept_id, embedding FROM concept_embeddings WHERE concept_id IN ({ph})",
+                plain_ids,
+            ).fetchall():
+                if e["embedding"] and len(e["embedding"]) == expected_bytes:
+                    v = np.frombuffer(e["embedding"], dtype=np.float32)
+                    sims[e["concept_id"]] = round(float(own_vec @ v / np.linalg.norm(v)), 4)
+            own_tags = {t["tag"] for t in self.conn.execute(
+                "SELECT tag FROM concept_tags WHERE concept_id = ?", (concept_id,)
+            ).fetchall()}
+            for t in self.conn.execute(
+                f"SELECT concept_id, tag FROM concept_tags WHERE concept_id IN ({ph})", plain_ids
+            ).fetchall():
+                if t["tag"] in own_tags:
+                    shared[t["concept_id"]] = True
+
         return [
             TransitionSuggestion(
                 concept_id=r["to_concept_id"],
                 concept_name=r["name"],
                 disclosure=r["disclosure"],
                 weight=round(r["weight"], 4),
+                disclosure_similarity=sims.get(r["to_concept_id"]),
+                shares_tag=shared.get(r["to_concept_id"], False) if r["to_concept_id"] in sims else None,
             )
             for r in rows
         ]

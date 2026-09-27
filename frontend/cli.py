@@ -32,6 +32,10 @@ from backend.text_patch import (
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+# read_concept 推荐块里，当前节点与某条 plain 推荐的书腰相似度达到这个值，就提示考虑合并/改书腰/并 Tag。
+# 2026-09-28 全库两两相似度：中位数 0.31，99.9% 分位 0.72；>=0.75 约 100 对。
+DISCLOSURE_SIMILAR_THRESHOLD = 0.75
+
 # 这条命令属于哪个会话。
 # 输入：宿主给它启动的命令设的环境变量（Claude Code / Codex / Antigravity 各一个，
 #   后两个名字尚未在真实宿主里实测）。
@@ -225,6 +229,21 @@ def _format_read_concept(result: ReadResult) -> str:
             if s.disclosure:
                 block.append(f"    ↳ When: {s.disclosure}")
         footer_blocks.append(block)
+
+        # 同属一个 Tag 的不提示：已经被归到一起管理，书腰相近可以是有意的
+        similar = [s for s in result.suggested_next
+                   if s.disclosure_similarity is not None
+                   and s.disclosure_similarity >= DISCLOSURE_SIMILAR_THRESHOLD
+                   and not s.shares_tag]
+        if similar:
+            block = ["[ 书腰相近的节点 ]"]
+            for s in similar:
+                block.append(
+                    f"  - 你正在读的 [{result.id}] {result.name}，和上面推荐的 "
+                    f"[{s.concept_id}] {s.concept_name}，书腰相似度 {s.disclosure_similarity:.2f}，"
+                    "不在同一个 Tag 里。可以考虑要不要合并、挂进同一个 Tag、或改书腰写清各自什么时候打开；"
+                    "看过觉得现在这样合理，也可以不动。")
+            footer_blocks.append(block)
 
     if footer_blocks:
         lines.append("-" * 60)

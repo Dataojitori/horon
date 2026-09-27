@@ -95,6 +95,9 @@ class TransitionSuggestion(BaseModel):
     concept_name: str
     weight: float
     disclosure: str | None = None
+    # 当前节点与推荐节点都是 plain 且都有书腰向量时才有值：两条书腰的余弦相似度，以及两者是否同属至少一个 Tag
+    disclosure_similarity: float | None = None
+    shares_tag: bool | None = None
 
 
 # ── Runtime Evaluation 返回 ───────────────────────────────────
