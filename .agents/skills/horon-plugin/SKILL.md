@@ -108,6 +108,7 @@ def audit_cluster(ctx):
 
 #### `on_mutation(ctx)` 作用域：
 - **`ctx.tag_name`** (`str`): 当前触发的 tag 名称。
+- **`ctx.adapter`** (`str | None`): 发起本次修改的宿主程序名（如 `"claude-code"`、`"codex"`、`"antigravity"`）；普通终端 CLI 为 `None`。
 - **`ctx.this`** (`ConceptProxy`): 被操作或被卷入的概念代理。
 - **`ctx.changed`** (`dict`): 本次操作的 diff 字典。没改动的键不存在。
   - 结构示例：
@@ -117,6 +118,7 @@ def audit_cluster(ctx):
     - `"role"`: `{"concept_id": 1, "old": "plain", "new": "logic"}`
     - `"lifespan"`: `{"concept_id": 1, "old": "session", "new": "permanent"}`
     - `"disclosure"`: `{"concept_id": 1, "old": "...", "new": "..."}`（删除书腰时 `new` 为 `None`）
+    - `"name"`: `{"concept_id": 1, "old": "旧主名称", "new": "新主名称"}`（主名称变更）
     - `"names"`: `{"added": [{"concept_id": 1, "name": "..."}], "removed": [...]}`（别名增删）
     - `"concepts"`: `{"removed": [{"concept_id": 1, "name": "...", "members": [2, 3]}]}`（概念被删除；被删概念本身与其成员都会收到这份 diff）
 - **`ctx.reject(msg)`**: 阻断当前操作并触发事务回滚（消息直接反馈给用户）。

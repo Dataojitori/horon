@@ -1255,7 +1255,13 @@ class MutationMixin:
                 self._plugin_cache.pop(new_name, None)
                 tag_msg += f" Plugin file '{old_name}.py' renamed to '{new_name}.py'."
 
-            diff = {}
+            diff = {
+                "name": {
+                    "concept_id": cid,
+                    "old": old_name,
+                    "new": new_name,
+                }
+            }
             if added_aliases:
                 diff["names"] = {"added": added_aliases, "removed": []}
             self._run_mutation_hooks(cid, diff)

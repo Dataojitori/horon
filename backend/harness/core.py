@@ -45,7 +45,8 @@ def wrap_harness_message(items: list[str]) -> str:
 def sync_session(db: HoronDB, adapter: str | None = None) -> str | None:
     """会话对齐（对齐的是 db 这个连接的会话）。每个钩子事件和每次 CLI 运行开头调用。
 
-    输入：adapter 是来自哪个宿主（claude-code / codex / antigravity），只供网页显示。
+    输入：adapter 是宿主程序名称（例如 claude-code、codex、antigravity），
+    供网页显示，也供 Tag 插件限制哪些宿主可以修改节点。
     行为：首次见到的会话 → 登记并清空它的临时状态，返回就绪提示；
       已登记的会话 → 只更新最后活跃时间。
       （不需要重算：逻辑节点和守卫不存状态，每次读取都按当前输入现算。）

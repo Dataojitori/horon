@@ -143,7 +143,18 @@ class PluginMixin:
             return []
         if proxy is None:
             proxy = self._make_concept_proxy(concept_id)
-        ctx = MutationContext(tag, proxy, changed, get_concept=self._make_concept_proxy)
+        session_row = self.conn.execute(
+            "SELECT adapter FROM sessions WHERE session_id = ?",
+            (self.session_id,),
+        ).fetchone()
+        adapter = session_row["adapter"]
+        ctx = MutationContext(
+            tag,
+            proxy,
+            changed,
+            get_concept=self._make_concept_proxy,
+            adapter=adapter,
+        )
         try:
             plugin["on_mutation"](ctx)
         except HookRejection as e:

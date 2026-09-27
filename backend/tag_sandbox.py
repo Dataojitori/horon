@@ -310,10 +310,15 @@ class MutationContext:
         this_proxy: ConceptProxy,
         changed: dict | None,
         get_concept: Callable[[int], ConceptProxy] | None = None,
+        adapter: str | None = None,
     ):
         self.tag_name = tag_name
         self.this = this_proxy
         self.changed = changed if changed is not None else {}
+        # Name of the host program that started this session, such as
+        # "claude-code", "codex", or "antigravity".  Plugins decide which
+        # names they allow; future hosts may register new names.
+        self.adapter = adapter
         self._get_concept = get_concept
         self._infos: list[str] = []
 

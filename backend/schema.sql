@@ -150,7 +150,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     session_id      TEXT PRIMARY KEY,
     created_at      TEXT NOT NULL,
     last_active_at  TEXT NOT NULL,
-    adapter         TEXT             -- 来自哪个宿主（claude-code / codex / antigravity），只供网页显示
+    adapter         TEXT             -- 宿主程序名称，如 claude-code、codex、antigravity；也可保存以后接入的新宿主名称
 );
 
 -- 每个会话里当前处于激活状态的 turn/session 传感器：有这一行 = 激活，熄灭即删除。

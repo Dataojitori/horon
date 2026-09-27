@@ -39,7 +39,8 @@ DISCLOSURE_SIMILAR_THRESHOLD = 0.75
 # 这条命令属于哪个会话。
 # 输入：宿主给它启动的命令设的环境变量（Claude Code / Codex / Antigravity 各一个，
 #   后两个名字尚未在真实宿主里实测）。
-# 输出：SESSION_ID 取第一个非空的变量值，ADAPTER 是对应的宿主名（只供网页显示）；
+# 输出：SESSION_ID 取第一个非空的变量值，ADAPTER 是宿主程序名称
+#   （例如 claude-code、codex、antigravity）；
 #   都没有 = 用户在终端手敲，记在离线会话 devonly，ADAPTER 为 None。
 # 读取记录、审计日志、激活状态显示、compile、inbox 都按这个会话算。
 # 嵌套启动（在一个宿主里启动另一个宿主）时可能同时存在多个变量，暂不处理。

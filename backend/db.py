@@ -175,13 +175,15 @@ class HoronDB(
 
     def init_session(self, adapter: str | None = None) -> None:
         """登记本连接的会话，清空它的临时状态（turn/session 传感器、CHAIN 进度、待发通知），再求值一遍。
-        adapter：来自哪个宿主，只供网页显示。"""
+        adapter：宿主程序名称（例如 claude-code、codex、antigravity），
+        供网页显示，也供 Tag 插件限制哪些宿主可以修改节点。"""
         self.touch_session(adapter)
         self.session_reset()
 
     def touch_session(self, adapter: str | None = None) -> None:
         """登记本连接的会话；已登记的只更新最后活跃时间（过期清理按这个时间算）。
-        adapter：来自哪个宿主，只供网页显示；传了就记下，没传不覆盖已有值。"""
+        adapter：宿主程序名称（例如 claude-code、codex、antigravity），
+        供网页显示，也供 Tag 插件限制哪些宿主可以修改节点；传了就记下，没传不覆盖已有值。"""
         now = _now()
         self.conn.execute(
             "INSERT INTO sessions (session_id, created_at, last_active_at, adapter) "
