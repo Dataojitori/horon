@@ -87,6 +87,29 @@ def detect_adapter_type(payload: dict[str, Any], explicit_adapter: str | None = 
     return "antigravity"
 
 
+# 各宿主 payload 里放会话 ID 的字段，按优先顺序。
+_SESSION_KEYS = {
+    "claude-code": ("session_id", "conversation_id", "conversationId"),
+    "codex": ("session_id", "conversation_id", "conversationId", "thread_id"),
+    "antigravity": ("conversationId", "conversation_id"),
+}
+
+
+def payload_session_id(payload: dict[str, Any], adapter_type: str) -> str:
+    """从钩子 payload 取出会话 ID。
+
+    输入：宿主送来的 payload；宿主名（决定按哪些字段找）。
+    输出：去掉首尾空白的会话 ID。
+    异常：所有候选字段都不是非空字符串时抛 ValueError。
+    """
+    keys = _SESSION_KEYS.get(adapter_type, _SESSION_KEYS["antigravity"])
+    for key in keys:
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    raise ValueError(f"{adapter_type} hook payload 缺少有效会话 ID（查找字段：{', '.join(keys)}）。")
+
+
 def dispatch_hook(
     event_name: str,
     payload: dict[str, Any],
@@ -94,13 +117,15 @@ def dispatch_hook(
     adapter_type: str = "antigravity",
 ) -> tuple[int, Any, str | None]:
     """通用生命周期事件分发入口。
-    
+
+    输入：事件名；payload；db 可由调用方传入（其会话须与 payload 一致），
+      不传则按 payload 里的会话新开一个连接，用完关闭。
     Returns:
         tuple[exit_code, stdout_data, stderr_data]
     """
     should_close = False
     if db is None:
-        db = HoronDB()
+        db = HoronDB(session_id=payload_session_id(payload, adapter_type))
         should_close = True
 
     try:

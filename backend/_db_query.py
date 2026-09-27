@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ._db_common import _now, transactional, OFFLINE_DEV_SESSION_ID
+from ._db_common import _now, transactional
 from .evaluator import load_active_states
 from .embedding import get_embedding, EMBEDDING_DIMENSIONS
 from .models import (
@@ -218,11 +218,11 @@ class QueryMixin:
         return concepts
 
     def get_all_concepts_overview(
-        self, tag_expr: str | None = None, session_id: str = OFFLINE_DEV_SESSION_ID,
+        self, tag_expr: str | None = None,
     ) -> list[dict]:
         """获取所有概念及变体表达式的概览（供 CLI 和前端展示用，无 N+1 问题）。
         tag_expr: 可选 tag 过滤表达式（"A & B" = AND, "A | B" = OR）。
-        session_id: 返回的 is_active 是这个会话下的激活状态。"""
+        返回的 is_active 是本连接会话下的激活状态。"""
         if tag_expr:
             subq, child_params = self._build_tag_filter_subquery(tag_expr)
             join_clause = f"JOIN ({subq}) ct_filter ON c.id = ct_filter.concept_id"
@@ -271,7 +271,7 @@ class QueryMixin:
             tags_by_cid.setdefault(r["concept_id"], []).append(r["tag"])
 
         _OP = {"CHAIN": " → ", "AND": " & ", "OR": " | "}
-        states = load_active_states(self.conn, session_id)
+        states = load_active_states(self.conn, self.session_id)
 
         result = []
         for c in concepts:
@@ -458,8 +458,8 @@ class QueryMixin:
 
     # ── read_concept ─────────────────────────────────────────────────────────
 
-    def read_concept(self, concept, session_id: str = OFFLINE_DEV_SESSION_ID) -> ReadResult:
-        """读取概念的完整视图。激活状态与 CHAIN 进度按 session_id 这个会话显示。"""
+    def read_concept(self, concept) -> ReadResult:
+        """读取概念的完整视图。激活状态与 CHAIN 进度按本连接的会话显示。"""
         cid = self._resolve_id(concept)
         row = self.conn.execute(
             "SELECT * FROM concepts WHERE id = ?", (cid,)
@@ -467,7 +467,7 @@ class QueryMixin:
         if not row:
             raise ValueError(f"Concept not found: {concept}")
 
-        states = load_active_states(self.conn, session_id)
+        states = load_active_states(self.conn, self.session_id)
         activation_rule = self._get_activation_rule(cid)
         members = self._get_compose_members(cid, states)
         sensor_hooks = self._get_sensor_hooks(cid)
@@ -481,7 +481,7 @@ class QueryMixin:
                 "SELECT current_order FROM active_chain_instances "
                 "WHERE chain_concept_id = ? AND session_id = ? "
                 "ORDER BY current_order",
-                (cid, session_id),
+                (cid, self.session_id),
             ).fetchall()
             active_chain_orders = [r["current_order"] for r in ac_rows]
 
@@ -646,7 +646,7 @@ class QueryMixin:
         ]
 
     @transactional
-    def record_transition(self, to_ids: list[int], session_id: str = OFFLINE_DEV_SESSION_ID) -> None:
+    def record_transition(self, to_ids: list[int]) -> None:
         """Record an attention transition A → B with surprise-weighted update.
 
         一个节点的出边权重是"从这里出发、下一步读什么"的分布。每次读取，给每个来源
@@ -673,7 +673,7 @@ class QueryMixin:
             "SELECT id, concept_id, timestamp, sub_action FROM cli_audit_log "
             "WHERE command = 'read_concept' AND success = 1 AND session_id = ? "
             "ORDER BY id DESC LIMIT 30",
-            (session_id,),
+            (self.session_id,),
         ).fetchall()
 
         if not recent_reads:

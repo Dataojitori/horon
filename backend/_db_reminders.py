@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from ._db_common import OFFLINE_DEV_SESSION_ID, _validate_condition_ast, _now, transactional
+from ._db_common import _validate_condition_ast, _now, transactional
 from .evaluator import load_active_states
 from .models import MutationResult
 
@@ -149,10 +149,10 @@ class ReminderMixin:
         }
 
     @transactional
-    def evaluate_inbox(self, session_id: str = OFFLINE_DEV_SESSION_ID) -> dict:
+    def evaluate_inbox(self) -> dict:
         """Pull all reminders, eval conditions in sandbox, return inbox.
 
-        条件里的 status() 按 session_id 这个会话的激活状态回答。
+        条件里的 status() 按本连接会话的激活状态回答。
 
         Returns dict with keys: triggered (list), errors (list),
         quiet_count (int).  Triggered reminders get last_fired_at updated.
@@ -166,7 +166,7 @@ class ReminderMixin:
         if not rows:
             return {"triggered": [], "errors": [], "quiet_count": 0}
 
-        sandbox_globals = self._build_sandbox_globals(load_active_states(self.conn, session_id))
+        sandbox_globals = self._build_sandbox_globals(load_active_states(self.conn, self.session_id))
         triggered: list[dict] = []
         errors: list[dict] = []
         quiet_count = 0

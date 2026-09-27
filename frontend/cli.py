@@ -314,14 +314,14 @@ def _format_login(db, recent_n: int) -> str:
         pointer = f"(找不到 Horon 使用说明书 {_SKILL_PATH})"
     parts = [pointer]
 
-    boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot", session_id=SESSION_ID)]
+    boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
     header = f"════════ [1/2] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
     if not boot_ids:
         parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
     else:
-        results = [db.read_concept(cid, session_id=SESSION_ID) for cid in boot_ids]
+        results = [db.read_concept(cid) for cid in boot_ids]
         try:
-            db.record_transition([r.id for r in results], session_id=SESSION_ID)
+            db.record_transition([r.id for r in results])
         except Exception:
             logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
         bodies = [_format_read_concept(r) for r in results]
@@ -713,7 +713,7 @@ def _build_parser():
 def _dispatch(args, db):
     """Execute a single command, return result object."""
     if args.command == "reset":
-        db.session_reset(session_id=SESSION_ID)
+        db.session_reset()
         return RawOutput(f"Success. Session '{SESSION_ID}' reset (ephemeral sensors & chains cleared).")
 
     elif args.command == "create_concept":
@@ -784,7 +784,7 @@ def _dispatch(args, db):
         return RawOutput(_format_search_concepts(results))
 
     elif args.command == "list_concepts":
-        overviews = db.get_all_concepts_overview(tag_expr=args.tag, session_id=SESSION_ID)
+        overviews = db.get_all_concepts_overview(tag_expr=args.tag)
         return RawOutput(_format_list_concepts(overviews))
 
     elif args.command == "add":
@@ -836,9 +836,9 @@ def _dispatch(args, db):
 
     elif args.command == "read_concept":
         # 同一节点传了多次（含名字与别名混用）只保留一份
-        results = list({r.id: r for r in (db.read_concept(c, session_id=SESSION_ID) for c in args.concept)}.values())
+        results = list({r.id: r for r in (db.read_concept(c) for c in args.concept)}.values())
         try:
-            db.record_transition([r.id for r in results], session_id=SESSION_ID)
+            db.record_transition([r.id for r in results])
         except Exception:
             logging.getLogger(__name__).debug(
                 "record_transition failed", exc_info=True)
@@ -891,7 +891,7 @@ def _dispatch(args, db):
                 "  remind --del <id>")
 
     elif args.command == "inbox":
-        result = db.evaluate_inbox(session_id=SESSION_ID)
+        result = db.evaluate_inbox()
         triggered = result["triggered"]
         errors = result["errors"]
         quiet = result["quiet_count"]
@@ -924,7 +924,6 @@ def _dispatch(args, db):
         return db.compile(
             target=args.target,
             assume=args.assume,
-            session_id=SESSION_ID,
         )
 
     elif args.command == "recent":
@@ -967,7 +966,7 @@ def _audited_dispatch(args, db):
     try:
         result = _dispatch(args, db)
     except Exception:
-        db.log_action(command=cmd, sub_action=sub_action, session_id=SESSION_ID, success=False)
+        db.log_action(command=cmd, sub_action=sub_action, success=False)
         raise
 
     if isinstance(result, BatchReadOutput):
@@ -975,7 +974,7 @@ def _audited_dispatch(args, db):
         batch_tag = f"batch:{uuid.uuid4().hex}"
         for r in result.results:
             db.log_action(command=cmd, concept_id=r.id, concept_name=r.name,
-                          sub_action=batch_tag, session_id=SESSION_ID, success=True)
+                          sub_action=batch_tag, success=True)
         return result
 
     concept_id = None
@@ -997,7 +996,6 @@ def _audited_dispatch(args, db):
         concept_id=concept_id,
         concept_name=concept_name,
         sub_action=sub_action,
-        session_id=SESSION_ID,
         success=True,
     )
     return result
@@ -1069,10 +1067,10 @@ def _parse_batch_commands(text: str) -> list[tuple[int, list[str], str]]:
 def main():
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB(snapshot_mode=True)
+    db = HoronDB(snapshot_mode=True, session_id=SESSION_ID)
     if SESSION_ID != OFFLINE_DEV_SESSION_ID:
         # 宿主没装钩子时这个会话还没登记；首次登记会顺带算一遍它的电路状态
-        sync_session(db, SESSION_ID, ADAPTER)
+        sync_session(db, ADAPTER)
 
     try:
         if args.command == "batch":

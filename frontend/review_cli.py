@@ -27,6 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from backend._db_common import OFFLINE_DEV_SESSION_ID
 from backend.db import HoronDB
 from frontend.cli import (
     RawOutput,
@@ -123,7 +124,7 @@ def main() -> None:
     """Parse args, run one read-only command, print the result."""
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB()
+    db = HoronDB(session_id=OFFLINE_DEV_SESSION_ID)
     try:
         _print(_dispatch(args, db))
     except Exception as e:

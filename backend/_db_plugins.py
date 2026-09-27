@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from . import tag_sandbox
+from .evaluator import load_active_states
 from .tag_sandbox import (
     AuditContext,
     ClusterProxy,
@@ -102,7 +103,8 @@ class PluginMixin:
             fetch_name=field("name", ""),
             fetch_content=field("content", None),
             fetch_role=field("role", "plain"),
-            fetch_is_active=field("is_active", 0),
+            # 按本连接的会话读：插件看到的通电状态和同一会话里 read_concept 看到的一致
+            fetch_is_active=lambda: load_active_states(conn, self.session_id).get(concept_id, 0),
             fetch_lifespan=field("lifespan", None),
             fetch_activation_type=field("activation_type", None),
             fetch_on_fire=field("on_fire", None),

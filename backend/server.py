@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import threading
 from collections import Counter
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,7 +24,9 @@ _db_lock = threading.Lock()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db
-    db = HoronDB(check_same_thread=False)
+    # 全局连接只服务不看会话的接口（图结构、搜索、审计、快照），会话定为 devonly；
+    # 要按会话显示激活状态的接口用 _session_db 另开连接。
+    db = HoronDB(check_same_thread=False, session_id=OFFLINE_DEV_SESSION_ID)
     yield
     if db:
         db.close()
@@ -37,6 +39,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@contextmanager
+def _session_db(session_id: str):
+    """按请求带的会话开一个只用于本次请求的连接，用完关闭。
+    HoronDB 的会话在创建时定下、之后不变，所以不能拿全局连接去切会话。"""
+    sdb = HoronDB(session_id=session_id)
+    try:
+        yield sdb
+    finally:
+        sdb.close()
 
 
 @app.get("/api/sessions")
@@ -177,8 +190,8 @@ def get_concept(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
     """Full concept detail for Inspector / Dissection View（激活状态按 session_id 显示）。"""
     assert db is not None
     try:
-        with _db_lock:
-            result = db.read_concept(concept_id, session_id)
+        with _db_lock, _session_db(session_id) as sdb:
+            result = sdb.read_concept(concept_id)
         return result.model_dump()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -189,10 +202,10 @@ def get_neighborhood(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
     """解剖视图使用的邻域接口（激活状态按 session_id 显示）。"""
     assert db is not None
     try:
-        with _db_lock:
-            focal = db.read_concept(concept_id, session_id)
-            states = load_active_states(db.conn, session_id)
-            parent_rows = db.conn.execute(
+        with _db_lock, _session_db(session_id) as sdb:
+            focal = sdb.read_concept(concept_id)
+            states = load_active_states(sdb.conn, sdb.session_id)
+            parent_rows = sdb.conn.execute(
                 "SELECT DISTINCT c.id, c.name, c.activation_type "
                 "FROM compose_members cm "
                 "JOIN concepts c ON c.id = cm.parent_concept_id "

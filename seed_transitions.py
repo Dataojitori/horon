@@ -204,8 +204,9 @@ def open_horon_db():
           但绕过这层拿到的连接不保证外键打开，种子写歪了会留下悬空引用。
     输出：HoronDB 实例（调用方负责 .conn.commit() 与 .conn.close()）。
     """
+    from backend._db_common import OFFLINE_DEV_SESSION_ID
     from backend.db import HoronDB
-    return HoronDB()
+    return HoronDB(session_id=OFFLINE_DEV_SESSION_ID)
 
 
 def cmd_seed(args: argparse.Namespace) -> None:

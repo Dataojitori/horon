@@ -43,8 +43,16 @@ class HoronDB(
     CompileMixin,
     SnapshotMixin,
 ):
-    def __init__(self, *, db_path: str | Path | None = None, check_same_thread: bool = True, snapshot_mode: bool = False):
+    def __init__(self, *, session_id: str, db_path: str | Path | None = None, check_same_thread: bool = True,
+                 snapshot_mode: bool = False):
+        """session_id：这个连接代表哪个会话，创建时定下，之后不变。
+        读激活状态、求值、通知队列、审计日志、插件看到的 is_active 全部按它算。
+        会话在进程启动时就已确定：CLI 取宿主环境变量（没有则 devonly），钩子取 payload，
+        网页后台按每个请求带的会话各开一个连接。"""
+        if not session_id or not isinstance(session_id, str) or not session_id.strip():
+            raise ValueError("HoronDB 要求非空的 session_id。")
         self.snapshot_mode = snapshot_mode
+        self.session_id = session_id.strip()
         target_path = Path(db_path) if db_path else _DB_PATH
         is_new = not target_path.exists() or target_path.stat().st_size == 0
         self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
@@ -165,14 +173,14 @@ class HoronDB(
         self.conn.commit()
         return len(expired_ids)
 
-    def init_session(self, session_id: str, adapter: str | None = None) -> None:
-        """登记一个新会话，清空它的临时状态（turn/session 传感器、CHAIN 进度、待发通知），再求值一遍。
+    def init_session(self, adapter: str | None = None) -> None:
+        """登记本连接的会话，清空它的临时状态（turn/session 传感器、CHAIN 进度、待发通知），再求值一遍。
         adapter：来自哪个宿主，只供网页显示。"""
-        self.touch_session(session_id, adapter)
-        self.session_reset(session_id)
+        self.touch_session(adapter)
+        self.session_reset()
 
-    def touch_session(self, session_id: str, adapter: str | None = None) -> None:
-        """登记会话；已登记的只更新最后活跃时间（过期清理按这个时间算）。
+    def touch_session(self, adapter: str | None = None) -> None:
+        """登记本连接的会话；已登记的只更新最后活跃时间（过期清理按这个时间算）。
         adapter：来自哪个宿主，只供网页显示；传了就记下，没传不覆盖已有值。"""
         now = _now()
         self.conn.execute(
@@ -180,25 +188,23 @@ class HoronDB(
             "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(session_id) DO UPDATE SET last_active_at = excluded.last_active_at, "
             "adapter = COALESCE(excluded.adapter, adapter)",
-            (session_id, now, now, adapter),
+            (self.session_id, now, now, adapter),
         )
         self.conn.commit()
 
-    def _evaluator(self, session_id: str = OFFLINE_DEV_SESSION_ID) -> GraphEvaluator:
-        """求值器工厂：按指定会话读写激活状态。
-        不指定时用离线会话 devonly——CLI 的改动命令（set/add/delete 等）都走这个默认值，
-        其他会话在自己下次 sync_session 时重算跟上。"""
-        return GraphEvaluator(self.conn, session_id=session_id)
+    def _evaluator(self) -> GraphEvaluator:
+        """求值器工厂：按本连接的会话读写激活状态。其他会话在自己下次 sync_session 时重算跟上。"""
+        return GraphEvaluator(self.conn, session_id=self.session_id)
 
-    def session_reset(self, session_id: str) -> EvaluationResult:
-        """重置指定会话：清空它的 CHAIN 进度、待发通知与已激活的 turn/session 传感器。"""
-        res = self._evaluator(session_id).reset_session()
+    def session_reset(self) -> EvaluationResult:
+        """重置本连接的会话：清空它的 CHAIN 进度、待发通知与已激活的 turn/session 传感器。"""
+        res = self._evaluator().reset_session()
         self.conn.commit()
         return res
 
-    def turn_end(self, session_id: str) -> EvaluationResult:
-        """单回合结束：熄灭指定会话里的 turn 传感器。"""
-        res = self._evaluator(session_id).end_turn()
+    def turn_end(self) -> EvaluationResult:
+        """单回合结束：熄灭本连接会话里的 turn 传感器。"""
+        res = self._evaluator().end_turn()
         self.conn.commit()
         return res
 
@@ -206,23 +212,21 @@ class HoronDB(
         self,
         activated_sensors: list[int] | None = None,
         deactivated_sensors: list[int] | None = None,
-        session_id: str = OFFLINE_DEV_SESSION_ID,
     ) -> EvaluationResult:
-        """在指定会话下执行单趟 Kahn 拓扑排序求值与时序/抑制计算。"""
-        res = self._evaluator(session_id).evaluate(
+        """在本连接的会话下执行单趟 Kahn 拓扑排序求值与时序/抑制计算。"""
+        res = self._evaluator().evaluate(
             activated_sensors=activated_sensors,
             deactivated_sensors=deactivated_sensors,
         )
         self.conn.commit()
         return res
 
-    def push_pending_notifications(self, session_id: str, messages: list[str]) -> None:
-        """向指定会话的待消费通知队列追加一条或多条消息。"""
-        if not messages or not session_id or not session_id.strip():
+    def push_pending_notifications(self, messages: list[str]) -> None:
+        """向本连接会话的待消费通知队列追加一条或多条消息。"""
+        if not messages:
             return
-        clean_id = session_id.strip()
         now = _now()
-        rows = [(clean_id, msg.strip(), now) for msg in messages if msg and msg.strip()]
+        rows = [(self.session_id, msg.strip(), now) for msg in messages if msg and msg.strip()]
         if rows:
             self.conn.executemany(
                 "INSERT INTO pending_notifications (session_id, message, created_at) VALUES (?, ?, ?)",
@@ -230,14 +234,11 @@ class HoronDB(
             )
             self.conn.commit()
 
-    def pop_pending_notifications(self, session_id: str) -> list[str]:
-        """提取并清空指定会话在队列中积压的所有未读通知（FIFO 按入队顺序）。"""
-        if not session_id or not session_id.strip():
-            return []
-        clean_id = session_id.strip()
+    def pop_pending_notifications(self) -> list[str]:
+        """提取并清空本连接会话在队列中积压的所有未读通知（FIFO 按入队顺序）。"""
         rows = self.conn.execute(
             "SELECT id, message FROM pending_notifications WHERE session_id = ? ORDER BY id ASC",
-            (clean_id,),
+            (self.session_id,),
         ).fetchall()
         if not rows:
             return []
@@ -305,7 +306,6 @@ class HoronDB(
                    concept_id: int | None = None,
                    concept_name: str | None = None,
                    sub_action: str | None = None,
-                   session_id: str = OFFLINE_DEV_SESSION_ID,
                    success: bool = True,
                    **kwargs) -> None:
         """INSERT into cli_audit_log. 审计写失败不打断主操作。"""
@@ -315,7 +315,7 @@ class HoronDB(
                 " (session_id, timestamp, command, concept_id, concept_name,"
                 "  sub_action, success)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session_id, _now(), command, concept_id, concept_name,
+                (self.session_id, _now(), command, concept_id, concept_name,
                  sub_action, int(success)),
             )
             self.conn.commit()
