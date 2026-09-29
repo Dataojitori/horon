@@ -1,6 +1,7 @@
-import React, { useState, useRef, useCallback, useMemo } from "react";
+import React, { useState, useRef, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkBreaks from "remark-breaks";
 import { formatBytes, type ConceptDetail } from "../types";
 import "./InspectorSidebar.css";
 
@@ -27,9 +28,11 @@ function maxInspectorWidth(): number {
 
 function loadInspectorWidth(): number {
   try {
-    const v = Number(localStorage.getItem(INSPECTOR_WIDTH_KEY));
+    // 没存过时 getItem 返回 null，Number(null) 是 0，会被钳成最小宽度，所以先判空。
+    const raw = localStorage.getItem(INSPECTOR_WIDTH_KEY);
+    const v = raw == null ? NaN : Number(raw);
     if (Number.isFinite(v)) {
-      return Math.min(INSPECTOR_MAX_W, Math.max(INSPECTOR_MIN_W, v));
+      return Math.min(maxInspectorWidth(), Math.max(INSPECTOR_MIN_W, v));
     }
   } catch {
     /* 无痕/禁存储时回默认宽度 */
@@ -37,21 +40,10 @@ function loadInspectorWidth(): number {
   return INSPECTOR_DEFAULT_W;
 }
 
-// 库里行首列表按规范写成 `\- `（防 markdown 误解析），直接渲染会露出反斜杠。
-// 显示前还原成正常列表，只动显示、不动存量。限定行首 `\- `，正文中间的不碰。
-function toDisplayMarkdown(src: string): string {
-  return src.replace(/^\\- /gm, "- ");
-}
-
 export default function InspectorSidebar({ concept, open, onClose, onNavigate }: Props) {
   const [width, setWidth] = useState(loadInspectorWidth);
   const widthRef = useRef(width);
   const draggingRef = useRef(false);
-
-  const displayContent = useMemo(
-    () => toDisplayMarkdown(concept?.content ?? ""),
-    [concept?.id, concept?.content]
-  );
 
   const onDragMove = useCallback((e: MouseEvent) => {
     if (!draggingRef.current) return;
@@ -357,8 +349,9 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
           <div className="inspector-section">
             <h3 className="section-label">Content</h3>
             <div className="field-content content-content md-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {displayContent}
+              {/* 节点正文习惯用单换行分行；remark-breaks 让它照原样换行，不被并成一段 */}
+              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+                {concept.content}
               </ReactMarkdown>
             </div>
           </div>
