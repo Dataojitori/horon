@@ -111,6 +111,14 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
       });
   }, [session]);
 
+  // 审核页跳转节点。用 useCallback 固定引用：ReviewCard 是 memo 组件，
+  // 这里若是内联箭头，App 每次重渲染（比如同意后 reloadGraph）都会让整页卡片跟着重渲染。
+  const handleReviewNavigate = useCallback((nodeId: number) => {
+    setFocalId(nodeId);
+    setMode("dissection");
+    inspectNode(nodeId);
+  }, [inspectNode]);
+
   // 刚进入主界面、以及每次切换会话时：按当前会话重新取整张图（顺带刷新待审数量），
   // 侧栏开着的节点也按新会话刷新。
   // 依赖故意只写 session：侧栏换了别的节点不该触发重新取图。
@@ -256,11 +264,7 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
         {mode === "review" && (
           <ReviewView
             onRefreshGraph={reloadGraph}
-            onNavigateToNode={(nodeId) => {
-              setFocalId(nodeId);
-              setMode("dissection");
-              inspectNode(nodeId);
-            }}
+            onNavigateToNode={handleReviewNavigate}
           />
         )}
       </main>

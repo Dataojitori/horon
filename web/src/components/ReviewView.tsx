@@ -399,7 +399,7 @@ export default function ReviewView({
                 <button
                   className="review-btn-secondary"
                   disabled={currentPage <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  onClick={() => setPage(currentPage - 1)}
                 >
                   上一页
                 </button>
@@ -409,7 +409,7 @@ export default function ReviewView({
                 <button
                   className="review-btn-secondary"
                   disabled={currentPage >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  onClick={() => setPage(currentPage + 1)}
                 >
                   下一页
                 </button>
