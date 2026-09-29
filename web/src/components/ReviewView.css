@@ -403,3 +403,43 @@
   font-size: 13px;
   margin-bottom: 12px;
 }
+
+/* ── 折叠 diff 开关 ─────────────────────────── */
+
+.review-btn-toggle {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.review-btn-toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── 分页条 ─────────────────────────────────── */
+
+.review-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 8px 0 16px;
+}
+
+.review-pager-label {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--text-dim);
+}
+
+.review-pager .review-btn-secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
