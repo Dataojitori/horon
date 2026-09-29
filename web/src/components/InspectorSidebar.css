@@ -584,3 +584,185 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ── 侧栏拖拽条 ─────────────────────────── */
+
+.inspector-resize-handle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 9px;
+  margin-left: -4px;
+  cursor: ew-resize;
+  z-index: 5;
+}
+
+.inspector-resize-handle:hover,
+.inspector-resize-handle:active {
+  background: linear-gradient(
+    to right,
+    transparent 3px,
+    var(--accent-blue) 3px,
+    var(--accent-blue) 5px,
+    transparent 5px
+  );
+}
+
+/* ── Markdown 正文 ───────────────────────── */
+
+.md-content {
+  white-space: normal;
+  overflow-x: auto;
+}
+
+.md-content > *:first-child {
+  margin-top: 0;
+}
+
+.md-content > *:last-child {
+  margin-bottom: 0;
+}
+
+.md-content p {
+  margin: 0 0 8px;
+}
+
+.md-content h1,
+.md-content h2,
+.md-content h3,
+.md-content h4 {
+  line-height: 1.4;
+}
+
+/* 一级标题描边压住，后面几级逐级收：标题扫一眼就知道是哪层 */
+.md-content h1 {
+  font-size: 16px;
+  color: var(--text-primary);
+  margin: 12px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border-glass);
+}
+
+.md-content h2 {
+  font-size: 15px;
+  color: var(--accent-cyan);
+  margin: 14px 0 6px;
+}
+
+.md-content h3 {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin: 10px 0 6px;
+}
+
+.md-content h4 {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 8px 0 4px;
+}
+
+.md-content strong {
+  color: var(--text-primary);
+}
+
+.md-content li::marker {
+  color: var(--accent-blue);
+}
+
+.md-content hr {
+  border: none;
+  border-top: 1px solid var(--border-glass);
+  margin: 12px 0;
+}
+
+.md-content ul,
+.md-content ol {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
+
+.md-content li {
+  margin: 2px 0;
+}
+
+.md-content code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.07);
+  padding: 1px 5px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+.md-content pre {
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0 0 8px;
+}
+
+.md-content pre code {
+  background: none;
+  padding: 0;
+}
+
+.md-content table {
+  border-collapse: collapse;
+  margin: 0 0 8px;
+  font-size: 11px;
+}
+
+.md-content th,
+.md-content td {
+  border: 1px solid var(--border-glass);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.md-content th {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.md-content blockquote {
+  margin: 0 0 8px;
+  padding: 4px 0 4px 10px;
+  border-left: 2px solid var(--accent-blue);
+  color: var(--text-secondary);
+}
+
+.md-content a {
+  color: var(--accent-blue);
+}
+
+.md-content img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+/* ── 侧栏细滚动条 ─────────────────────────── */
+
+.inspector-body {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-glass-hover) transparent;
+}
+
+.inspector-body::-webkit-scrollbar {
+  width: 8px;
+}
+
+.inspector-body::-webkit-scrollbar-thumb {
+  background: var(--border-glass-hover);
+  border-radius: 4px;
+}
+
+.inspector-body::-webkit-scrollbar-thumb:hover {
+  background: var(--text-dim);
+}
+
+.inspector-body::-webkit-scrollbar-track {
+  background: transparent;
+}

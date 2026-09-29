@@ -1,3 +1,6 @@
+import React, { useState, useRef, useCallback, useMemo } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { formatBytes, type ConceptDetail } from "../types";
 import "./InspectorSidebar.css";
 
@@ -8,13 +11,104 @@ interface Props {
   onNavigate: (id: number) => void;
 }
 
+// 侧栏宽度可拖：默认 380px，记 localStorage，下次打开还在。
+// 上限取 min(1200, 视口-240)，保证左边星图永远留一块可点。
+const INSPECTOR_MIN_W = 300;
+const INSPECTOR_MAX_W = 1200;
+const INSPECTOR_DEFAULT_W = 380;
+const INSPECTOR_WIDTH_KEY = "horon:inspector-width";
+
+function maxInspectorWidth(): number {
+  return Math.max(
+    INSPECTOR_MIN_W,
+    Math.min(INSPECTOR_MAX_W, window.innerWidth - 240)
+  );
+}
+
+function loadInspectorWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(INSPECTOR_WIDTH_KEY));
+    if (Number.isFinite(v)) {
+      return Math.min(INSPECTOR_MAX_W, Math.max(INSPECTOR_MIN_W, v));
+    }
+  } catch {
+    /* 无痕/禁存储时回默认宽度 */
+  }
+  return INSPECTOR_DEFAULT_W;
+}
+
+// 库里行首列表按规范写成 `\- `（防 markdown 误解析），直接渲染会露出反斜杠。
+// 显示前还原成正常列表，只动显示、不动存量。限定行首 `\- `，正文中间的不碰。
+function toDisplayMarkdown(src: string): string {
+  return src.replace(/^\\- /gm, "- ");
+}
+
 export default function InspectorSidebar({ concept, open, onClose, onNavigate }: Props) {
+  const [width, setWidth] = useState(loadInspectorWidth);
+  const widthRef = useRef(width);
+  const draggingRef = useRef(false);
+
+  const displayContent = useMemo(
+    () => toDisplayMarkdown(concept?.content ?? ""),
+    [concept?.id, concept?.content]
+  );
+
+  const onDragMove = useCallback((e: MouseEvent) => {
+    if (!draggingRef.current) return;
+    const next = Math.min(
+      maxInspectorWidth(),
+      Math.max(INSPECTOR_MIN_W, window.innerWidth - e.clientX)
+    );
+    widthRef.current = next;
+    setWidth(next);
+  }, []);
+
+  const stopDrag = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    document.body.style.cursor = "";
+    window.removeEventListener("mousemove", onDragMove);
+    window.removeEventListener("mouseup", stopDrag);
+    try {
+      localStorage.setItem(INSPECTOR_WIDTH_KEY, String(widthRef.current));
+    } catch {
+      /* 存不住就算了，下次回默认 */
+    }
+  }, [onDragMove]);
+
+  const startDrag = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      draggingRef.current = true;
+      document.body.style.cursor = "ew-resize";
+      window.addEventListener("mousemove", onDragMove);
+      window.addEventListener("mouseup", stopDrag);
+    },
+    [onDragMove, stopDrag]
+  );
+
+  const resetWidth = useCallback(() => {
+    widthRef.current = INSPECTOR_DEFAULT_W;
+    setWidth(INSPECTOR_DEFAULT_W);
+    try {
+      localStorage.removeItem(INSPECTOR_WIDTH_KEY);
+    } catch {
+      /* 忽略 */
+    }
+  }, []);
+
   if (!concept) return null;
 
   const altAliases = concept.aliases?.filter((a) => a !== concept.name) ?? [];
 
   return (
-    <div className={`inspector ${open ? "open" : ""}`}>
+    <div className={`inspector ${open ? "open" : ""}`} style={{ width }}>
+      <div
+        className="inspector-resize-handle"
+        onMouseDown={startDrag}
+        onDoubleClick={resetWidth}
+        title="拖拽调整宽度，双击恢复默认"
+      />
       <div className="inspector-header">
         <div className="inspector-title-group">
           <h2 className="inspector-title">{concept.name}</h2>
@@ -258,12 +352,14 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
           </div>
         )}
 
-        {/* ── Content ── */}
+        {/* ── Content：始终按 Markdown 渲染 ── */}
         {concept.content && (
           <div className="inspector-section">
             <h3 className="section-label">Content</h3>
-            <div className="field-content content-content">
-              {concept.content}
+            <div className="field-content content-content md-content">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                {displayContent}
+              </ReactMarkdown>
             </div>
           </div>
         )}
