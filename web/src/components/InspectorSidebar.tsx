@@ -349,8 +349,8 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
           <div className="inspector-section">
             <h3 className="section-label">Content</h3>
             <div className="field-content content-content md-content">
-              {/* 节点正文习惯用单换行分行；remark-breaks 让它照原样换行，不被并成一段 */}
-              <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]}>
+              {/* 单换行照原样换行（remark-breaks）；只认 ~~ 为删除线，正文里 3~5 这类范围写法不会被误划 */}
+              <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkBreaks]}>
                 {concept.content}
               </ReactMarkdown>
             </div>
