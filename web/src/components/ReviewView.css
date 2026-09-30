@@ -404,23 +404,54 @@
   margin-bottom: 12px;
 }
 
-/* ── 折叠 diff 开关 ─────────────────────────── */
+/* ── 全局 diff 显示模式（全文 / 仅改动） ───── */
 
-.review-btn-toggle {
-  padding: 6px 10px;
+.review-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.review-mode-switch {
+  display: inline-flex;
+  border: 1px solid var(--border-glass);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.review-mode-switch button {
+  padding: 6px 12px;
   font-size: 12px;
   font-family: var(--font-sans);
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
   color: var(--text-dim);
-  border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s;
 }
 
-.review-btn-toggle:hover {
+.review-mode-switch button + button {
+  border-left: 1px solid var(--border-glass);
+}
+
+.review-mode-switch button:hover {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.06);
+}
+
+.review-mode-switch button.active {
+  color: var(--accent-blue);
+  background: rgba(74, 158, 255, 0.15);
+}
+
+/* "仅改动"模式下被折起来的连续未改动行 */
+.diff-skip {
+  justify-content: center;
+  padding: 3px 0;
+  color: var(--text-dim);
+  font-size: 11px;
+  background: rgba(74, 158, 255, 0.06);
+  user-select: none;
 }
 
 /* ── 分页条 ─────────────────────────────────── */

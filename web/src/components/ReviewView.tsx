@@ -20,6 +20,49 @@ interface DiffLine {
 // 低端机器上一次点击就要对账几万个节点——分页把这个上界固定下来。
 const PAGE_SIZE = 20;
 
+// "仅改动"模式下，每处改动上下各保留几行未改动的上下文。
+const DIFF_CONTEXT = 2;
+
+// 全局显示模式："full" 显示全文 diff；"changes" 只显示改动行及其上下文，
+// 连续的未改动行折成一行"省略 N 行"。存 localStorage，刷新页面后保持上次的选择。
+type DiffMode = "full" | "changes";
+const DIFF_MODE_KEY = "horon.review.diffMode";
+
+// 折叠后的一行：要么是原 diff 行，要么是"省略了 count 行未改动"的占位。
+type FoldedRow = DiffLine | { type: "skip"; count: number };
+
+/**
+ * 输入：完整的 diff 行序列、上下文行数 context。
+ * 行为：保留所有 added/removed 行，以及它们前后各 context 行的 unchanged 行；
+ *       其余连续的 unchanged 行合并成一个 { type: "skip", count } 占位。
+ * 输出：折叠后的行序列。没有任何改动时返回单个 skip（整段未改动）。
+ */
+function foldUnchanged(lines: DiffLine[], context: number): FoldedRow[] {
+  const keep = new Array(lines.length).fill(false);
+  lines.forEach((dl, idx) => {
+    if (dl.type === "unchanged") return;
+    const lo = Math.max(0, idx - context);
+    const hi = Math.min(lines.length - 1, idx + context);
+    for (let k = lo; k <= hi; k++) keep[k] = true;
+  });
+
+  const out: FoldedRow[] = [];
+  let skipped = 0;
+  lines.forEach((dl, idx) => {
+    if (keep[idx]) {
+      if (skipped > 0) {
+        out.push({ type: "skip", count: skipped });
+        skipped = 0;
+      }
+      out.push(dl);
+    } else {
+      skipped++;
+    }
+  });
+  if (skipped > 0) out.push({ type: "skip", count: skipped });
+  return out;
+}
+
 function computeLcsDiff(oldLines: string[], newLines: string[]): DiffLine[] {
   const m = oldLines.length;
   const n = newLines.length;
@@ -76,9 +119,11 @@ function computeLcsDiff(oldLines: string[], newLines: string[]): DiffLine[] {
 function DiffViewer({
   original,
   current,
+  mode,
 }: {
   original: string | null;
   current: string | null;
+  mode: DiffMode;
 }) {
   const diffLines = useMemo<DiffLine[]>(() => {
     const oldLines = original != null ? original.split("\n") : [];
@@ -103,6 +148,11 @@ function DiffViewer({
     return computeLcsDiff(oldLines, newLines);
   }, [original, current]);
 
+  const rows = useMemo<FoldedRow[]>(
+    () => (mode === "changes" ? foldUnchanged(diffLines, DIFF_CONTEXT) : diffLines),
+    [diffLines, mode]
+  );
+
   if (original == null && current == null) {
     return <div className="diff-empty">(无内容 / Empty)</div>;
   }
@@ -110,7 +160,12 @@ function DiffViewer({
   return (
     <div className="diff-container">
       <div className="diff-table">
-        {diffLines.map((dl, idx) => (
+        {rows.map((dl, idx) =>
+          dl.type === "skip" ? (
+            <div key={idx} className="diff-row diff-skip">
+              ⋯ {dl.count} 行未改动
+            </div>
+          ) : (
           <div key={idx} className={`diff-row diff-${dl.type}`}>
             <div className="diff-gutter diff-gutter-old">
               {dl.oldLineNum ?? ""}
@@ -123,7 +178,8 @@ function DiffViewer({
             </div>
             <div className="diff-content">{dl.text || " "}</div>
           </div>
-        ))}
+          )
+        )}
       </div>
     </div>
   );
@@ -132,6 +188,7 @@ function DiffViewer({
 interface ReviewCardProps {
   item: ConceptReviewItem;
   isProcessing: boolean;
+  diffMode: DiffMode;
   onApprove: (conceptId: number) => void;
   onRollback: (conceptId: number, isCreation: boolean, isDeleted: boolean) => void;
   onNavigateToNode?: (nodeId: number) => void;
@@ -145,14 +202,11 @@ interface ReviewCardProps {
 const ReviewCard = memo(function ReviewCard({
   item,
   isProcessing,
+  diffMode,
   onApprove,
   onRollback,
   onNavigateToNode,
 }: ReviewCardProps) {
-  // 默认展开，保持老版本"一眼看到 diff"的体验；折叠后 DiffViewer 卸载，
-  // 大正文节点的几千个 diff 行 DOM 直接消失，需要时再点开。
-  const [expanded, setExpanded] = useState(true);
-
   const contentChange = item.changes.find((c) => c.field === "content");
   const disclosureChange = item.changes.find((c) => c.field === "disclosure");
 
@@ -191,15 +245,6 @@ const ReviewCard = memo(function ReviewCard({
         </div>
 
         <div className="card-header-actions">
-          {(contentChange || disclosureChange) && (
-            <button
-              className="review-btn-toggle"
-              onClick={() => setExpanded((v) => !v)}
-              title={expanded ? "折叠 diff（卸载 diff DOM，省内存）" : "展开 diff"}
-            >
-              {expanded ? "折叠 diff" : "展开 diff"}
-            </button>
-          )}
           <button
             className="review-btn review-btn-approve"
             disabled={isProcessing}
@@ -217,47 +262,47 @@ const ReviewCard = memo(function ReviewCard({
         </div>
       </div>
 
-      {expanded && (
-        <div className="review-card-body">
-          {item.is_deleted && item.is_creation ? (
-            <div className="deletion-banner">
-              <span>该节点为新建后被删除。回滚将直接清除快照记录。</span>
-            </div>
-          ) : item.is_deleted ? (
-            <div className="deletion-banner">
-              <span>⚠ 该节点已被删除。回滚后将作为 <strong>plain（砖块）</strong> 角色恢复。</span>
-            </div>
-          ) : item.is_creation ? (
-            <div className="creation-banner">
-              <span>✨ 该节点为新建节点。回滚将直接删除此节点（若被其他概念引用，请先切断关联）。</span>
-            </div>
-          ) : null}
+      <div className="review-card-body">
+        {item.is_deleted && item.is_creation ? (
+          <div className="deletion-banner">
+            <span>该节点为新建后被删除。回滚将直接清除快照记录。</span>
+          </div>
+        ) : item.is_deleted ? (
+          <div className="deletion-banner">
+            <span>⚠ 该节点已被删除。回滚后将作为 <strong>plain（砖块）</strong> 角色恢复。</span>
+          </div>
+        ) : item.is_creation ? (
+          <div className="creation-banner">
+            <span>✨ 该节点为新建节点。回滚将直接删除此节点（若被其他概念引用，请先切断关联）。</span>
+          </div>
+        ) : null}
 
-          {disclosureChange && (
-            <div className="change-section">
-              <div className="change-section-title">
-                <span className="field-dot" /> 书腰变更 (Disclosure Diff)
-              </div>
-              <DiffViewer
-                original={disclosureChange.original_value}
-                current={disclosureChange.current_value}
-              />
+        {disclosureChange && (
+          <div className="change-section">
+            <div className="change-section-title">
+              <span className="field-dot" /> 书腰变更 (Disclosure Diff)
             </div>
-          )}
+            <DiffViewer
+              original={disclosureChange.original_value}
+              current={disclosureChange.current_value}
+              mode={diffMode}
+            />
+          </div>
+        )}
 
-          {contentChange && (
-            <div className="change-section">
-              <div className="change-section-title">
-                <span className="field-dot" /> 正文变更 (Content Diff)
-              </div>
-              <DiffViewer
-                original={contentChange.original_value}
-                current={contentChange.current_value}
-              />
+        {contentChange && (
+          <div className="change-section">
+            <div className="change-section-title">
+              <span className="field-dot" /> 正文变更 (Content Diff)
             </div>
-          )}
-        </div>
-      )}
+            <DiffViewer
+              original={contentChange.original_value}
+              current={contentChange.current_value}
+              mode={diffMode}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 });
@@ -271,6 +316,12 @@ export default function ReviewView({
   const [actionLoading, setActionLoading] = useState<Record<number, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
+  const [diffMode, setDiffMode] = useState<DiffMode>(() =>
+    localStorage.getItem(DIFF_MODE_KEY) === "changes" ? "changes" : "full"
+  );
+  useEffect(() => {
+    localStorage.setItem(DIFF_MODE_KEY, diffMode);
+  }, [diffMode]);
   const contentRef = useRef<HTMLDivElement>(null);
 
   const fetchReviews = useCallback(() => {
@@ -366,6 +417,20 @@ export default function ReviewView({
           <span className="review-badge-count">{reviews.length} 个节点待审核</span>
         </div>
         <div className="review-toolbar-right">
+          <div className="review-mode-switch" title="所有待审核节点的 diff 显示方式">
+            <button
+              className={diffMode === "full" ? "active" : ""}
+              onClick={() => setDiffMode("full")}
+            >
+              全文
+            </button>
+            <button
+              className={diffMode === "changes" ? "active" : ""}
+              onClick={() => setDiffMode("changes")}
+            >
+              仅改动
+            </button>
+          </div>
           <button className="review-btn-secondary" onClick={fetchReviews}>
             刷新 (Refresh)
           </button>
@@ -388,6 +453,7 @@ export default function ReviewView({
                 key={item.concept_id}
                 item={item}
                 isProcessing={actionLoading[item.concept_id] || false}
+                diffMode={diffMode}
                 onApprove={handleApprove}
                 onRollback={handleRollback}
                 onNavigateToNode={onNavigateToNode}
