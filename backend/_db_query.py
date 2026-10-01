@@ -291,7 +291,6 @@ class QueryMixin:
                 "activation_rule": rule,
                 "on_fire": c.on_fire,
                 "byte_size": c.byte_size,
-                "updated_at": c.updated_at,
                 "tags": tags_by_cid.get(c.id, []),
             }
             result.append(c_dict)

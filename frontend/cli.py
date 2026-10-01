@@ -29,16 +29,7 @@ from backend.text_patch import (
     preview,
     try_normalized_patch,
 )
-from backend.content_scope_audit import (
-    MIN_BYTES,
-    audit_content_bytes,
-    audit_node,
-    refresh_audit_coverage,
-    format_report,
-    load_name_embeddings,
-    record_pass,
-    similar_names,
-)
+from backend.content_scope_audit import audit_concepts, format_report, refresh_audit_coverage
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -801,28 +792,7 @@ def _dispatch(args, db):
                 "Run 'audit --scope <concept> ...' on its own."
             )
         if args.scope:
-            # Audit the entire current body, not only the most recent append.
-            nodes = list({r.id: r for r in (db.read_concept(c) for c in args.scope)}.values())
-            # Short bodies pass locally; do not request any name embeddings
-            # unless at least one selected node actually needs remote review.
-            needs_remote = {node.id for node in nodes
-                            if audit_content_bytes(node.content) >= MIN_BYTES}
-            if needs_remote:
-                library = db.get_all_concepts_overview()
-                names = {row["id"]: row["name"] for row in library}
-                emb_ids, emb_matrix = load_name_embeddings(library)
-            results = []
-            for node in nodes:
-                result = audit_node(
-                    concept_id=node.id,
-                    name=node.name,
-                    content=node.content,
-                    others=([(i, names[i]) for i in similar_names(node.id, emb_ids, emb_matrix)]
-                            if node.id in needs_remote else []),
-                )
-                result["ledger"] = None if result["needs_review"] else record_pass(result)
-                results.append(result)
-            return RawOutput(format_report(results))
+            return RawOutput(format_report(audit_concepts(db, args.scope)))
 
         if args.tag and (args.all or args.db):
             raise ValueError(

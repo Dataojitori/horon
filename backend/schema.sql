@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS concepts (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
 
+    -- audit --scope 最近一次判通过时的名字+正文指纹；与当前名字+正文现算的指纹不等即需复查 (NULL = 从未通过)
+    scope_audit_fingerprint TEXT,
+
     -- 严格的角色互斥与字段完整性约束（plain 节点电位恒为 0）
     CHECK (
         (role = 'plain'  AND activation_type IS NULL     AND lifespan IS NULL     AND is_active = 0) OR
@@ -172,6 +175,15 @@ CREATE TABLE IF NOT EXISTS concept_embeddings (
     concept_id      INTEGER PRIMARY KEY REFERENCES concepts(id) ON DELETE CASCADE,
     embedding       BLOB    NOT NULL,               -- 书腰向量 (OpenRouter voyage-4-large, 1024-dim)
     embedding_model TEXT    NOT NULL,               -- 向量模型标识
+    updated_at      TEXT    NOT NULL
+);
+
+-- 14b. 名字向量表 (audit --scope 找名字相近的节点用；一行对应 aliases 里的一个名字，主名字也在 aliases 里。
+--      目前只给各节点当前的主名字算，缺了就在下次 audit 时补算；改名后旧名字作为别名保留，它的向量也保留)
+CREATE TABLE IF NOT EXISTS concept_name_embeddings (
+    alias           TEXT    PRIMARY KEY REFERENCES aliases(alias) ON DELETE CASCADE,
+    embedding       BLOB    NOT NULL,
+    embedding_model TEXT    NOT NULL,
     updated_at      TEXT    NOT NULL
 );
 
