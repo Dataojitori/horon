@@ -234,11 +234,12 @@ class ConceptMixin:
 
         # 在任何数据库或文件删除之前运行删除 hook（若插件拒绝则在此抛出异常并触发事务回滚）
         diff = {"concepts": {"removed": [{"concept_id": cid, "name": cname, "members": unlinked_member_ids}]}}
+        infos: list[str] = []
         for tag in existing_tags:
-            self._run_mutation_hook_for_tag(cid, tag, diff, proxy=deleted_proxy)
+            infos += self._run_mutation_hook_for_tag(cid, tag, diff, proxy=deleted_proxy)
         if unlinked_member_ids:
             for mid in set(unlinked_member_ids):
-                self._run_mutation_hooks(mid, diff)
+                infos += self._run_mutation_hooks(mid, diff)
 
         if getattr(self, "snapshot_mode", False):
             self.capture_deletion_snapshot(cid)
@@ -251,6 +252,8 @@ class ConceptMixin:
         msg = f"Success. Deleted concept {label}."
         if tag_row:
             msg += f" Tag '{tag_row['name']}' auto-removed."
+        if infos:
+            msg += "\n" + "\n".join(infos)
 
         result = MutationResult(
             message=msg,

@@ -291,6 +291,7 @@ class QueryMixin:
                 "activation_rule": rule,
                 "on_fire": c.on_fire,
                 "byte_size": c.byte_size,
+                "updated_at": c.updated_at,
                 "tags": tags_by_cid.get(c.id, []),
             }
             result.append(c_dict)
@@ -403,7 +404,7 @@ class QueryMixin:
 
     def _get_sensor_hooks(self, concept_id: int) -> list[SensorHookDetail]:
         rows = self.conn.execute(
-            "SELECT id, sensor_concept_id, event_type, tool, match_pattern, created_at "
+            "SELECT id, sensor_concept_id, event_type, tool, match_pattern, adapter, created_at "
             "FROM sensor_hooks WHERE sensor_concept_id = ? ORDER BY id",
             (concept_id,),
         ).fetchall()
@@ -411,7 +412,7 @@ class QueryMixin:
 
     def _get_tool_guards(self, concept_id: int) -> list[ToolGuardDetail]:
         rows = self.conn.execute(
-            "SELECT id, guard_concept_id, tool, args_pattern, created_at "
+            "SELECT id, guard_concept_id, tool, args_pattern, adapter, created_at "
             "FROM tool_guards WHERE guard_concept_id = ? ORDER BY id",
             (concept_id,),
         ).fetchall()
@@ -683,6 +684,18 @@ class QueryMixin:
             )
             for r in rows
         ]
+
+    def get_read_counts(self) -> dict[int, int]:
+        """How many times each concept has been read with read_concept, across all sessions.
+
+        Input: none; reads cli_audit_log (login's boot expansion is not logged there).
+        Output: {concept_id: read count}; concepts never read are absent.
+        """
+        rows = self.conn.execute(
+            "SELECT concept_id, COUNT(*) FROM cli_audit_log "
+            "WHERE command = 'read_concept' AND concept_id IS NOT NULL GROUP BY concept_id"
+        ).fetchall()
+        return {cid: n for cid, n in rows}
 
     @transactional
     def record_transition(self, to_ids: list[int]) -> None:

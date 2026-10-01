@@ -64,6 +64,7 @@ class SensorHookDetail(BaseModel):
     event_type: str
     tool: str | None = None
     match_pattern: str
+    adapter: str | None = None
     created_at: str
 
 
@@ -72,6 +73,7 @@ class ToolGuardDetail(BaseModel):
     guard_concept_id: int
     tool: str
     args_pattern: str | None = None
+    adapter: str | None = None
     created_at: str
 
 

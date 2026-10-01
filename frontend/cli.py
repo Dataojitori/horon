@@ -29,6 +29,16 @@ from backend.text_patch import (
     preview,
     try_normalized_patch,
 )
+from backend.content_scope_audit import (
+    MIN_BYTES,
+    audit_content_bytes,
+    audit_node,
+    refresh_audit_coverage,
+    format_report,
+    load_name_embeddings,
+    record_pass,
+    similar_names,
+)
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -179,8 +189,9 @@ def _format_read_concept(result: ReadResult) -> str:
         if result.role == "guard":
             if result.tool_guards:
                 for tg in result.tool_guards:
+                    adapter_flag = f" --adapter {tg.adapter}" if tg.adapter else ""
                     args_flag = f" --args-pattern '{tg.args_pattern}'" if tg.args_pattern else ""
-                    lines.append(f"Tool Guard: {tg.tool}{args_flag}")
+                    lines.append(f"Tool Guard: {tg.tool}{args_flag}{adapter_flag}")
             else:
                 lines.append("Tool Guard: (none)")
 
@@ -189,7 +200,8 @@ def _format_read_concept(result: ReadResult) -> str:
         if result.sensor_hooks:
             for sh in result.sensor_hooks:
                 tool_flag = f" --tool '{sh.tool}'" if sh.tool else ""
-                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'")
+                adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
+                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'{adapter_flag}")
         else:
             lines.append("Hook: (none)")
 
@@ -592,12 +604,14 @@ def _build_parser():
     # list_tags
     sub.add_parser("list_tags", allow_abbrev=False)
 
-    # audit (sweep tag cluster lints or system database integrity)
+    # audit (tag cluster lints, database integrity, or paid Jev content-scope review)
     p = sub.add_parser("audit", allow_abbrev=False,
-                       help="Run diagnostic audits on tag clusters or database system integrity.")
+                       help="Run diagnostic audits on tag clusters, database integrity, or node content scope.")
     p.add_argument("tag", nargs="?", default=None, help="Tag name for tag cluster audit")
-    p.add_argument("--all", action="store_true", help="Run all audits (all tag clusters + database integrity)")
+    p.add_argument("--all", action="store_true", help="Run all local audits (all tag clusters + database integrity); never includes --scope")
     p.add_argument("--db", action="store_true", help="Run database system integrity audit (e.g. missing embeddings)")
+    p.add_argument("--scope", nargs="+", metavar="CONCEPT", default=None,
+                   help="Ask Jev (OpenRouter, paid), line by line, whether each line of these concepts' content belongs under the concept's name")
 
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
@@ -641,6 +655,8 @@ def _build_parser():
                    help="Regex or substring match pattern for sensor_hook")
     p.add_argument("--tool", default=None,
                    help="Tool name for sensor_hook (tool_call/tool_result)")
+    p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity"], default=None,
+                   help="Limit sensor_hook/tool_guard to this host; omitted means all hosts")
     p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
                    help="Args regex pattern for tool_guard")
 
@@ -779,6 +795,35 @@ def _dispatch(args, db):
         return RawOutput("\n".join(lines))
 
     elif args.command == "audit":
+        if args.scope and (args.tag or args.all or args.db):
+            raise ValueError(
+                "--scope cannot be combined with a tag name, --all or --db. "
+                "Run 'audit --scope <concept> ...' on its own."
+            )
+        if args.scope:
+            # Audit the entire current body, not only the most recent append.
+            nodes = list({r.id: r for r in (db.read_concept(c) for c in args.scope)}.values())
+            # Short bodies pass locally; do not request any name embeddings
+            # unless at least one selected node actually needs remote review.
+            needs_remote = {node.id for node in nodes
+                            if audit_content_bytes(node.content) >= MIN_BYTES}
+            if needs_remote:
+                library = db.get_all_concepts_overview()
+                names = {row["id"]: row["name"] for row in library}
+                emb_ids, emb_matrix = load_name_embeddings(library)
+            results = []
+            for node in nodes:
+                result = audit_node(
+                    concept_id=node.id,
+                    name=node.name,
+                    content=node.content,
+                    others=([(i, names[i]) for i in similar_names(node.id, emb_ids, emb_matrix)]
+                            if node.id in needs_remote else []),
+                )
+                result["ledger"] = None if result["needs_review"] else record_pass(result)
+                results.append(result)
+            return RawOutput(format_report(results))
+
         if args.tag and (args.all or args.db):
             raise ValueError(
                 "Cannot combine a specific tag name with --all or --db. "
@@ -786,18 +831,20 @@ def _dispatch(args, db):
                 "or 'audit --all' to run all checks."
             )
         if args.all:
-            tag_report = db.audit_clusters_report()
-            db_report = db.audit_db_integrity()
-            return RawOutput(f"{tag_report}\n\n{db_report}")
+            report = f"{db.audit_clusters_report()}\n\n{db.audit_db_integrity()}"
+            reminder = refresh_audit_coverage(db)
         elif args.db:
             return RawOutput(db.audit_db_integrity())
         elif args.tag:
-            return RawOutput(db.audit_clusters_report(args.tag))
+            report = db.audit_clusters_report(args.tag)
+            reminder = refresh_audit_coverage(db, tag_expr=args.tag)
         else:
             raise ValueError(
                 "Specify an audit target: a tag name (e.g., 'audit plan'), "
-                "'--db' (database integrity), or '--all' (all audits)."
+                "'--db' (database integrity), '--all' (all local audits), "
+                "or '--scope <concept> ...' (Jev content-scope review)."
             )
+        return RawOutput(f"{report}\n\n{reminder}" if reminder else report)
 
     elif args.command == "search_concepts":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
@@ -829,6 +876,7 @@ def _dispatch(args, db):
             match_pattern=getattr(args, "match_pattern", ""),
             tool=getattr(args, "tool", None),
             args_pattern=getattr(args, "args_pattern", None),
+            adapter=getattr(args, "adapter", None),
         )
 
     elif args.command == "update":

@@ -83,9 +83,11 @@ def sense(
         "sh.match_pattern, c.name "
         "FROM sensor_hooks sh "
         "JOIN concepts c ON sh.sensor_concept_id = c.id "
-        "WHERE sh.event_type = ?"
+        "WHERE sh.event_type = ? "
+        "AND (sh.adapter IS NULL OR sh.adapter = "
+        "(SELECT adapter FROM sessions WHERE session_id = ?))"
     )
-    rows = db.conn.execute(query, (event_type,)).fetchall()
+    rows = db.conn.execute(query, (event_type, db.session_id)).fetchall()
     activated: list[int] = []
 
     for r in rows:
@@ -215,9 +217,11 @@ def guard(
         "SELECT tg.id AS guard_rule_id, tg.guard_concept_id, tg.tool, tg.args_pattern, c.name "
         "FROM tool_guards tg "
         "JOIN concepts c ON tg.guard_concept_id = c.id "
-        "WHERE tg.tool = ?"
+        "WHERE tg.tool = ? "
+        "AND (tg.adapter IS NULL OR tg.adapter = "
+        "(SELECT adapter FROM sessions WHERE session_id = ?))"
     )
-    guards = db.conn.execute(query, (tool_name,)).fetchall()
+    guards = db.conn.execute(query, (tool_name, db.session_id)).fetchall()
     states = load_active_states(db.conn, db.session_id)
 
     for g in guards:

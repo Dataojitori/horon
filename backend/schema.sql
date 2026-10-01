@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS sensor_hooks (
     event_type        TEXT    NOT NULL              -- 'user_message', 'model_message', 'tool_call', 'tool_result'
                       CHECK(event_type IN ('user_message', 'model_message', 'tool_call', 'tool_result')),
     tool              TEXT,                         -- 工具名 (仅 tool_call / tool_result 时有效；消息类为 NULL)
+    adapter           TEXT,                         -- NULL: all hosts; otherwise exact session adapter
     match_pattern     TEXT    NOT NULL,             -- 全文正则：匹配消息文本 / 工具返回值 / 调用参数序列化文本
     created_at        TEXT    NOT NULL
 );
@@ -66,6 +67,7 @@ CREATE TABLE IF NOT EXISTS tool_guards (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     guard_concept_id  INTEGER NOT NULL UNIQUE REFERENCES concepts(id) ON DELETE CASCADE, -- 1:1 物理锁死
     tool              TEXT    NOT NULL,             -- 工具名，如 "run_command" 或 "replace_file_content"
+    adapter           TEXT,                         -- NULL: all hosts; otherwise exact session adapter
     args_pattern      TEXT,                         -- 参数正则 JSON，如 '{"CommandLine": "^git\\s+push"}'
     created_at        TEXT    NOT NULL
 );
@@ -196,9 +198,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
 -- 索引集合
 CREATE INDEX IF NOT EXISTS idx_cm_member          ON compose_members(member_concept_id);
 CREATE INDEX IF NOT EXISTS idx_sh_lookup           ON sensor_hooks(event_type, tool);
-CREATE UNIQUE INDEX IF NOT EXISTS uidx_sh_event   ON sensor_hooks(event_type, IFNULL(tool, ''), match_pattern);
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_sh_event   ON sensor_hooks(event_type, IFNULL(tool, ''), match_pattern, IFNULL(adapter, ''));
 CREATE INDEX IF NOT EXISTS idx_tg_tool            ON tool_guards(tool);
-CREATE UNIQUE INDEX IF NOT EXISTS uidx_tg_rule    ON tool_guards(tool, IFNULL(args_pattern, ''));
+CREATE UNIQUE INDEX IF NOT EXISTS uidx_tg_rule    ON tool_guards(tool, IFNULL(args_pattern, ''), IFNULL(adapter, ''));
 CREATE INDEX IF NOT EXISTS idx_inh_inhibitor      ON inhibitions(inhibitor_concept_id);
 CREATE INDEX IF NOT EXISTS idx_aci_session        ON active_chain_instances(session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_session      ON cli_audit_log(session_id, timestamp);

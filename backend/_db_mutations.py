@@ -162,7 +162,8 @@ class MutationMixin:
 
     @transactional
     def _set_sensor_hook(
-        self, concept, event_type: str, match_pattern: str, tool: str | None = None
+        self, concept, event_type: str, match_pattern: str, tool: str | None = None,
+        adapter: str | None = None
     ) -> MutationResult:
         """给传感器绑定被动感知钩子 (1:1 覆盖)。"""
         cid = self._resolve_id(concept)
@@ -192,6 +193,9 @@ class MutationMixin:
         if not match_pattern or not match_pattern.strip():
             raise ValueError("match_pattern cannot be empty.")
 
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity"):
+            raise ValueError(f"Unknown hook adapter: {adapter!r}")
+
         clean_tool = tool.strip() if (tool and event_type in ("tool_call", "tool_result")) else None
 
         old_hook = self.conn.execute(
@@ -202,23 +206,23 @@ class MutationMixin:
             "SELECT sh.sensor_concept_id, c.name FROM sensor_hooks sh "
             "JOIN concepts c ON sh.sensor_concept_id = c.id "
             "WHERE sh.event_type = ? AND IFNULL(sh.tool, '') = IFNULL(?, '') AND sh.match_pattern = ? "
-            "AND sh.sensor_concept_id != ?",
-            (event_type, clean_tool, match_pattern.strip(), cid),
+            "AND sh.adapter IS ? AND sh.sensor_concept_id != ?",
+            (event_type, clean_tool, match_pattern.strip(), adapter, cid),
         ).fetchone()
         if conflict:
             raise ValueError(
                 f"Sensor hook rule (event_type='{event_type}', tool={clean_tool!r}, match_pattern={match_pattern.strip()!r}) "
                 f"already bound to sensor '{conflict['name']}' (id={conflict['sensor_concept_id']}). "
-                f"Each (event_type, tool, match_pattern) rule can only be managed by one sensor concept."
+                f"Each (event_type, tool, match_pattern, adapter={adapter!r}) rule can only be managed by one sensor concept."
             )
 
         # 检查是否已存在 hook 并覆盖
         self.conn.execute("DELETE FROM sensor_hooks WHERE sensor_concept_id = ?", (cid,))
         now = _now()
         cursor = self.conn.execute(
-            "INSERT INTO sensor_hooks (sensor_concept_id, event_type, tool, match_pattern, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (cid, event_type, clean_tool, match_pattern.strip(), now),
+            "INSERT INTO sensor_hooks (sensor_concept_id, event_type, tool, match_pattern, adapter, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cid, event_type, clean_tool, match_pattern.strip(), adapter, now),
         )
         hook_id = cursor.lastrowid
         tool_info = f", tool: '{clean_tool}'" if clean_tool else ""
@@ -233,7 +237,8 @@ class MutationMixin:
 
     @transactional
     def _set_tool_guard(
-        self, concept, tool: str, args_pattern: str | None = None
+        self, concept, tool: str, args_pattern: str | None = None,
+        adapter: str | None = None
     ) -> MutationResult:
         """给放行守卫绑定工具放行规则 (1:1 覆盖)。"""
         cid = self._resolve_id(concept)
@@ -249,6 +254,9 @@ class MutationMixin:
         if not tool or not tool.strip():
             raise ValueError("tool name cannot be empty.")
 
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity"):
+            raise ValueError(f"Unknown hook adapter: {adapter!r}")
+
         clean_args = args_pattern.strip() if args_pattern and args_pattern.strip() else None
 
         old_guard = self.conn.execute(
@@ -259,22 +267,22 @@ class MutationMixin:
             "SELECT tg.guard_concept_id, c.name FROM tool_guards tg "
             "JOIN concepts c ON tg.guard_concept_id = c.id "
             "WHERE tg.tool = ? AND IFNULL(tg.args_pattern, '') = IFNULL(?, '') "
-            "AND tg.guard_concept_id != ?",
-            (tool.strip(), clean_args, cid),
+            "AND tg.adapter IS ? AND tg.guard_concept_id != ?",
+            (tool.strip(), clean_args, adapter, cid),
         ).fetchone()
         if conflict:
             raise ValueError(
                 f"Tool guard rule (tool='{tool.strip()}', args_pattern={clean_args!r}) "
                 f"already bound to guard '{conflict['name']}' (id={conflict['guard_concept_id']}). "
-                f"Each (tool, args_pattern) pair can only be managed by one guard concept."
+                f"Each (tool, args_pattern, adapter={adapter!r}) rule can only be managed by one guard concept."
             )
 
         self.conn.execute("DELETE FROM tool_guards WHERE guard_concept_id = ?", (cid,))
         now = _now()
         cursor = self.conn.execute(
-            "INSERT INTO tool_guards (guard_concept_id, tool, args_pattern, created_at) "
-            "VALUES (?, ?, ?, ?)",
-            (cid, tool.strip(), clean_args, now),
+            "INSERT INTO tool_guards (guard_concept_id, tool, args_pattern, adapter, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cid, tool.strip(), clean_args, adapter, now),
         )
         guard_id = cursor.lastrowid
         pattern_info = f", args_pattern: '{clean_args}'" if clean_args else ""
@@ -443,10 +451,10 @@ class MutationMixin:
             (cid, tag),
         )
         diff = {"tags": {"added": [], "removed": [{"concept_id": cid, "tag": tag}]}}
-        self._run_mutation_hooks(cid, diff)
-        self._run_mutation_hook_for_tag(cid, tag, diff)
+        infos = self._run_mutation_hooks(cid, diff)
+        infos += self._run_mutation_hook_for_tag(cid, tag, diff)
         return MutationResult(
-            message=f"Success. Removed tag '{tag}' from {label}.",
+            message="\n".join([f"Success. Removed tag '{tag}' from {label}.", *infos]),
             concept_id=cid, concept_name=cname,
         )
 
@@ -663,12 +671,14 @@ class MutationMixin:
                 event_type=str(value),
                 match_pattern=kwargs.get("match_pattern", ""),
                 tool=kwargs.get("tool"),
+                adapter=kwargs.get("adapter"),
             )
         elif prop in ("tool_guard", "tool-guard"):
             return self._set_tool_guard(
                 target,
                 tool=str(value),
                 args_pattern=kwargs.get("args_pattern"),
+                adapter=kwargs.get("adapter"),
             )
         raise ValueError(
             f"Unknown property: '{prop}'. "
@@ -1328,9 +1338,9 @@ class MutationMixin:
         )
 
         diff = {"content": {"concept_id": cid, "old": old_val, "new": value}}
-        self._run_mutation_hooks(cid, diff)
+        infos = self._run_mutation_hooks(cid, diff)
 
         return MutationResult(
-            message=f"Success. Updated {field} of {label}.",
+            message="\n".join([f"Success. Updated {field} of {label}.", *infos]),
             concept_id=cid, concept_name=cname,
         )
