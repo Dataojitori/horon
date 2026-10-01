@@ -2,14 +2,11 @@
 from __future__ import annotations
 
 import json
-import logging
 import math
 import os
 import struct
 import urllib.error
 import urllib.request
-
-_logger = logging.getLogger(__name__)
 
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/embeddings"
 EMBEDDING_MODEL = "voyageai/voyage-4-large"
@@ -31,106 +28,84 @@ def blob_to_embedding(blob: bytes | None) -> list[float] | None:
     return list(struct.unpack(f'<{count}f', blob))
 
 
-def _get_api_key() -> str:
-    key = os.environ.get("OPENROUTER_API_KEY", "")
+def openrouter_post(url: str, payload: dict, timeout: int) -> dict:
+    """POST a JSON payload to an OpenRouter endpoint and return the decoded JSON reply.
+
+    Input: the endpoint URL, the request payload, and a timeout in seconds. The API key is
+    read from OPENROUTER_API_KEY (surrounding whitespace removed).
+    Raises RuntimeError when the key is unset or blank, and when OpenRouter answers with an
+    HTTP error; that message carries the status and OpenRouter's response body, which says
+    why (bad key, no credit, unknown model, payload too large, ...).
+    """
+    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise RuntimeError(
             "OPENROUTER_API_KEY not set. "
             "Add it to .env or set the environment variable.")
-    return key
-
-
-def get_embedding(text: str) -> list[float] | None:
-    """Compute a 1024-dim embedding for text via OpenRouter voyage-4-large.
-
-    Returns None (with a warning log) on API failure so that mutations
-    don't crash if the network is unavailable.
-    """
-    if not text or not text.strip():
-        return None
-
-    try:
-        key = _get_api_key()
-    except RuntimeError:
-        _logger.warning("Skipping embedding: OPENROUTER_API_KEY not configured.")
-        return None
-
-    payload = json.dumps({
-        "model": EMBEDDING_MODEL,
-        "input": [text],
-        "dimensions": EMBEDDING_DIMENSIONS,
-    }).encode("utf-8")
-
     req = urllib.request.Request(
-        _OPENROUTER_URL,
-        data=payload,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
+        url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         method="POST",
     )
-
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        embedding = body["data"][0]["embedding"]
-        
-        if not isinstance(embedding, list):
-            _logger.warning("Embedding is not a list")
-            return None
-            
-        if len(embedding) != EMBEDDING_DIMENSIONS:
-            _logger.warning(
-                "Unexpected embedding dimension: got %d, expected %d",
-                len(embedding), EMBEDDING_DIMENSIONS)
-            return None
-        
-        # calculate norm, will throw TypeError if elements are not numbers
-        norm = math.sqrt(sum(x * x for x in embedding))
-        if norm > 0:
-            embedding = [float(x) / norm for x in embedding]
-            
-        return embedding
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, 
-            json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as e:
-        _logger.warning("Embedding API call failed: %s (%s)", type(e).__name__, e)
-        return None
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"OpenRouter HTTP {e.code} from {url}: {body}") from e
+
+
+def embed_texts(texts: list[str], timeout: int = 120) -> list[list[float]]:
+    """Embed several texts in one OpenRouter request.
+
+    Input: non-empty texts; timeout in seconds for the whole request.
+    Output: one unit-length EMBEDDING_DIMENSIONS-dim vector per text, in input order.
+    Raises if the API key is missing, the request fails, or the response is malformed.
+    """
+    data = openrouter_post(_OPENROUTER_URL, {
+        "model": EMBEDDING_MODEL,
+        "input": texts,
+        "dimensions": EMBEDDING_DIMENSIONS,
+    }, timeout)["data"]
+    vectors = [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
+    if len(vectors) != len(texts):
+        raise ValueError(f"Got {len(vectors)} embeddings for {len(texts)} texts")
+
+    normalised = []
+    for vector in vectors:
+        if not isinstance(vector, list) or len(vector) != EMBEDDING_DIMENSIONS:
+            raise ValueError(f"Unexpected embedding shape (expected {EMBEDDING_DIMENSIONS} floats)")
+        norm = math.sqrt(sum(x * x for x in vector))
+        normalised.append([float(x) / norm for x in vector])
+    return normalised
 
 
 def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
-    """Synchronously fetch embedding and update concept_embeddings table.
-    
-    Returns True if embedding was fetched and written to database, False otherwise.
-    Designed to be called via `_post_commit_hooks` AFTER the main transaction 
-    has committed, so it doesn't hold up the database lock.
-    Only writes/updates embedding if the current disclosure in database still equals `text`.
+    """Fetch the embedding of a disclosure and store it in concept_embeddings.
+
+    Input: the HoronDB, the concept id, and the disclosure text it had when the hook was queued.
+    Designed to be called via `_post_commit_hooks` AFTER the main transaction has
+    committed, so it doesn't hold up the database lock; failures (no key, network, API
+    error) are raised to the caller, which logs them without undoing the mutation.
+    Output: True if the embedding was written; False if the concept's disclosure no longer
+    equals `text` (it was changed again meanwhile), in which case nothing is written.
     """
-    emb = get_embedding(text)
-    if not emb:
-        return False
-        
-    emb_blob = embedding_to_blob(emb)
-    
-    try:
-        from ._db_common import _now
-        now = _now()
-        # We are outside the main transaction lock now, so a quick new transaction is safe.
-        with db_instance.conn:
-            cursor = db_instance.conn.execute(
-                """
-                INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
-                SELECT id, ?, ?, ?
-                FROM concepts
-                WHERE id = ? AND disclosure = ?
-                ON CONFLICT(concept_id) DO UPDATE SET
-                    embedding=excluded.embedding,
-                    embedding_model=excluded.embedding_model,
-                    updated_at=excluded.updated_at
-                """,
-                (emb_blob, EMBEDDING_MODEL, now, concept_id, text)
-            )
-            return cursor.rowcount > 0
-    except Exception as e:
-        _logger.warning("Failed to write embedding to database: %s", e)
-        return False
+    from ._db_common import _now
+    emb_blob = embedding_to_blob(embed_texts([text], timeout=30)[0])
+    # We are outside the main transaction lock now, so a quick new transaction is safe.
+    with db_instance.conn:
+        cursor = db_instance.conn.execute(
+            """
+            INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
+            SELECT id, ?, ?, ?
+            FROM concepts
+            WHERE id = ? AND disclosure = ?
+            ON CONFLICT(concept_id) DO UPDATE SET
+                embedding=excluded.embedding,
+                embedding_model=excluded.embedding_model,
+                updated_at=excluded.updated_at
+            """,
+            (emb_blob, EMBEDDING_MODEL, _now(), concept_id, text)
+        )
+        return cursor.rowcount > 0

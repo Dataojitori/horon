@@ -9,7 +9,7 @@ import numpy as np
 
 from ._db_common import _now, transactional
 from .evaluator import load_active_states
-from .embedding import get_embedding, EMBEDDING_DIMENSIONS
+from .embedding import embed_texts, EMBEDDING_DIMENSIONS
 from .models import (
     Concept, ComposeMemberDetail, ReadResult,
     ReminderDetail, TransitionSuggestion,
@@ -567,12 +567,7 @@ class QueryMixin:
         Computes the intent's embedding, then ranks all concepts that have
         stored disclosure embeddings by cosine similarity. Returns top-N results.
         """
-        query_vec = get_embedding(intent_text)
-        if query_vec is None:
-            raise RuntimeError(
-                "Failed to compute embedding for intent query. "
-                "Check OPENROUTER_API_KEY and network connectivity."
-            )
+        query_vec = embed_texts([intent_text], timeout=30)[0]
 
         rows = self.conn.execute(
             "SELECT c.id, c.name, c.disclosure, ce.embedding "
