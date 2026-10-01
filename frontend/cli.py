@@ -599,7 +599,7 @@ def _build_parser():
     p = sub.add_parser("audit", allow_abbrev=False,
                        help="Run diagnostic audits on tag clusters, database integrity, or node content scope.")
     p.add_argument("tag", nargs="?", default=None, help="Tag name for tag cluster audit")
-    p.add_argument("--all", action="store_true", help="Run all local audits (all tag clusters + database integrity); never includes --scope")
+    p.add_argument("--all", action="store_true", help="Run all audits (all tag clusters + database integrity)")
     p.add_argument("--db", action="store_true", help="Run database system integrity audit (e.g. missing embeddings)")
     p.add_argument("--scope", nargs="+", metavar="CONCEPT", default=None,
                    help="Ask Jev (OpenRouter, paid), line by line, whether each line of these concepts' content belongs under the concept's name")
@@ -811,7 +811,7 @@ def _dispatch(args, db):
         else:
             raise ValueError(
                 "Specify an audit target: a tag name (e.g., 'audit plan'), "
-                "'--db' (database integrity), '--all' (all local audits), "
+                "'--db' (database integrity), '--all' (all tag clusters + database integrity), "
                 "or '--scope <concept> ...' (Jev content-scope review)."
             )
         return RawOutput(f"{report}\n\n{reminder}" if reminder else report)

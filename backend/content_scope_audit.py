@@ -172,12 +172,12 @@ def format_report(results: list[dict[str, Any]], preview: int = 40) -> str:
     for index, result in enumerate(results):
         if index:
             out.append("")
-        status = "待检查" if result["needs_review"] else "通过"
+        status = "待检查" if result["needs_review"] else "健康"
         out.append(f"[{status}] [{result['id']}] {result['name']}")
         if result.get("unchanged"):
-            out.append("  名字和正文自上次通过后没改过，不送 Jev")
+            out.append("  名字和正文自上次判为健康后没改过，不送 Jev")
         elif result["skipped"]:
-            out.append(f"  正文 {result['total_bytes']} B，不到 {MIN_BYTES} B，不送 Jev，判通过")
+            out.append(f"  正文 {result['total_bytes']} B，不到 {MIN_BYTES} B，不送 Jev，判为健康")
         else:
             share = result["moved_bytes"] / result["total_bytes"]
             out.append(f"  该移走的行共 {result['moved_bytes']} B，占正文 {share:.0%}"
@@ -279,7 +279,7 @@ def refresh_audit_coverage(db, tag_expr: str | None = None, preview: int = 10) -
     pending.sort(key=lambda n: read_counts.get(n["id"], 0), reverse=True)
     shown = "、".join(f"[{n['id']}] {n['name']}（读 {read_counts.get(n['id'], 0)} 次）"
                      for n in pending[:preview])
-    return (f"[正文范围审查] 这是节点的健康度检查：名字是找回节点的唯一入口，正文长出了名字覆盖不到的内容，"
+    return (f"[正文范围审计] 这是节点的健康度检查：名字是找回节点的唯一入口，正文长出了名字覆盖不到的内容，"
             f"那部分就按名字找不回来，读者看到名字产生的预期也会落空。audit --scope 让 Jev 逐行判断正文的每一行"
             f"是否属于节点的名字，给出健康读数。目前有 {len(pending)} 个节点没有当前有效的健康读数"
             f"（从没查过、查出不健康，或查过后正文又改了），其中被 read_concept 读得最多的 "
