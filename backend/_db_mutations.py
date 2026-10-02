@@ -163,9 +163,15 @@ class MutationMixin:
     @transactional
     def _set_sensor_hook(
         self, concept, event_type: str, match_pattern: str, tool: str | None = None,
-        adapter: str | None = None
+        adapter: str | None = None, jev_question: str | None = None,
+        jev_threshold: float | None = None,
     ) -> MutationResult:
-        """给传感器绑定被动感知钩子 (1:1 覆盖)。"""
+        """给传感器绑定被动感知钩子 (1:1 覆盖)。
+
+        jev_question：正则命中后再问 Jev 的是非题（问“是不是”，答“是”时点火）；
+        省略则只看正则。jev_threshold：“是”的概率达到多少才点火，默认 0.5，
+        只在有 jev_question 时有意义。
+        """
         cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
@@ -198,6 +204,14 @@ class MutationMixin:
 
         clean_tool = tool.strip() if (tool and event_type in ("tool_call", "tool_result")) else None
 
+        jev_question = (jev_question or "").strip() or None
+        if jev_question is None and jev_threshold is not None:
+            raise ValueError("--jev-threshold needs --jev (the question to ask Jev).")
+        if jev_question is not None:
+            jev_threshold = 0.5 if jev_threshold is None else jev_threshold
+            if not 0 < jev_threshold < 1:
+                raise ValueError(f"jev_threshold must be between 0 and 1, got {jev_threshold}.")
+
         old_hook = self.conn.execute(
             "SELECT id FROM sensor_hooks WHERE sensor_concept_id = ?", (cid,)
         ).fetchone()
@@ -220,9 +234,10 @@ class MutationMixin:
         self.conn.execute("DELETE FROM sensor_hooks WHERE sensor_concept_id = ?", (cid,))
         now = _now()
         cursor = self.conn.execute(
-            "INSERT INTO sensor_hooks (sensor_concept_id, event_type, tool, match_pattern, adapter, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cid, event_type, clean_tool, match_pattern.strip(), adapter, now),
+            "INSERT INTO sensor_hooks (sensor_concept_id, event_type, tool, match_pattern, adapter, "
+            "jev_question, jev_threshold, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (cid, event_type, clean_tool, match_pattern.strip(), adapter,
+             jev_question, jev_threshold, now),
         )
         hook_id = cursor.lastrowid
         tool_info = f", tool: '{clean_tool}'" if clean_tool else ""
@@ -672,6 +687,8 @@ class MutationMixin:
                 match_pattern=kwargs.get("match_pattern", ""),
                 tool=kwargs.get("tool"),
                 adapter=kwargs.get("adapter"),
+                jev_question=kwargs.get("jev_question"),
+                jev_threshold=kwargs.get("jev_threshold"),
             )
         elif prop in ("tool_guard", "tool-guard"):
             return self._set_tool_guard(

@@ -22,12 +22,10 @@ import numpy as np
 
 from backend._db_common import _now
 from backend.embedding import (
-    EMBEDDING_MODEL, blob_to_embedding, embed_texts, embedding_to_blob, openrouter_post,
+    DECISIONS_ENDPOINT, EMBEDDING_MODEL, JEV_MODEL, blob_to_embedding, embed_texts,
+    embedding_to_blob, openrouter_post,
 )
 
-
-DEFAULT_MODEL = "typesafe/jev-1.13"
-DECISIONS_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 
 # A line counts as misplaced when Jev's "move" probability exceeds this.
 MOVE_THRESHOLD = 0.5
@@ -127,7 +125,7 @@ def audit_fingerprint(name: str, content: str | None) -> str:
 
 
 def jev_line_verdicts(name: str, content: str, other_names: list[str],
-                      model: str = DEFAULT_MODEL) -> list[dict[str, Any]]:
+                      model: str = JEV_MODEL) -> list[dict[str, Any]]:
     """Ask Jev, line by line, whether each line belongs under this node's name.
 
     Input: the node's name, its full content, and the similar node names shown as context.

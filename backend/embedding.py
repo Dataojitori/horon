@@ -1,4 +1,4 @@
-"""Embedding utility — calls OpenRouter voyage-4-large for 1024-dim vectors."""
+"""OpenRouter calls: voyage-4-large embeddings (1024-dim) and the Jev decisions endpoint."""
 from __future__ import annotations
 
 import json
@@ -11,6 +11,8 @@ import urllib.request
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/embeddings"
 EMBEDDING_MODEL = "voyageai/voyage-4-large"
 EMBEDDING_DIMENSIONS = 1024
+JEV_MODEL = "typesafe/jev-1.13"
+DECISIONS_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 
 
 def embedding_to_blob(emb: list[float] | None) -> bytes | None:

@@ -65,6 +65,8 @@ class SensorHookDetail(BaseModel):
     tool: str | None = None
     match_pattern: str
     adapter: str | None = None
+    jev_question: str | None = None
+    jev_threshold: float | None = None
     created_at: str
 
 

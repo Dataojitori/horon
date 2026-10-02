@@ -192,7 +192,8 @@ def _format_read_concept(result: ReadResult) -> str:
             for sh in result.sensor_hooks:
                 tool_flag = f" --tool '{sh.tool}'" if sh.tool else ""
                 adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
-                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'{adapter_flag}")
+                jev_flag = f" --jev '{sh.jev_question}' --jev-threshold {sh.jev_threshold}" if sh.jev_question else ""
+                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'{adapter_flag}{jev_flag}")
         else:
             lines.append("Hook: (none)")
 
@@ -650,6 +651,10 @@ def _build_parser():
                    help="Limit sensor_hook/tool_guard to this host; omitted means all hosts")
     p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
                    help="Args regex pattern for tool_guard")
+    p.add_argument("--jev", dest="jev_question", default=None,
+                   help="sensor_hook: yes/no question asked to Jev after the regex hits; fires only on 'yes'")
+    p.add_argument("--jev-threshold", "--jev_threshold", dest="jev_threshold", type=float, default=None,
+                   help="sensor_hook: minimum probability of Jev's 'yes' to fire (default 0.5)")
 
     # update (content — patch or append)
     p = sub.add_parser("update", allow_abbrev=False)
@@ -847,6 +852,8 @@ def _dispatch(args, db):
             tool=getattr(args, "tool", None),
             args_pattern=getattr(args, "args_pattern", None),
             adapter=getattr(args, "adapter", None),
+            jev_question=getattr(args, "jev_question", None),
+            jev_threshold=getattr(args, "jev_threshold", None),
         )
 
     elif args.command == "update":

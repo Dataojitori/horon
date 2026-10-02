@@ -403,7 +403,8 @@ class QueryMixin:
 
     def _get_sensor_hooks(self, concept_id: int) -> list[SensorHookDetail]:
         rows = self.conn.execute(
-            "SELECT id, sensor_concept_id, event_type, tool, match_pattern, adapter, created_at "
+            "SELECT id, sensor_concept_id, event_type, tool, match_pattern, adapter, "
+            "jev_question, jev_threshold, created_at "
             "FROM sensor_hooks WHERE sensor_concept_id = ? ORDER BY id",
             (concept_id,),
         ).fetchall()

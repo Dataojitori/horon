@@ -1,11 +1,11 @@
 ---
 name: horon-cli
-description: 使用 Horon 保存与检索记忆、组织概念、配置事件提醒或阅读推荐、用电路规划和推进长期目标时，阅读此说明书。
+description: 使用 Horon 保存与检索记忆、组织概念、配置事件提醒、用电路规划和推进长期目标时，阅读此说明书。
 ---
 
 # Horon 使用说明书
 
-Horon 的开发目的是让 AI 拥有长期记忆，并能依靠积累的知识自主规划、行动和调整方向。知识可以存入概念节点，通过 Tag 组织和检索；事件可以触发通知或相关记忆的阅读推荐；长期计划可以写成拓扑图，通过电位变化推导依赖、分支和全局状态。
+Horon 的开发目的是让 AI 拥有长期记忆，并能依靠积累的知识自主规划、行动和调整方向。知识可以存入概念节点，通过 Tag 组织和检索；事件可以触发通知；长期计划可以写成拓扑图，通过电位变化推导依赖、分支和全局状态。
 
 ## 调用入口
 
@@ -289,48 +289,72 @@ python frontend/cli.py compile --target <目标名或ID> --assume <传感器A> <
 
 # 4. 让事件唤起相关记忆
 
-sensor 还可以由事件驱动。`sensor_hook` 匹配用户输入、模型输出、工具调用或工具结果，将传感器置为 1；从 0 到 1 的跃迁会触发 `on_fire`。logic 和 guard 也可以在通电时触发动作，CHAIN 还处理终态迁移。
+sensor 可以配置 `sensor_hook` 监听运行时事件。事件命中时，系统把传感器置为 1；从 0 到 1 的跃迁会触发它的 `on_fire`。它可以单独用作事件提醒，也可以作为输入接进 logic 或 guard。logic 和 guard 通电时同样可以触发 `on_fire`，CHAIN 还处理终态迁移。
 
 ## sensor 的事件监听与生命周期
 
-只有 `sensor` 角色可以配置 `sensor_hook` 监听运行时事件并驱动电位变化（`logic`、`guard` 与 `plain` 不支持挂载 Hook）。可监听的事件类型：
+只有 `sensor` 可以挂载 Hook（`logic`、`guard` 与 `plain` 不支持），每个传感器一条。
 
-| 事件 (`event_type`) | 匹配的输入内容 |
-| :--- | :--- |
-| `user_message` | 用户消息 |
-| `model_message` | 已生成的模型回复 |
-| `tool_call` | 工具调用，可限定工具名 |
-| `tool_result` | 工具结果，可限定工具名 |
+### 事件类型
 
-绑定 Hook 的 sensor 其 `lifespan` 必须使用 `turn` 或 `session`。`turn` 在回合结束时清零（指模型完成当前轮次的所有工具调用并停机交还话语权时；单轮内的多次连续工具调用仍属同一回合），适合拦截或响应瞬态事件；`session` 保留本会话已发生的事实，换会话重置时清零。两者由 Hook 自动更新；`permanent` 必须手动更新，禁止绑定 Hook。
+| 事件 (`event_type`) | 匹配的内容 | 触发时机 |
+| :--- | :--- | :--- |
+| `user_message` | 用户消息的文本 | 收到用户消息时，模型回复之前；适合对用户话里的线索作出响应 |
+| `model_message` | 模型回复的文本 | 回复生成之后；通知在后续回合注入 |
+| `tool_call` | 工具调用参数序列化后的 JSON | 工具执行之前 |
+| `tool_result` | 工具返回的输出文本 | 工具返回之后 |
 
-局部例子：需要在工具输出出现 `TimeoutError` 时得到通知，可以配置：
+### 生命周期
+
+绑定 Hook 的 sensor 必须使用 `turn` 或 `session`，由 Hook 自动置 1、按生命周期自动归零；`permanent` 只供手动维护事实，不能绑定 Hook。
+
+- `turn`：回合结束时归零。回合结束指模型完成当前轮次的所有工具调用、交还话语权；单轮内的多次连续工具调用属于同一回合。适合响应瞬态事件，如单轮内的报错提醒、行为自检。
+- `session`：本会话内保持为 1，换会话时归零。适合记录本会话已经发生的事，如“本会话已读取某规范”。
+
+### 配置命令
+
+```bash
+python frontend/cli.py set <传感器名> sensor_hook <event_type> \
+  --match-pattern "<正则>" \
+  [--tool <工具名>] \
+  [--jev "<是非题>"] [--jev-threshold 0.5] \
+  [--adapter claude-code|codex|antigravity]
+```
+
+匹配分两步：先用正则筛；挂了 `--jev` 的传感器，正则命中后再由 Jev 按意思复筛。重新执行会覆盖原有 Hook。
+
+- `--match-pattern`：必填 Python 正则，按 `re.search(..., re.IGNORECASE)` 匹配：全文任意位置命中即可，不区分大小写。要匹配某个工具的全部调用而不限制参数或结果，传入 `".*"`。
+- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，按工具名精确匹配；消息类事件不能指定。
+- `--adapter`：可选，只在该宿主的会话里匹配。省略则所有宿主都匹配；宿主未知的会话（如终端手敲）只匹配省略了它的 Hook。
+- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
+  - 判定机制：Jev 判定为“是”的概率不低于 `--jev-threshold`（默认 0.5）才点火；调用失败（超时、无 Key 等）时降级按正则结果点火。
+  - 输入边界：Jev 只看到当条事件文本，前面标明是谁说的，如 `用户对 AI 说：「……」`、`AI 对用户说：「……」`，看不到上下文历史。`tool_result` 在 Jev 那里是 `AI 调用工具 Bash 后，工具 Bash 返回：「……」`，只精确到工具名，Jev 不知道你敲的具体命令。
+  - 出题规范：写一道单凭当条文本就能判断的是非题，写清这段文本是谁对谁说的、要判断的是它在表明什么；想排除的情形也写进问题里。如 `--jev "用户对 AI 说的这句话，是在表明用户自己同意 AI 把内容发出去吗？（转述别人的话、否定、提问都不算）"`。
+  - 正则配合：仍需配置针对性初筛正则，避免使用 `".*"` 导致每条事件全量请求 Jev 产生延迟与费用。
+
+### 误报与漏报的记录
+
+传感器响了但不该响（误报），或该响没响（漏报）时，当场在该传感器节点追加一行，先不改正则或问题：
+
+```bash
+python frontend/cli.py update <传感器名> content --append "- [YYYY-MM-DD] 误报：<触发的原文> ｜ <为什么不该响>"
+```
+
+通知开头写着发出它的节点（`notify from <ID> <名称>：`）；如果那是 logic 或 guard，误报记到它的输入传感器上。积累了真实样本，再判断要不要调、怎么调。
+
+## on_fire 动作
+
+节点从 0 跃迁到 1 时执行 `on_fire` 配置的动作，目前可用的动作是 `notify`：把提醒文字推给 AI，开头标着来源节点。写法 `{"notify": "提醒文字"}`，再次设置会整体替换原配置。
+
+### 完整示例
+
+工具输出出现 `TimeoutError` 时得到提醒：
 
 ```bash
 python frontend/cli.py create_concept "工具输出中出现TimeoutError" --role sensor --lifespan turn --content "工具返回的文本中匹配到TimeoutError字样时通电。"
 python frontend/cli.py set "工具输出中出现TimeoutError" sensor_hook tool_result --match-pattern "TimeoutError"
 python frontend/cli.py set "工具输出中出现TimeoutError" on_fire '{"notify": "工具输出包含TimeoutError，请读取错误上下文判断原因。"}'
 ```
-
-`--tool` 仅在 `tool_call` 与 `tool_result` 下有效，按实际工具名精确匹配（消息类事件严禁指定 `--tool`）；`--match-pattern` 为必填正则表达式，底层按 `re.search(..., re.IGNORECASE)` 执行匹配（全文任意位置命中即可，已默认忽略大小写）。`tool_call` 匹配序列化后的参数 JSON，`tool_result` 匹配工具结果文本。若想匹配指定工具的全部调用而不限制参数或结果，传入 `--match-pattern ".*"`。
-
-`model_message` 在模型输出生成后才匹配，通知在后续回合注入；若希望对用户输入中的线索作出响应，使用 `user_message`。事件选择决定触发时机。
-
-## on_fire 动作
-
-| 动作 | 效果 | 当前状态 |
-| :--- | :--- | :--- |
-| `notify` | 显示通知文字 | 已接通 |
-| `set_focus` | 在 YOU MAY ALSO WANT TO READ 框中推荐读取绑定节点 | 配置可保存，推荐呈现尚未接通 |
-| `add_todo` | 待办动作 | 配置可保存，待办效果尚未接通 |
-
-`on_fire` 必须使用标准 JSON 动作对象或列表。需要配置阅读推荐时，引用实际存在且与事件相关的节点：
-
-```text
-set <事件节点名> on_fire '{"set_focus":"<待读节点名>"}'
-```
-
-设置 on_fire 会替换原动作。单独设置 set_focus 目前不会产生推荐或通知；动作列表可同时保存多项配置，例如 `[{"notify":"通知内容"},{"set_focus":"待读节点名"}]`，其中目前生效的是 notify。
 
 # 5. 用守卫控制匹配的工具调用
 
@@ -446,7 +470,7 @@ Tag 插件的 `on_mutation` 可以检查变更并拒绝不合要求的写入，`
 | 修改激活规则 | `set <名称或ID> activation-rule "规则"` |
 | 修改生命周期 | `set <名称或ID> lifespan turn\|session\|permanent` |
 | 手动拨动电位 | `set <名称或ID> active <0或1>` |
-| 绑定事件感知 | `set <名称或ID> sensor_hook user_message\|model_message\|tool_call\|tool_result --match-pattern "正则" [--tool <工具名>]` |
+| 绑定事件感知 | `set <名称或ID> sensor_hook user_message\|model_message\|tool_call\|tool_result --match-pattern "正则" [--tool <工具名>] [--jev "是非题" [--jev-threshold 0.5]]` |
 | 绑定工具守卫 | `set <名称或ID> tool_guard <工具名> [--args-pattern "正则"]` |
 | 配置发火动作 | `set <名称或ID> on_fire '<动作JSON>'` |
 | 添加/删除别名 | `add <名称或ID> name <别名>` / `delete <名称或ID> name <别名>` |

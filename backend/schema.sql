@@ -62,6 +62,8 @@ CREATE TABLE IF NOT EXISTS sensor_hooks (
     tool              TEXT,                         -- 工具名 (仅 tool_call / tool_result 时有效；消息类为 NULL)
     adapter           TEXT,                         -- NULL: all hosts; otherwise exact session adapter
     match_pattern     TEXT    NOT NULL,             -- 全文正则：匹配消息文本 / 工具返回值 / 调用参数序列化文本
+    jev_question      TEXT,                         -- 正则命中后再问 Jev 的是非题；NULL 表示只看正则
+    jev_threshold     REAL,                         -- Jev 答“是”的概率达到它才点火
     created_at        TEXT    NOT NULL
 );
 

@@ -2,7 +2,7 @@
 Horon Harness Functions — 神经效应器核心原子动作。
 
 提供 4 个扁平直白的操作函数（直接操作 HoronDB，无任何 Class 伪封装）：
-1. sense: 被动感觉传入（查 sensor_hooks 正则、点火传感器、拓扑求值）
+1. sense: 被动感觉传入（查 sensor_hooks 正则、按需问 Jev 复核、点火传感器、拓扑求值）
 2. guard: 主动运动门禁（查 tool_guards 电位，未激活则逆推原因物理拦截）
 3. drain: 效应排空封包（从 pending 队列提取通知，打上 【Horon Harness】 信头）
 4. sync_session / end_turn: 时序生命周期复位
@@ -16,11 +16,25 @@ import re
 from typing import Any
 
 from backend.db import HoronDB
+from backend.embedding import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
 from backend.evaluator import load_active_states
 
 logger = logging.getLogger("horon.harness")
 
 HARNESS_PREFIX = "【Horon Harness】"
+
+# The two answers offered to Jev for every sensor question; a sensor fires on "yes".
+# The labels follow the language the questions are written in; change them together.
+JEV_CHOICES = {"yes": "是", "no": "不是"}
+# How the event text is shown to Jev: who says it to whom, with the text quoted inside.
+# A separate lead line ("below is a user message", then the text) left Jev unsure who was
+# speaking: "He said 'go ahead'" was read as the user's own consent. {tool} is the tool name.
+JEV_STATE = {
+    "user_message": "用户对 AI 说：「{text}」",
+    "model_message": "AI 对用户说：「{text}」",
+    "tool_call": "AI 调用工具 {tool}，传的参数是：「{text}」",
+    "tool_result": "AI 调用工具 {tool} 后，工具 {tool} 返回：「{text}」",
+}
 
 
 def wrap_harness_message(items: list[str]) -> str:
@@ -73,14 +87,24 @@ def sense(
 ) -> list[str]:
     """被动感知传入：匹配 sensor_hooks，点火传感器并沿拓扑图求值。
 
-    返回本次点火产生的 notify 消息列表（纯计算，不产生队列副作用）。
+    输入：事件类型、事件文本（消息正文 / 工具结果 / 序列化的调用参数）、工具名。
+    行为：
+      1. 正则初筛：每条钩子按 match_pattern 对 text 做 re.search（忽略大小写）。
+      2. 命中且没有 jev_question 的钩子，直接点火。
+      3. 命中且有 jev_question、本会话里还没亮的钩子，把它们的问题合成一次请求问 Jev
+         （state 按 JEV_STATE 写成“谁对谁说：「text」”），
+         “是”的概率 >= jev_threshold 的才点火。Jev 调用失败时这些钩子按正则结果点火，
+         并多返回一条说明失败原因的消息。
+      4. 每问一次 Jev，在 cli_audit_log 记一行 jev_check，sub_action 形如 jev=0.08（“是”的概率）。
+    输出：本次点火产生的 notify 消息列表，每条开头写着来源节点“notify from <id> <名字>：”
+      （不往通知队列里放东西）。
     """
     if not text and not tool_name:
         return []
 
     query = (
         "SELECT sh.id AS hook_id, sh.sensor_concept_id, sh.event_type, sh.tool, "
-        "sh.match_pattern, c.name "
+        "sh.match_pattern, sh.jev_question, sh.jev_threshold, c.name "
         "FROM sensor_hooks sh "
         "JOIN concepts c ON sh.sensor_concept_id = c.id "
         "WHERE sh.event_type = ? "
@@ -89,32 +113,66 @@ def sense(
     )
     rows = db.conn.execute(query, (event_type, db.session_id)).fetchall()
     activated: list[int] = []
-
+    to_ask: list[Any] = []
     for r in rows:
-        if r["tool"] and tool_name and r["tool"] != tool_name:
+        if r["tool"] and r["tool"] != tool_name:
             continue
-        if r["tool"] and not tool_name:
+        try:
+            hit = re.search(r["match_pattern"], text, re.IGNORECASE)
+        except re.error as e:
+            logger.debug(f"Regex error on hook #{r['hook_id']} pattern {r['match_pattern']!r}: {e}")
             continue
-
-        pat = r["match_pattern"]
-        if pat:
-            try:
-                if re.search(pat, text, re.IGNORECASE):
-                    activated.append(r["sensor_concept_id"])
-            except Exception as e:
-                logger.debug(f"Regex error on hook #{r['hook_id']} pattern {pat!r}: {e}")
+        if not hit:
+            continue
+        if r["jev_question"]:
+            to_ask.append(r)
         else:
-            if r["tool"] and tool_name and r["tool"] == tool_name:
-                activated.append(r["sensor_concept_id"])
+            activated.append(r["sensor_concept_id"])
+
+    if to_ask:
+        # A sensor already on in this session gets no new rising edge, so asking Jev
+        # again could not change anything; skip it.
+        states = load_active_states(db.conn, db.session_id)
+        to_ask = [r for r in to_ask if not states.get(r["sensor_concept_id"])]
 
     messages: list[str] = []
+    if to_ask:
+        try:
+            answers = openrouter_post(DECISIONS_ENDPOINT, {
+                "model": JEV_MODEL,
+                "state": JEV_STATE[event_type].format(tool=tool_name, text=text),
+                "questions": {
+                    str(r["hook_id"]): {
+                        "type": "choice",
+                        "instructions": r["jev_question"],
+                        "criteria": JEV_CHOICES,
+                    }
+                    for r in to_ask
+                },
+            }, timeout=20)["answers"]
+            yes = {r["hook_id"]: answers[str(r["hook_id"])]["probabilities"]["yes"] for r in to_ask}
+        except Exception as e:
+            activated += [r["sensor_concept_id"] for r in to_ask]
+            messages.append(
+                f"Jev 调用失败：{e}\n"
+                "断网或超时就检查网络；没有 key、HTTP 401/402 就检查 .env 里的 OPENROUTER_API_KEY 和 OpenRouter 余额。"
+                f"这次以下传感器没经过 Jev，只按正则点火：{'、'.join(r['name'] for r in to_ask)}")
+        else:
+            for r in to_ask:
+                # One jev_check row per question; sub_action reads e.g. "jev=0.08".
+                db.log_action(command="jev_check", concept_id=r["sensor_concept_id"],
+                              concept_name=r["name"], sub_action=f"jev={yes[r['hook_id']]:.2f}")
+                if yes[r["hook_id"]] >= r["jev_threshold"]:
+                    activated.append(r["sensor_concept_id"])
+
     if activated:
         eval_res = db.evaluate(activated_sensors=activated)
         for fa in eval_res.fired_actions:
             actions = fa.action if isinstance(fa.action, list) else [fa.action] if isinstance(fa.action, dict) else []
             for act in actions:
                 if isinstance(act, dict) and "notify" in act and act["notify"]:
-                    messages.append(str(act["notify"]))
+                    # Name the node so a wrong alarm can be written back to it.
+                    messages.append(f"notify from {fa.concept_id} {fa.concept}：{act['notify']}")
 
     return messages
 
