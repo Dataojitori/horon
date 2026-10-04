@@ -186,13 +186,14 @@ def handle_antigravity(event_name: str, payload: dict[str, Any], db: HoronDB) ->
 
         transcript_path = payload.get("transcriptPath")
         entries = get_latest_transcript_entries(transcript_path, max_entries=5)
+        # 只看最新一条模型步骤。只调工具不说话的步骤也是 PLANNER_RESPONSE，
+        # 只是没有 content；这时本次调用就算没说话，不能继续往前翻——
+        # 往前翻会拿到上一回合的回复，把旧话当新话再感知一遍（误报「说了记住但没写入」）。
         model_text = ""
         for entry in entries:
             if entry.get("type") == "PLANNER_RESPONSE" and entry.get("source") == "MODEL":
-                content = _extract_text(entry.get("content", ""))
-                if content.strip():
-                    model_text = content
-                    break
+                model_text = _extract_text(entry.get("content", "")).strip()
+                break
 
         fired_msgs: list[str] = []
         if model_text:

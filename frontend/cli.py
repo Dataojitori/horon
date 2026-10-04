@@ -29,7 +29,9 @@ from backend.text_patch import (
     preview,
     try_normalized_patch,
 )
-from backend.content_scope_audit import audit_concepts, format_report, refresh_audit_coverage
+from backend.content_scope_audit import (
+    BLOAT_BYTES, audit_concepts, format_report, list_bloated, refresh_audit_coverage,
+)
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
@@ -604,6 +606,8 @@ def _build_parser():
     p.add_argument("--db", action="store_true", help="Run database system integrity audit (e.g. missing embeddings)")
     p.add_argument("--scope", nargs="+", metavar="CONCEPT", default=None,
                    help="Ask Jev (OpenRouter, paid), line by line, whether each line of these concepts' content belongs under the concept's name")
+    p.add_argument("--bloat", nargs="?", type=int, const=BLOAT_BYTES, default=None, metavar="BYTES",
+                   help=f"List concepts that passed the --scope audit (unchanged since) but whose content is at least BYTES UTF-8 bytes (default {BLOAT_BYTES}), largest first")
 
     # search_concepts
     p = sub.add_parser("search_concepts", allow_abbrev=False)
@@ -791,6 +795,10 @@ def _dispatch(args, db):
         return RawOutput("\n".join(lines))
 
     elif args.command == "audit":
+        if args.bloat is not None:
+            if args.scope or args.tag or args.all or args.db:
+                raise ValueError("--bloat cannot be combined with other audit targets. Run 'audit --bloat [BYTES]' on its own.")
+            return RawOutput(list_bloated(db, args.bloat))
         if args.scope and (args.tag or args.all or args.db):
             raise ValueError(
                 "--scope cannot be combined with a tag name, --all or --db. "

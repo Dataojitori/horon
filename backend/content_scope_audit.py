@@ -58,6 +58,16 @@ REPORT_FOOTER = """每行问 Jev 留在本节点还是移走；移走概率 > 0.
 改完重跑：改名后反而更差，问题在内容；改名后还要查别处对旧名字的引用。
 认为某一行 Jev 判错了，要说得出它为什么读不懂这一行；同一种误判反复出现，就去改审核规则。"""
 
+# Header of the audit --bloat listing. Like PROMPT, swap it together with the language.
+BLOAT_COUNT = "[臃肿节点] {count} 个（正文范围审计健康、正文满 {min_bytes} B）"
+BLOAT_ROW = "  [{id}] {name}  {size} B（读 {reads} 次）"
+BLOAT_HEADER = BLOAT_COUNT + """，按大小排列：
+{rows}
+这些节点该反思了：如何避开自己原有的偏见，从外界观察到的信息中提炼出知见。"""
+# Default size for audit --bloat. Nodes this large are several times the scope audit's
+# MIN_BYTES; adjust once there are real readings of which large nodes needed work.
+BLOAT_BYTES = 4000
+
 
 def load_name_embeddings(db) -> tuple[list[int], list[str], np.ndarray]:
     """Return every node's primary name and its unit-length embedding, from concept_name_embeddings.
@@ -247,6 +257,35 @@ def audit_concepts(db, concepts: list[str]) -> list[dict[str, Any]]:
             record_pass(db, n["id"], fingerprint)
         results.append(result)
     return results
+
+
+def list_bloated(db, min_bytes: int = BLOAT_BYTES) -> str:
+    """List nodes that passed the content-scope audit but have grown large, largest first.
+
+    Input: an open HoronDB and the size threshold in UTF-8 bytes (counted like the audit:
+    non-empty lines only, see audit_content_bytes).
+    A node counts as passed when the fingerprint of its current name and content equals
+    concepts.scope_audit_fingerprint, i.e. it passed and has not been edited since.
+    Read-only: nothing is recorded.
+    Output: BLOAT_HEADER with one line per node (id, name, bytes, read_concept count),
+    or just the BLOAT_COUNT line (count 0) when no passed node reaches min_bytes.
+    """
+    read_counts = db.get_read_counts()
+    stored = dict(db.conn.execute("SELECT id, scope_audit_fingerprint FROM concepts").fetchall())
+    bloated = []
+    for node in db.get_all_concepts_overview():
+        if stored.get(node["id"]) != audit_fingerprint(node["name"], node["content"]):
+            continue
+        size = audit_content_bytes(node["content"])
+        if size >= min_bytes:
+            bloated.append((size, node))
+    if not bloated:
+        return BLOAT_COUNT.format(count=0, min_bytes=min_bytes)
+    bloated.sort(key=lambda pair: pair[0], reverse=True)
+    rows = "\n".join(BLOAT_ROW.format(id=n["id"], name=n["name"], size=size,
+                                      reads=read_counts.get(n["id"], 0))
+                     for size, n in bloated)
+    return BLOAT_HEADER.format(count=len(bloated), min_bytes=min_bytes, rows=rows)
 
 
 def refresh_audit_coverage(db, tag_expr: str | None = None, preview: int = 10) -> str | None:
