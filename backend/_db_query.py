@@ -1,7 +1,6 @@
 """Query / read mixin for HoronDB."""
 from __future__ import annotations
 
-import math
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
@@ -11,13 +10,17 @@ from ._db_common import _now, transactional
 from .evaluator import load_active_states
 from .embedding import embed_texts, EMBEDDING_DIMENSIONS
 from .models import (
-    Concept, ComposeMemberDetail, ReadResult,
+    Concept, ComposeMemberDetail, MutationResult, ReadResult,
     ReminderDetail, TransitionSuggestion,
     SearchMatch, ConceptSearchResult, SensorHookDetail, ToolGuardDetail, InhibitionDetail,
 )
 
 _DECAY_GAMMA = 0.95
 _PRUNING_THRESHOLD = 0.05
+_AUTO_TRANSITION_STEP = 0.8
+_PLACE_TOP_GAP = 1.0     # place 放到第 1 名时，比原第 1 名高出的权重
+_PLACE_BELOW_LAST = 0.9  # place 放到所有边之后时，取最后一名权重的这个倍数
+_TIE_EPSILON = 1e-9      # 两条边权重差不超过它就算等权（批量读取平摊出的份量会精确相等）
 
 
 class QueryMixin:
@@ -634,7 +637,7 @@ class QueryMixin:
             "FROM concept_transitions ct "
             "JOIN concepts c ON ct.to_concept_id = c.id "
             "WHERE ct.from_concept_id = ? "
-            "ORDER BY ct.weight DESC LIMIT ?",
+            "ORDER BY ct.weight DESC, ct.to_concept_id ASC LIMIT ?",
             (concept_id, limit),
         ).fetchall()
 
@@ -694,24 +697,26 @@ class QueryMixin:
 
     @transactional
     def record_transition(self, to_ids: list[int]) -> None:
-        """Record an attention transition A → B with surprise-weighted update.
+        """Record an implicit attention transition A → B from sequential reads.
 
         一个节点的出边权重是"从这里出发、下一步读什么"的分布。每次读取，给每个来源
-        记一次观察：to_ids 是这次读到的节点（单读传一个，read_concept 批量读取传整批，
+        记一次温和的共现观察：to_ids 是这次读到的节点（单读传一个，read_concept 批量读取传整批，
         批内顺序不建边）；去向是一批时，这一次观察的份量在批内 N 个节点间平摊。
         一批在往回追溯时算一次读取（审计日志里 sub_action 相同的相邻行），批内每个
         节点各自是一个完整的来源——它们各自都观察到了"下一步是这次读取"。
 
+        自动共读只留轻痕迹（_AUTO_TRANSITION_STEP = 0.8），避免单次误读或跨话题切换
+        因高惊奇度直接冲上推荐榜首；真正的强连接靠多次共读自然累积，或由 place 命令直接指定名次。
+
         Traces back up to 3 recent distinct reads (a batch counts as one read).
         The most recent read has relevance 1.0, the second 0.5, and the third 0.25.
 
-        Algorithm for each traced 'from_id' (order matters):
-        1. Decay all outgoing weights from A by γ (0.95)
+        Algorithm for each traced 'from_id':
+        1. Decay all outgoing weights from A by γ^relevance (0.95 / ≈0.975 / ≈0.987):
+           the decay is scaled the same way as the gain, so a distant source that only
+           gains 0.2 is not discounted as hard as the most recent one
         2. Prune dead edges (weight < 0.05)
-        3. P' = max(w₀, 0.05) / (W_total + 1.0)   — smoothed prior; W_total is
-           taken once per source, so the result does not depend on batch order
-        4. I  = -log₂(P')                         — surprise
-        5. new_weight = w₀ + I * relevance / N    — N = len(to_ids)
+        3. new_weight = w₀ + _AUTO_TRANSITION_STEP * relevance / N   — N = len(to_ids)
         """
         if not to_ids:
             return
@@ -766,6 +771,9 @@ class QueryMixin:
             if n_reads == 3:
                 break
 
+        now_str = _now()
+        delta_base = _AUTO_TRANSITION_STEP / len(to_ids)
+
         for from_id, relevance in sources:
             exists = self.conn.execute(
                 "SELECT 1 FROM concepts WHERE id = ?", (from_id,)
@@ -776,7 +784,7 @@ class QueryMixin:
             self.conn.execute(
                 "UPDATE concept_transitions SET weight = weight * ? "
                 "WHERE from_concept_id = ?",
-                (_DECAY_GAMMA, from_id),
+                (_DECAY_GAMMA ** relevance, from_id),
             )
 
             self.conn.execute(
@@ -785,13 +793,6 @@ class QueryMixin:
                 (from_id, _PRUNING_THRESHOLD),
             )
 
-            total_row = self.conn.execute(
-                "SELECT COALESCE(SUM(weight), 0.0) AS total "
-                "FROM concept_transitions WHERE from_concept_id = ?",
-                (from_id,),
-            ).fetchone()
-            w_total = total_row["total"]
-
             for to_id in to_ids:
                 row = self.conn.execute(
                     "SELECT weight FROM concept_transitions "
@@ -799,10 +800,7 @@ class QueryMixin:
                     (from_id, to_id),
                 ).fetchone()
                 w0 = row["weight"] if row else 0.0
-
-                p_prime = max(w0, _PRUNING_THRESHOLD) / (w_total + 1.0)
-                surprise = -math.log2(p_prime)
-                new_weight = w0 + surprise * relevance / len(to_ids)
+                new_weight = w0 + delta_base * relevance
 
                 self.conn.execute(
                     "INSERT INTO concept_transitions "
@@ -810,8 +808,189 @@ class QueryMixin:
                     "VALUES (?, ?, ?, ?) "
                     "ON CONFLICT (from_concept_id, to_concept_id) "
                     "DO UPDATE SET weight = ?, last_accessed_at = ?",
-                    (from_id, to_id, new_weight, _now(), new_weight, _now()),
+                    (from_id, to_id, new_weight, now_str, new_weight, now_str),
                 )
+
+    def _get_transition_rank(self, src_id: int, dst_id: int) -> int | None:
+        """返回 dst_id 在 src_id 所有出边中的 1-based 排名（与推荐列表同一排序）；没有这条边返回 None。"""
+        rows = self.conn.execute(
+            "SELECT to_concept_id FROM concept_transitions "
+            "WHERE from_concept_id = ? ORDER BY weight DESC, to_concept_id ASC",
+            (src_id,),
+        ).fetchall()
+        for idx, r in enumerate(rows, 1):
+            if r["to_concept_id"] == dst_id:
+                return idx
+        return None
+
+    def _format_suggestion_list(self, src_id: int) -> list[str]:
+        """把 src 当前的推荐前 10 格式化成多行文本，给 place / cut 的回显用。"""
+        name = self._resolve_concept_name(src_id)
+        rows = self.conn.execute(
+            "SELECT ct.to_concept_id, c.name, ct.weight FROM concept_transitions ct "
+            "JOIN concepts c ON ct.to_concept_id = c.id "
+            "WHERE ct.from_concept_id = ? "
+            "ORDER BY ct.weight DESC, ct.to_concept_id ASC LIMIT 10",
+            (src_id,),
+        ).fetchall()
+        lines = [f"Suggestions from [{src_id}] {name} now:"]
+        if not rows:
+            lines.append("  (none)")
+        for idx, r in enumerate(rows, 1):
+            lines.append(f"  #{idx} [{r['to_concept_id']}] {r['name']} (w={r['weight']:.2f})")
+        return lines
+
+    @transactional
+    def place_transition(self, from_concept, to_concept, rank: int) -> MutationResult:
+        """把 from → to 这条推荐边放到 from 的推荐列表第 rank 位（1 = 最前）。
+
+        输入：起点、目标（名称/别名/ID）、目标名次（正整数，可以大于 10，表示放到前 10 之外）。
+        行为：取 from 除这条边以外的所有出边按权重降序排好，给这条边算一个刚好落在第 rank 位的权重：
+          - rank = 1：比当前第 1 名高 _PLACE_TOP_GAP；
+          - 落在两条边之间：取两者权重的中点；两者等权时，把插入点以上与之等权的边抬高一点腾出空当
+            （不越过更靠前的边，其余顺序不变）；
+          - rank 超过其余边的条数：取最后一名权重的 _PLACE_BELOW_LAST 倍（没有其余边时给 _PLACE_TOP_GAP）。
+          边不存在就新建。之后的自动共读与衰减照常作用在这条边上，名次会随之变化。
+        输出：MutationResult，message 含这条边的 旧权重 -> 新权重、实际名次，以及 from 当前的推荐前 10。
+        """
+        if rank < 1:
+            raise ValueError(f"Rank must be a positive integer, got {rank}.")
+        from_id = self._resolve_id(from_concept)
+        to_id = self._resolve_id(to_concept)
+        from_name = self._resolve_concept_name(from_id)
+        if to_id == from_id:
+            raise ValueError(
+                f"Cannot place a transition from a concept to itself: '{from_name}' (id={from_id})."
+            )
+
+        row = self.conn.execute(
+            "SELECT weight FROM concept_transitions "
+            "WHERE from_concept_id = ? AND to_concept_id = ?",
+            (from_id, to_id),
+        ).fetchone()
+        w0 = row["weight"] if row else None
+
+        others = [
+            (r["to_concept_id"], r["weight"]) for r in self.conn.execute(
+                "SELECT to_concept_id, weight FROM concept_transitions "
+                "WHERE from_concept_id = ? AND to_concept_id != ? "
+                "ORDER BY weight DESC, to_concept_id ASC",
+                (from_id, to_id),
+            ).fetchall()
+        ]
+        now_str = _now()
+        raised: list[int] = []
+        if not others:
+            new_weight = _PLACE_TOP_GAP
+        elif rank == 1:
+            new_weight = others[0][1] + _PLACE_TOP_GAP
+        elif rank <= len(others):
+            above_w, below_w = others[rank - 2][1], others[rank - 1][1]
+            if above_w - below_w > _TIE_EPSILON:
+                new_weight = (above_w + below_w) / 2
+            else:
+                # 插入点两侧等权（批量读取平摊的份量就会产生这种状态），中点没有空当。
+                # 把插入点以上、与它等权的那几条边一起抬高 delta，再把这条边放在抬高前后之间。
+                # delta 取到上一档不同权重距离的一半，所以不会越过更靠前的边，其余边的相对顺序不变。
+                tie_w = above_w
+                higher = [w for _, w in others[:rank - 1] if w - tie_w > _TIE_EPSILON]
+                delta = (min(higher) - tie_w) / 2 if higher else _PLACE_TOP_GAP
+                raised = [oid for oid, w in others[:rank - 1] if abs(w - tie_w) <= _TIE_EPSILON]
+                for oid in raised:
+                    self.conn.execute(
+                        "UPDATE concept_transitions SET weight = weight + ? "
+                        "WHERE from_concept_id = ? AND to_concept_id = ?",
+                        (delta, from_id, oid),
+                    )
+                new_weight = tie_w + delta / 2
+        else:
+            new_weight = others[-1][1] * _PLACE_BELOW_LAST
+
+        self.conn.execute(
+            "INSERT INTO concept_transitions "
+            "(from_concept_id, to_concept_id, weight, last_accessed_at) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (from_concept_id, to_concept_id) "
+            "DO UPDATE SET weight = ?, last_accessed_at = ?",
+            (from_id, to_id, new_weight, now_str, new_weight, now_str),
+        )
+
+        to_name = self._resolve_concept_name(to_id)
+        actual = self._get_transition_rank(from_id, to_id)
+        old_str = f"{w0:.2f}" if w0 is not None else "new edge"
+        lines = [
+            f"Success. Placed [{from_id}] {from_name} -> [{to_id}] {to_name}: "
+            f"{old_str} -> {new_weight:.2f}, requested #{rank}, now #{actual}."
+        ]
+        expected = min(rank, len(others) + 1)
+        if actual != expected:
+            raise RuntimeError(
+                f"place landed [{to_id}] at #{actual} instead of #{expected} in [{from_id}]'s list; "
+                "nothing was changed."
+            )
+        if raised:
+            lines.append(
+                f"  ({len(raised)} edge(s) above had the same weight; raised them slightly to make room, "
+                "their order is unchanged.)"
+            )
+        if new_weight < _PRUNING_THRESHOLD:
+            lines.append(
+                f"  (Weight is below the pruning threshold {_PRUNING_THRESHOLD}; "
+                "the edge will be removed the next time this source decays.)"
+            )
+        lines.extend(self._format_suggestion_list(from_id))
+        return MutationResult(message="\n".join(lines), concept_id=from_id, concept_name=from_name)
+
+    @transactional
+    def cut_transition(self, from_concept, to_concepts: list, both: bool = False) -> MutationResult:
+        """删除 from → 每个 to 的推荐边（both=True 时反方向的边也删）。
+
+        输入：起点、一个或多个目标（名称/别名/ID）。
+        行为：边存在就删除；不存在的列出来，不报错。以后真被一起读，这条边会从 0 重新长。
+        输出：MutationResult，message 含每条边的处理结果，以及受影响起点当前的推荐前 10。
+        """
+        from_id = self._resolve_id(from_concept)
+        from_name = self._resolve_concept_name(from_id)
+        if not to_concepts:
+            raise ValueError("At least one target concept is required.")
+        to_ids: list[int] = []
+        for t in to_concepts:
+            tid = self._resolve_id(t)
+            if tid == from_id:
+                raise ValueError(
+                    f"Cannot cut a transition from a concept to itself: '{from_name}' (id={from_id})."
+                )
+            if tid not in to_ids:
+                to_ids.append(tid)
+        pairs = [(from_id, tid) for tid in to_ids]
+        if both:
+            pairs += [(tid, from_id) for tid in to_ids]
+
+        lines = ["Success. Cut transition(s):"]
+        sources: list[int] = []
+        for src_id, dst_id in pairs:
+            row = self.conn.execute(
+                "SELECT weight FROM concept_transitions "
+                "WHERE from_concept_id = ? AND to_concept_id = ?",
+                (src_id, dst_id),
+            ).fetchone()
+            label = (f"  [{src_id}] {self._resolve_concept_name(src_id)} -> "
+                     f"[{dst_id}] {self._resolve_concept_name(dst_id)}")
+            if not row:
+                lines.append(f"{label}: no existing edge")
+                continue
+            self.conn.execute(
+                "DELETE FROM concept_transitions "
+                "WHERE from_concept_id = ? AND to_concept_id = ?",
+                (src_id, dst_id),
+            )
+            lines.append(f"{label}: {row['weight']:.2f} -> cut")
+            if src_id not in sources:
+                sources.append(src_id)
+
+        for src_id in sources:
+            lines.extend(self._format_suggestion_list(src_id))
+        return MutationResult(message="\n".join(lines), concept_id=from_id, concept_name=from_name)
 
     # ── Recent mutations ────────────────────────────────────────────────────
 

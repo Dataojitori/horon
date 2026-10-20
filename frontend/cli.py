@@ -146,7 +146,12 @@ def _format_circuit_line(result: ReadResult) -> str:
         return f"(none) = {res_str}"
 
 
-def _format_read_concept(result: ReadResult) -> str:
+def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = frozenset()) -> str:
+    """把一次 read_concept 的结果排成终端文本。
+
+    listed_above：同一份输出里前面已经完整展示过的节点 ID（login 用）。推荐里遇到它们只印
+    名次和 ID 一行，不再重复名字和书腰，名次照常连续，与 place --at 对得上。
+    """
     lines = []
     role_str = result.role.upper()
     if result.role == "guard":
@@ -234,16 +239,23 @@ def _format_read_concept(result: ReadResult) -> str:
         footer_blocks.append(block)
 
     if result.suggested_next:
-        block = ["[ YOU MAY ALSO NEED ]"]
-        for s in result.suggested_next:
-            block.append(f"  - [{s.concept_id}] {s.concept_name}")
+        block = [f"[ YOU MAY ALSO NEED ] (move: place <id> --in {result.id} --at <rank> "
+                 f"| remove: cut <id...> --from {result.id})"]
+        # suggested_next 是完整的推荐前 N（按 place 用的同一排序），序号就是名次，与 place --at 对得上；
+        # 所以这里不要过滤列表，不想重复展示的用 listed_above 缩成一行
+        for rank, s in enumerate(result.suggested_next, 1):
+            if s.concept_id in listed_above:
+                block.append(f"  #{rank} [{s.concept_id}] (listed above, w={s.weight:.2f})")
+                continue
+            block.append(f"  #{rank} [{s.concept_id}] {s.concept_name} (w={s.weight:.2f})")
             if s.disclosure:
                 block.append(f"    ↳ When: {s.disclosure}")
         footer_blocks.append(block)
 
         # 同属一个 Tag 的不提示：已经被归到一起管理，书腰相近可以是有意的
         similar = [s for s in result.suggested_next
-                   if s.disclosure_similarity is not None
+                   if s.concept_id not in listed_above
+                   and s.disclosure_similarity is not None
                    and s.disclosure_similarity >= DISCLOSURE_SIMILAR_THRESHOLD
                    and not s.shares_tag]
         if similar:
@@ -354,14 +366,13 @@ def _format_login(db, recent_n: int) -> str:
             db.record_transition([r.id for r in results])
         except Exception:
             logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
-        # 推荐是开局看见别的节点存在的入口，留着；但同一个节点在几个启动节点底下各列一次（曾经一份 login 里
-        # 1011、1041 各出现三次，推荐占了四分之一），所以每个推荐节点只在第一次出现时列出，也不列启动节点自己。
+        # 推荐是开局看见别的节点存在的入口，留着；但同一个节点会在几个启动节点底下各列一次，书腰重复印
+        # 很占篇幅。所以启动节点自己和前面已列过的推荐只印名次和 ID 一行（名次保持连续，可以直接拿去 place）。
         seen = set(boot_ids)
         bodies = []
         for r in results:
-            fresh = [s for s in r.suggested_next if s.concept_id not in seen]
-            seen.update(s.concept_id for s in fresh)
-            bodies.append(_format_read_concept(r.model_copy(update={"suggested_next": fresh})))
+            bodies.append(_format_read_concept(r, listed_above=frozenset(seen)))
+            seen.update(s.concept_id for s in r.suggested_next)
         parts.append(header + "\n" + "\n\n".join(bodies))
 
     if recent_n > 0:
@@ -689,6 +700,28 @@ def _build_parser():
     p.add_argument("concept", nargs="+",
                    help="一个或多个节点名/别名/ID。一次读多个时整批算一次读取，批内顺序不记注意力转移。")
 
+    # place — 把一条推荐边放到起点推荐列表的指定名次
+    p = sub.add_parser("place", allow_abbrev=False,
+                       help="place <suggested> --in <list owner> --at <rank>: put a concept at the given "
+                            "rank of another concept's [ YOU MAY ALSO NEED ] list. Prints the updated list.")
+    p.add_argument("to_concept", metavar="suggested",
+                   help="The concept to move (name, alias, or ID)")
+    p.add_argument("--in", dest="from_concept", metavar="LIST_OWNER", required=True,
+                   help="The concept whose suggestion list is being edited")
+    p.add_argument("--at", dest="rank", metavar="RANK", type=int, required=True,
+                   help="1 = top. A rank past the end (e.g. 11) moves it out of the top 10 without deleting it.")
+
+    # cut — 删除推荐边
+    p = sub.add_parser("cut", allow_abbrev=False,
+                       help="cut <suggested...> --from <list owner>: remove concept(s) from another "
+                            "concept's [ YOU MAY ALSO NEED ] list (deletes the edges). Prints the updated list.")
+    p.add_argument("to_concepts", metavar="suggested", nargs="+",
+                   help="One or more concepts to remove (name, alias, or ID)")
+    p.add_argument("--from", dest="from_concept", metavar="LIST_OWNER", required=True,
+                   help="The concept whose suggestion list is being edited")
+    p.add_argument("--both", action="store_true",
+                   help="Also remove the list owner from each removed concept's own list")
+
     # compile — backward solver diagnostics for target concept
     p = sub.add_parser("compile", allow_abbrev=False,
                        help="Backward solver diagnostics for target concept.")
@@ -918,6 +951,12 @@ def _dispatch(args, db):
                 "record_transition failed", exc_info=True)
         return results[0] if len(results) == 1 else BatchReadOutput(results)
 
+    elif args.command == "place":
+        return db.place_transition(args.from_concept, args.to_concept, args.rank)
+
+    elif args.command == "cut":
+        return db.cut_transition(args.from_concept, args.to_concepts, both=args.both)
+
     elif args.command == "read_memory":
         content = _read_nocturne_memory(args.uri)
         if args.out:
@@ -1036,6 +1075,12 @@ def _audited_dispatch(args, db):
         sub_action = args.prop
     elif cmd == "update":
         sub_action = args.field
+    elif cmd == "place":
+        sub_action = f"{args.to_concept}:#{args.rank}"
+    elif cmd == "cut":
+        sub_action = ",".join(str(t) for t in args.to_concepts)
+        if args.both:
+            sub_action += ":both"
 
     try:
         result = _dispatch(args, db)
