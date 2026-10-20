@@ -16,8 +16,32 @@ from .tag_sandbox import (
 )
 
 
+def _ask_jev(state: str, question: str) -> float | None:
+    """问 Jev 一道是非题，返回“是”的概率；调用失败返回 None（交给插件自己决定怎么处理）。"""
+    from .embedding import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
+    try:
+        answers = openrouter_post(DECISIONS_ENDPOINT, {
+            "model": JEV_MODEL,
+            "state": state,
+            "questions": {"q": {"type": "choice", "instructions": question,
+                                "criteria": {"yes": "是", "no": "不是"}}},
+        }, timeout=20)["answers"]
+        return answers["q"]["probabilities"]["yes"]
+    except Exception:
+        return None
+
+
 class PluginMixin:
     """Proxy factories, mutation hooks, and cluster audit."""
+
+    def _was_concept_name(self, text: str) -> bool:
+        """text 是现在的节点名/别名，或审计日志里某个节点用过的名字（改名前的旧名也算）。"""
+        t = (text or "").strip()
+        return bool(t) and self.conn.execute(
+            "SELECT 1 FROM aliases WHERE alias = ? UNION ALL "
+            "SELECT 1 FROM cli_audit_log WHERE concept_name = ? LIMIT 1",
+            (t, t),
+        ).fetchone() is not None
 
     def _get_plugin(self, tag_name: str) -> dict | None:
         """Load plugin with mtime-based hot-reload. Returns None for pure tags."""
@@ -154,6 +178,8 @@ class PluginMixin:
             changed,
             get_concept=self._make_concept_proxy,
             adapter=adapter,
+            was_concept_name=self._was_concept_name,
+            jev=_ask_jev,
         )
         try:
             plugin["on_mutation"](ctx)

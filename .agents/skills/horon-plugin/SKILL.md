@@ -124,6 +124,8 @@ def audit_cluster(ctx):
 - **`ctx.reject(msg)`**: 阻断当前操作并触发事务回滚（消息直接反馈给用户）。
 - **`ctx.info(msg)`**: 仅在事务成功提交后，向用户输出结构化引导提示。
 - **`ctx.get_concept(concept_id)`**: 按 ID 取任意概念的 `ConceptProxy`，用于跨节点检查。
+- **`ctx.was_concept_name(text)`** → `bool`: 这段文字现在或曾经是某个节点的名字/别名（审计日志里用过的旧名也算）。用来分辨一段引号里装的是节点名还是别的文字。
+- **`ctx.jev(state, question)`** → `float | None`: 问 Jev 一道是非题，返回答“是”的概率；失败返回 `None`。Jev 只看得到 `state` 这段文字。会联网、花钱、等一两秒；适合给拦截消息加标注，不适合单独决定放行——它判错时，代价落在插件要保护的东西上。问法要先拿几条已知答案的样本试过，分不开就换问法。
 
 #### `audit_cluster(ctx)` 作用域：
 - **`ctx.tag_name`** (`str`): tag 名称。

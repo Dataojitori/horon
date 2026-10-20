@@ -311,6 +311,8 @@ class MutationContext:
         changed: dict | None,
         get_concept: Callable[[int], ConceptProxy] | None = None,
         adapter: str | None = None,
+        was_concept_name: Callable[[str], bool] | None = None,
+        jev: Callable[[str, str], float | None] | None = None,
     ):
         self.tag_name = tag_name
         self.this = this_proxy
@@ -320,12 +322,37 @@ class MutationContext:
         # names they allow; future hosts may register new names.
         self.adapter = adapter
         self._get_concept = get_concept
+        self._was_concept_name = was_concept_name
+        self._jev = jev
         self._infos: list[str] = []
 
     def get_concept(self, concept_id: int) -> ConceptProxy:
         if self._get_concept is None:
             raise RuntimeError("get_concept is not available.")
         return self._get_concept(concept_id)
+
+    def was_concept_name(self, text: str) -> bool:
+        """text 现在或曾经是某个节点的名字/别名吗。
+
+        输入：一段文字（比较前去掉首尾空白）。
+        输出：现在的名字或别名里有它，或者审计日志里有节点用过这个名字，返回 True；否则 False。
+        用途：插件分辨引号里装的是节点名（包括改名前的旧名），还是别的文字。
+        """
+        if self._was_concept_name is None:
+            return False
+        return self._was_concept_name(text)
+
+    def jev(self, state: str, question: str) -> float | None:
+        """问 Jev 一道是非题，返回它答“是”的概率。
+
+        输入：state 是要判断的那段文字（Jev 只看得到它，看不到别的上下文）；
+              question 是一道单凭 state 就能答的是非题。
+        输出：0 到 1 之间的概率；调用失败（断网、超时、没有 key）返回 None。
+        会联网、要花钱、要等一两秒，只在确实需要判断时调用。
+        """
+        if self._jev is None:
+            return None
+        return self._jev(state, question)
 
     def reject(self, msg: str) -> None:
         raise HookRejection(msg)

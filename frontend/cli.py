@@ -739,9 +739,9 @@ def _build_parser():
     p.add_argument("n", nargs="?", type=int, default=10,
         help="Number of distinct concepts to show (default: 10)")
 
-    # suggest_name — 起名小助手
+    # suggest_name — 起名与检查小助手
     p = sub.add_parser("suggest_name", allow_abbrev=False,
-        help="Ask gpt-6-luna (OpenCode Go) for candidate names for a concept, based on its content. Read-only.")
+        help="Ask gpt-6-luna to check a concept's name or suggest better names based on its type (plain/circuit/tag) and content. Read-only.")
     p.add_argument("concept", help="Concept name, alias or ID")
     p.add_argument("-n", type=int, default=3, help="How many candidates (default: 3)")
 
@@ -813,9 +813,7 @@ def _dispatch(args, db):
 
     elif args.command == "suggest_name":
         from backend.name_suggest import suggest_names
-        row = db.conn.execute("SELECT name, content FROM concepts WHERE id = ?",
-                              (db._resolve_id(args.concept),)).fetchone()
-        return RawOutput(suggest_names(row["name"], row["content"] or "", args.n))
+        return RawOutput(suggest_names(db, args.concept, args.n))
 
     elif args.command == "audit":
         if args.bloat is not None:
