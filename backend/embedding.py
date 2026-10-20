@@ -11,7 +11,7 @@ import urllib.request
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/embeddings"
 EMBEDDING_MODEL = "voyageai/voyage-4-large"
 EMBEDDING_DIMENSIONS = 1024
-JEV_MODEL = "typesafe/jev-1.13"
+JEV_MODEL = "perplexity/pplx-decider-v1.2"
 DECISIONS_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 
 

@@ -155,7 +155,9 @@ def sense(
             activated += [r["sensor_concept_id"] for r in to_ask]
             messages.append(
                 f"Jev 调用失败：{e}\n"
-                "断网或超时就检查网络；没有 key、HTTP 401/402 就检查 .env 里的 OPENROUTER_API_KEY 和 OpenRouter 余额。"
+                "断网或超时就检查网络；没有 key、HTTP 401/402 就检查 .env 里的 OPENROUTER_API_KEY 和 OpenRouter 余额；"
+                "HTTP 404 No endpoints found 多半是这个版本被新版接替了，去 openrouter.ai/perplexity 看有没有更新的 decider，"
+                "有就改 backend/embedding.py 的 JEV_MODEL，再跑 audit --scope 验证（模型详情页显示在线不可信）。\n"
                 f"这次以下传感器没经过 Jev，只按正则点火：{'、'.join(r['name'] for r in to_ask)}")
         else:
             for r in to_ask:

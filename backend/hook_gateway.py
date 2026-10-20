@@ -5,9 +5,10 @@ Horon Hook Gateway — 多环境生命周期 Hooks 统一网关。
   - antigravity (默认): Antigravity / Cursor IDE 生命周期 (.agents/hooks.json)
   - claude-code:        Anthropic Claude Code CLI 生命周期 (settings.json)
   - codex:              OpenAI Codex CLI 生命周期 (hooks.json / config.toml)
+  - opencode:           opencode 插件转发 (~/.config/opencode/plugin/horon-harness.js)
 
 调用方式 (CLI Entry Point):
-  python -m backend.hook_gateway <EventName> [--adapter antigravity|claude-code|codex]
+  python -m backend.hook_gateway <EventName> [--adapter antigravity|claude-code|codex|opencode]
   (通过 stdin 接收 Hook JSON Payload，通过 stdout / stderr 和 Exit Code 输出决策)
 """
 
@@ -30,6 +31,7 @@ from backend.db import HoronDB
 from backend.harness.adapters.antigravity import handle_antigravity
 from backend.harness.adapters.claude_code import handle_claude_code
 from backend.harness.adapters.codex import handle_codex
+from backend.harness.adapters.opencode import handle_opencode
 from backend.harness.core import (
     HARNESS_PREFIX,
     drain,
@@ -66,6 +68,8 @@ def detect_adapter_type(payload: dict[str, Any], explicit_adapter: str | None = 
             return "codex"
         if clean in ("antigravity", "cursor"):
             return "antigravity"
+        if clean == "opencode":
+            return "opencode"
 
     env_adapter = os.environ.get("HORON_HOOK_ENV", "").strip().lower()
     if env_adapter in ("claude-code", "claude"):
@@ -74,6 +78,8 @@ def detect_adapter_type(payload: dict[str, Any], explicit_adapter: str | None = 
         return "codex"
     if env_adapter in ("antigravity", "cursor"):
         return "antigravity"
+    if env_adapter == "opencode":
+        return "opencode"
 
     # 基于 Payload 结构特征启发式自动探测
     if "hook_event_name" in payload or "tool_response" in payload:
@@ -92,6 +98,7 @@ _SESSION_KEYS = {
     "claude-code": ("session_id", "conversation_id", "conversationId"),
     "codex": ("session_id", "conversation_id", "conversationId", "thread_id"),
     "antigravity": ("conversationId", "conversation_id"),
+    "opencode": ("session_id",),
 }
 
 
@@ -133,6 +140,8 @@ def dispatch_hook(
             return handle_claude_code(event_name, payload, db)
         elif adapter_type == "codex":
             return handle_codex(event_name, payload, db)
+        elif adapter_type == "opencode":
+            return handle_opencode(event_name, payload, db)
         else:
             res = handle_antigravity(event_name, payload, db)
             return 0, res, None
@@ -148,7 +157,7 @@ def main():
     parser.add_argument(
         "--adapter",
         dest="adapter",
-        choices=["antigravity", "claude-code", "codex"],
+        choices=["antigravity", "claude-code", "codex", "opencode"],
         default=None,
         help="Target IDE/CLI adapter (default: auto-detect)",
     )

@@ -48,6 +48,10 @@ DISCLOSURE_SIMILAR_THRESHOLD = 0.75
 # 读取记录、审计日志、激活状态显示、compile、inbox 都按这个会话算。
 # 嵌套启动（在一个宿主里启动另一个宿主）时可能同时存在多个变量，暂不处理。
 _ADAPTER_SESSION_VARS = {
+    # opencode 的变量由 Horon 插件经 shell.env 只注入到 opencode 的 bash 工具里，
+    # 而那些 bash 会继承启动 opencode 的父进程环境（比如从 Claude Code 里起的 opencode），
+    # 所以它放第一位：同时存在时，最内层的宿主是 opencode。
+    "HORON_OPENCODE_SESSION_ID": "opencode",
     "CLAUDE_CODE_SESSION_ID": "claude-code",
     "CODEX_THREAD_ID": "codex",
     "ANTIGRAVITY_CONVERSATION_ID": "antigravity",
@@ -350,7 +354,14 @@ def _format_login(db, recent_n: int) -> str:
             db.record_transition([r.id for r in results])
         except Exception:
             logging.getLogger(__name__).debug("record_transition failed", exc_info=True)
-        bodies = [_format_read_concept(r) for r in results]
+        # 推荐是开局看见别的节点存在的入口，留着；但同一个节点在几个启动节点底下各列一次（曾经一份 login 里
+        # 1011、1041 各出现三次，推荐占了四分之一），所以每个推荐节点只在第一次出现时列出，也不列启动节点自己。
+        seen = set(boot_ids)
+        bodies = []
+        for r in results:
+            fresh = [s for s in r.suggested_next if s.concept_id not in seen]
+            seen.update(s.concept_id for s in fresh)
+            bodies.append(_format_read_concept(r.model_copy(update={"suggested_next": fresh})))
         parts.append(header + "\n" + "\n\n".join(bodies))
 
     if recent_n > 0:
@@ -651,7 +662,7 @@ def _build_parser():
                    help="Regex or substring match pattern for sensor_hook")
     p.add_argument("--tool", default=None,
                    help="Tool name for sensor_hook (tool_call/tool_result)")
-    p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity"], default=None,
+    p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity", "opencode"], default=None,
                    help="Limit sensor_hook/tool_guard to this host; omitted means all hosts")
     p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
                    help="Args regex pattern for tool_guard")
@@ -728,6 +739,12 @@ def _build_parser():
     p.add_argument("n", nargs="?", type=int, default=10,
         help="Number of distinct concepts to show (default: 10)")
 
+    # suggest_name — 起名小助手
+    p = sub.add_parser("suggest_name", allow_abbrev=False,
+        help="Ask gpt-6-luna (OpenCode Go) for candidate names for a concept, based on its content. Read-only.")
+    p.add_argument("concept", help="Concept name, alias or ID")
+    p.add_argument("-n", type=int, default=3, help="How many candidates (default: 3)")
+
     # login — 会话开场：boot 节点 + recent（说明书只给路径）
     sub.add_parser("login", allow_abbrev=False,
         help="Session start: print all concepts tagged 'boot' and recent mutations. The manual is NOT printed; only its path."
@@ -793,6 +810,12 @@ def _dispatch(args, db):
                     prefix = "        ↳ [插件] " if i == 0 else "                "
                     lines.append(prefix + dl)
         return RawOutput("\n".join(lines))
+
+    elif args.command == "suggest_name":
+        from backend.name_suggest import suggest_names
+        row = db.conn.execute("SELECT name, content FROM concepts WHERE id = ?",
+                              (db._resolve_id(args.concept),)).fetchone()
+        return RawOutput(suggest_names(row["name"], row["content"] or "", args.n))
 
     elif args.command == "audit":
         if args.bloat is not None:

@@ -120,7 +120,11 @@ def handle_antigravity(event_name: str, payload: dict[str, Any], db: HoronDB) ->
             transcript_path = payload.get("transcriptPath")
             entries = get_latest_transcript_entries(transcript_path, max_entries=5)
             user_text = ""
+            # 宿主切模型等设置变更也记成 source=USER 的步骤（type=USER_SETTINGS_CHANGE，
+            # 正文含 "Gemini 3.8 Flash" 之类），排在真实发言之后；不跳过就会把它当成她说的话去感知。
             for entry in entries:
+                if entry.get("type") == "USER_SETTINGS_CHANGE":
+                    continue
                 if entry.get("source") in ("USER_EXPLICIT", "USER"):
                     content = _extract_text(entry.get("content", ""))
                     if not content:

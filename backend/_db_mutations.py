@@ -199,7 +199,7 @@ class MutationMixin:
         if not match_pattern or not match_pattern.strip():
             raise ValueError("match_pattern cannot be empty.")
 
-        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity"):
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_tool = tool.strip() if (tool and event_type in ("tool_call", "tool_result")) else None
@@ -269,7 +269,7 @@ class MutationMixin:
         if not tool or not tool.strip():
             raise ValueError("tool name cannot be empty.")
 
-        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity"):
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_args = args_pattern.strip() if args_pattern and args_pattern.strip() else None

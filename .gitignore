@@ -8,6 +8,7 @@ _snapshots/
 experiments/
 memory_archives/
 scratch/
+memory_migration_ledger.json
 # Agents & Skills whitelist
 .agents/*
 !.agents/skills/
@@ -23,3 +24,6 @@ backend/tag_plugins/*
 !backend/tag_plugins/exit.py
 # User-specific Codex hooks contain absolute local paths.
 /.codex/hooks.json
+
+# Machine-local audit ledgers.
+.horon-local/
