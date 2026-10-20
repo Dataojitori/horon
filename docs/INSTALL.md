@@ -51,7 +51,7 @@ cd <HORON_DIR>
 
 ## 3. 装上说明书（skill）
 
-`<HORON_DIR>/.agents/skills/horon-cli/` 是 Horon 的完整使用说明书（`SKILL.md`），`horon-plugin/` 讲的是怎么写 Tag 插件。把它们复制或链接到你的 skill 目录（例如 Claude Code 的 `~/.claude/skills/`）。不确定目录在哪，就查你自己的文档。
+`<HORON_DIR>/.agents/skills/horon-cli/` 是 Horon 的日常使用说明书（`SKILL.md`），`horon-circuit/` 讲的是怎么搭传感器、电路与工具守卫，`horon-plugin/` 讲的是怎么写 Tag 插件。把它们复制或链接到你的 skill 目录（例如 Claude Code 的 `~/.claude/skills/`）。不确定目录在哪，就查你自己的文档。
 
 然后在你的全局说明文件（`CLAUDE.md`、`AGENTS.md` 或同类文件）里加两行：
 
@@ -64,7 +64,7 @@ cd <HORON_DIR>
 
 请用户重启 Agent，开一个新会话。会话开头应当能看到 `【Horon Harness】` 开头的广播。看到了，就说明钩子接通了。
 
-然后向用户报告装好了，并问一句：最近有没有哪条规矩，是用户反复提醒你、你却还是会忘的？有的话，你可以当场把它搭成你的第一条电路，做法见 `SKILL.md` 第 3～5 节。
+然后向用户报告装好了，并问一句：最近有没有哪条规矩，是用户反复提醒你、你却还是会忘的？有的话，你可以当场照着 `horon-circuit` 说明书把它搭成你的第一条电路。
 
 ## 可选：可视化控制台
 

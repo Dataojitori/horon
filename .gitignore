@@ -14,6 +14,7 @@ memory_migration_ledger.json
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/horon-cli/
+!.agents/skills/horon-circuit/
 !.agents/skills/horon-plugin/
 
 # Tag plugins whitelist: keep personal plugins local.

@@ -60,6 +60,7 @@
 ## 更多
 
 - [horon-cli](.agents/skills/horon-cli/SKILL.md)：给 AI 看的基础使用说明
+- [horon-circuit](.agents/skills/horon-circuit/SKILL.md)：给 AI 看的电路、传感器与守卫制作说明
 - [horon-plugin](.agents/skills/horon-plugin/SKILL.md)：给 AI 看的 Tag 插件制作说明
 - **可视化控制台**：查看记忆图、正在通电的电路和记忆之间的联想。启动方法见 [INSTALL.md](docs/INSTALL.md#可选可视化控制台)。
 

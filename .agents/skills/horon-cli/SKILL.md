@@ -187,61 +187,29 @@ add <已有节点名或ID> tag <Tag名>
     3. **收到纠偏信号**：用户指出“理解错了”、“不对”、“偏离了目标”，或是长上下文任务目标漂移需要定位修正记录时；
   - **操作**：有明确专有名词时用 `search_concepts <关键词>`；不确定确切名字时用大白话向 `intent "<当前情境或心里想确认的疑问>"` 描述场景，靠书腰语义打捞。
 
-# 3. 把长期计划写成电路
+# 3. 电路：事件感知、长期计划与工具守卫
 
-电路表达目标之间的关系。你可以把一个长期方向细化为阶段和小目标，用共同前置表达依赖，用可选路线表达分支。执行和反馈改变输入电位后，下游状态随拓扑重新计算，从局部变化看见全局影响。
+除了用 `plain` 节点保存知识外，Horon 还能把环境事实、运行时事件、阶段目标和工具调用门禁连成电路，让经验在关键时刻自动触发提醒或拦住违规操作：
 
-## 输入与凭据
+- **传感器 (`sensor`)**：电路的输入端，`1` 表示状态成立，`0` 表示尚未成立或已失效。分两类：
+  - **运行时事件感知 (`turn` / `session` sensor)**：监听用户消息、模型回复、工具调用或工具返回，命中时自动置 `1`，可触发 `on_fire` 推送提醒，或作为下游条件输入，随回合或会话结束自动归零；
+  - **客观事实 (`permanent` sensor)**：跨会话保留、需人工确认后用 `set <节点> active 1/0` 手动维护的事实或阶段状态（置 `1` 前正文中必须已有可核实的实际凭据；事实失效时修正依据并置 `0`）。
+- **逻辑 (`logic`)**：通过 `AND`（`A & B` 共同前置）、`OR`（`A | B` 替代路线）、`CHAIN`（`A → B` 事件依次发生）与 `UNLESS`（抑制条件）组合上游状态，自动推导派生电位。
+- **守卫 (`guard`)**：把电路条件绑定到具体工具与参数规则上。守卫通电（`PASS`）时放行调用；未通电或被抑制（`BLOCKED`）时，在 `PreToolUse` 阶段直接阻止工具执行。
 
-sensor 的 `1` 表示定义的状态成立，`0` 表示尚未成立或已经失效。
+## 什么时候去读 `horon-circuit` 制作或修改电路
 
-节点的电位变化由其角色与生命周期通道驱动：
-- **客观事实 (`permanent` sensor)**：跨会话保留并手动维护的事实，使用 `--lifespan permanent`。人工确认并保存依据后，通过 `set <事实状态名或ID> active 1` 维护，事实失效时设为 `0`；
-- **运行时感知 (`turn` / `session` sensor)**：配置 `sensor_hook`，在系统捕获到匹配事件时由 Hook 自动点亮并随回合或会话重置；
-- **逻辑与守卫 (`logic` / `guard`)**：电位完全由上游依赖条件自动推导派生。
+当遇到以下情况时，**在动手创建或修改 `sensor`、`logic`、`guard` 之前，先读取 [horon-circuit](../horon-circuit/SKILL.md)**（`c:\Users\niwatori\OneDrive\code\horon\.agents\skills\horon-circuit\SKILL.md`）：
 
-```text
-create_concept <事实状态名> --role sensor --lifespan permanent --content "该状态的判定标准与适用范围"
-```
+1. **要把纯文本里的教训或做法变成自动提醒**：需要配置 `sensor_hook` 监听消息或工具事件、编写 `--jev` 是非题复筛、配置 `on_fire` 动作；
+2. **要给高危或易错的工具调用加门禁**：需要创建 `guard`、绑定 `tool_guard`、配置 `inhibition` 抑制源，并在副本库上做上线前验证；
+3. **要把长期目标拆解成多阶段电路，或调整现有电路**：需要新建 `permanent` 事实传感器、编写或修改 `activation-rule`（`AND / OR / CHAIN`）、转换节点角色或排查角色约束。
 
-将 permanent 输入置为 1 前，正文必须已有可核实依据，例如成果版本与路径、检查命令及结果、验收记录。完成标准说明“怎样才算成立”，实际凭据说明“这一次为什么成立”。已有依据仍适用时无需重复追加。
+以下三节是日常对话中**不造电路也会直接撞上**的情形（看懂现有电路状态、被守卫拦截时的应对、传感器误报/漏报的当场记录）。
 
-实际完成并保存凭据后，更新电位并读取相关下游：
+## 读取 Circuit 题头与逆向诊断 (`compile`)
 
-```text
-update <事实状态名或ID> content --append-file <实际凭据文件>
-set <事实状态名或ID> active 1
-read_concept <依赖该事实的节点名或ID>
-```
-
-事实失效时，修正正文依据并用 `set <事实状态名或ID> active 0` 更新输入。更换成果版本后，需要重新判断旧凭据是否仍适用。
-
-## AND、OR 与 CHAIN
-
-logic 与 guard 使用 `activation-rule` 连接已经存在的输入节点。下表中的 A、B 代表真实节点名（亦可使用节点 ID），实际命名仍需符合第一节的要求。
-
-激活规则只支持单种运算符连接两个或多个节点，不支持括号 `()` 或复合表达式：
-
-| 规则 | 表达的关系 | 局部行为 |
-| :--- | :--- | :--- |
-| `A & B` | 两项共同前置 | A=1、B=0 时为 0；两项都为 1 时为 1 |
-| `A \| B` | 两条替代路线 | A=1、B=0 时为 1；A 失效后，若 B=1 仍保持 1 |
-| `A → B` | 输入事件依次发生 | 收到 A 后等待 B；顺序推进到终点时成立（使用 Unicode `→`，不接受 `->`） |
-
-- **单前置简写**：logic 与 guard 都可以只绑一个前置（`--activation-rule "A"`），系统归一化为单输入 `AND`，即 A 通电且未被抑制即成立。
-- **单前置要配抑制**：`A UNLESS B` 表达「A 发生了而 B 没发生」，是监督与报警条件的常用形状。若单前置不带任何抑制源，它只是把 A 的电位原样转发一遍，这种情况直接用 A 本身，不要建节点。
-
-```text
-create_concept <组合状态名> --role logic --activation-rule "A & B" --content "为什么需要这两个条件，以及它们共同成立表示什么"
-```
-
-若需表达多层或组合条件，通过分层定义中间 logic 节点来实现：例如要表达 `A 之后满足 B 与 C`，先创建组合节点 `M`（规则为 `"B & C"`），再建立顶层规则 `"A → M"`。
-
-输入变化后，下游随拓扑自动重新求值。诊断链路时，顺着 `read_concept <目标名或ID>` 的 Circuit 题头向上回溯：若发现某个直接前置标记为 `[OFF]` 或被 `UNLESS` 抑制，继续 `read_concept <该前置>`，直到定位到底层未就绪的具体传感器与判定依据。新路线和依赖可以按实际认识调整。
-
-## 读取 Circuit 题头
-
-以下是彼此独立的局部状态示意：
+读取参与电路的节点时，题头会显示它的当前局部状态：
 
 ```text
 Circuit: AND( A [ON], B [OFF] ) = OFF
@@ -258,13 +226,7 @@ Circuit: CHAIN( A [✓] → B [⏳] ) = OFF
 | CHAIN 中的 `[⏳]` | 当前等待该步骤的输入事件；后面未标记的步骤尚未推进到 |
 | `UNLESS( … )` | 抑制条件；其中任一抑制源为 ON，目标就不能通电 |
 
-CHAIN 的步骤标记表示时序进度，不表示每个上游输入现在仍为 ON。即使步骤都已标为 ✓，活跃抑制仍可使最终结果为 OFF 或 BLOCKED。
-
-## 长期状态与时序进度
-
-permanent 输入跨会话保留，AND/OR 可据此重算长期项目状态。CHAIN 的推进进度属于当前会话，会话重置时清空；适合表达会话内先后发生的事件。长期阶段的完成事实保存在 permanent 输入及正文中。
-
-## 逆向诊断与沙盘推演 (`compile`)
+CHAIN 的步骤标记表示时序进度（属于当前会话，换会话时清空），不表示每个上游输入现在仍为 ON。即使步骤都已标为 ✓，活跃抑制仍可使最终结果为 OFF 或 BLOCKED。
 
 顺着 `read_concept` 题头逐层回溯适合查看单节点的直接前置。当拓扑较深、多层条件交织、或守卫被意外阻断时，使用 `compile` 逆向求解器自动向下递归排查整棵依赖树：
 
@@ -276,123 +238,8 @@ python frontend/cli.py compile --target <目标名或ID>
 python frontend/cli.py compile --target <目标名或ID> --assume <传感器A> <传感器B> ...
 ```
 
-- **目标限制**：`--target` 必须是参与电路的节点（`sensor` / `logic` / `guard`），不能对 `plain` 概念使用。
-- **假设限制**：`--assume` 只接受 `sensor` 角色；`logic` 与 `guard` 的电位必须由上游规则推导派生，不可直接 assume。
-- **输出诊断**：
-  - `[✓ 导通放行]`：条件全部满足，处于就绪状态；
-  - `[⛔ 抑制锁死]`：前置已满足，但被活跃抑制源（Inhibitor）切断；
-  - `[⏳ 序列等待]`：CHAIN 时序进行中的当前等待步骤；
-  - `[✗ 缺少前置]`：列出还需要做到的具体叶子条件（AND 逐项列出，OR 会合并为 "A 或 B"，中间层被抑制则提示 "解除…的抑制"），并在下方附带逐层缩进的完整依赖诊断树。
-
-# 4. 让事件唤起相关记忆
-
-sensor 可以配置 `sensor_hook` 监听运行时事件。事件命中时，系统把传感器置为 1；从 0 到 1 的跃迁会触发它的 `on_fire`。它可以单独用作事件提醒，也可以作为输入接进 logic 或 guard。logic 和 guard 通电时同样可以触发 `on_fire`，CHAIN 还处理终态迁移。
-
-## sensor 的事件监听与生命周期
-
-只有 `sensor` 可以挂载 Hook（`logic`、`guard` 与 `plain` 不支持），每个传感器一条。
-
-### 事件类型
-
-| 事件 (`event_type`) | 匹配的内容 | 触发时机 |
-| :--- | :--- | :--- |
-| `user_message` | 用户消息的文本 | 收到用户消息时，模型回复之前；适合对用户话里的线索作出响应 |
-| `model_message` | 模型回复的文本 | 回复生成之后；通知在后续回合注入 |
-| `tool_call` | 工具调用参数序列化后的 JSON | 工具执行之前 |
-| `tool_result` | 工具返回的输出文本 | 工具返回之后 |
-
-### 生命周期
-
-绑定 Hook 的 sensor 必须使用 `turn` 或 `session`，由 Hook 自动置 1、按生命周期自动归零；`permanent` 只供手动维护事实，不能绑定 Hook。
-
-- `turn`：回合结束时归零。回合结束指模型完成当前轮次的所有工具调用、交还话语权；单轮内的多次连续工具调用属于同一回合。适合响应瞬态事件，如单轮内的报错提醒、行为自检。
-- `session`：本会话内保持为 1，换会话时归零。适合记录本会话已经发生的事，如“本会话已读取某规范”。
-
-### 配置命令
-
-```bash
-python frontend/cli.py set <传感器名> sensor_hook <event_type> \
-  --match-pattern "<正则>" \
-  [--tool <工具名>] \
-  [--jev "<是非题>"] [--jev-threshold 0.5] \
-  [--adapter claude-code|codex|antigravity|opencode]
-```
-
-匹配分两步：先用正则筛；挂了 `--jev` 的传感器，正则命中后再由 Jev 按意思复筛。重新执行会覆盖原有 Hook。
-
-- `--match-pattern`：必填 Python 正则，按 `re.search(..., re.IGNORECASE)` 匹配：全文任意位置命中即可，不区分大小写。要匹配某个工具的全部调用而不限制参数或结果，传入 `".*"`。
-- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，按工具名精确匹配；消息类事件不能指定。
-- `--adapter`：可选，只在该宿主的会话里匹配。省略则所有宿主都匹配；宿主未知的会话（如终端手敲）只匹配省略了它的 Hook。
-- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 backend/embedding.py 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
-  - 判定机制：Jev 判定为“是”的概率不低于 `--jev-threshold`（默认 0.5）才点火；调用失败（超时、无 Key 等）时降级按正则结果点火。
-  - 输入边界：Jev 只看到当条事件文本，前面标明是谁说的，如 `用户对 AI 说：「……」`、`AI 对用户说：「……」`，看不到上下文历史。`tool_result` 在 Jev 那里是 `AI 调用工具 Bash 后，工具 Bash 返回：「……」`，只精确到工具名，Jev 不知道你敲的具体命令。
-  - 出题规范：写一道单凭当条文本就能判断的是非题，写清这段文本是谁对谁说的、要判断的是它在表明什么；想排除的情形也写进问题里。如 `--jev "用户对 AI 说的这句话，是在表明用户自己同意 AI 把内容发出去吗？（转述别人的话、否定、提问都不算）"`。
-  - 正则配合：仍需配置针对性初筛正则，避免使用 `".*"` 导致每条事件全量请求 Jev 产生延迟与费用。
-
-### 误报与漏报的记录
-
-传感器响了但不该响（误报），或该响没响（漏报）时，当场在该传感器节点追加一行，先不改正则或问题：
-
-```bash
-python frontend/cli.py update <传感器名> content --append "- [YYYY-MM-DD] 误报：<触发的原文> ｜ <为什么不该响>"
-```
-
-通知开头写着发出它的节点（`notify from <ID> <名称>：`）；如果那是 logic 或 guard，误报记到它的输入传感器上。积累了真实样本，再判断要不要调、怎么调。
-
-## on_fire 动作
-
-节点从 0 跃迁到 1 时执行 `on_fire` 配置的动作，目前可用的动作是 `notify`：把提醒文字推给 AI，开头标着来源节点。写法 `{"notify": "提醒文字"}`，再次设置会整体替换原配置。
-
-### 完整示例
-
-工具输出出现 `TimeoutError` 时得到提醒：
-
-```bash
-python frontend/cli.py create_concept "工具输出中出现TimeoutError" --role sensor --lifespan turn --content "工具返回的文本中匹配到TimeoutError字样时通电。"
-python frontend/cli.py set "工具输出中出现TimeoutError" sensor_hook tool_result --match-pattern "TimeoutError"
-python frontend/cli.py set "工具输出中出现TimeoutError" on_fire '{"notify": "工具输出包含TimeoutError，请读取错误上下文判断原因。"}'
-```
-
-# 5. 用守卫控制匹配的工具调用
-
-guard 将前置条件绑定到工具规则。匹配调用只有在守卫通电（PASS）时才放行；同一调用若匹配多个守卫，需要全部放行。未放行时，Hook Gateway 在 `PreToolUse` 阶段阻止执行。
-
-## 前置条件与工具匹配
-
-在实际需要限制某类调用、且相关条件节点已经存在时，创建守卫并绑定规则：
-
-```text
-create_concept <守卫名> --role guard --activation-rule "<前置状态名>" --content "这个前置条件为何决定该调用能否执行，以及适用的调用范围"
-set <守卫名> tool_guard <实际工具名> --args-pattern "参数匹配正则"
-```
-
-工具名精确匹配；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
-
-配置后用 `read_concept` 查看守卫的 Tool Guard 和 Circuit，核对匹配范围及当前放行条件。
-
-会拦截工具调用的守卫，先在副本库上试：把要建的命令写成 batch 文件，在临时目录的仓库副本里（`.env` 的 HORON_DB 指向临时库）跑一遍，用会命中和不该命中的调用各试一次，再对真库执行。拦错了会把正在进行的会话卡死。只推提醒的传感器可以直接在真库建，建完用一条会命中的输入实测一次。
-
-`sensor_hook` 与 `tool_guard` 可加 `--adapter claude-code|codex|antigravity|opencode`，只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
-
-`--tool` 和正则按 Claude Code 的工具名和参数名写（`Bash`、`Write`、`"file_path"`、`mcp__bluesky__send_post`），同一条规则在 opencode 里也生效，不用另写一份。
-
-## 抑制条件
-
-当某个状态成立应当否决放行时，将已有 sensor 或 logic 作为抑制源：
-
-```text
-add <抑制源名> inhibition <目标名>
-```
-
-局部行为：前置=1、抑制源=0 时可放行；抑制源变成 1 后，即使前置仍为 1 也会阻止调用。抑制源恢复为 0 后，目标按前置重新求值，原有 CHAIN 进度保留。
-
-抑制源只能是 sensor 或 logic，目标只能是 logic 或 guard，不能自抑制。抑制线可以解除：
-
-```text
-delete <抑制源名> inhibition <目标名>
-```
-
-修改工具参数与抑制源归零是不同的状态变化；应按传感器的 Hook 和生命周期确认它何时恢复，不能仅因参数已经修改就认定守卫已放行。
+- **目标与假设限制**：`--target` 必须是电路节点（`sensor` / `logic` / `guard`），不能对 `plain` 使用；`--assume` 只接受 `sensor`，`logic` 与 `guard` 电位由上游推导，不可直接 assume。
+- **输出诊断**：`[✓ 导通放行]`（条件全部满足）、`[⛔ 抑制锁死]`（被活跃抑制源切断）、`[⏳ 序列等待]`（CHAIN 当前等待步骤）、`[✗ 缺少前置]`（列出还需做到的具体叶子条件与逐层缩进的完整依赖树）。
 
 ## 面对守卫拦截时的处理
 
@@ -401,30 +248,23 @@ delete <抑制源名> inhibition <目标名>
 守卫电位由上游依赖推导求值，不可手动设置。被拦截时，依据实际情境选择处理方式：
 
 - **补齐前置**：若缺失条件是当前任务合理的必要步骤，先执行前置操作让状态通电；
-- **调整参数**：若调用参数误触抑制源或存在违规内容，修正工具入参；
-- **重构规则**：若守卫规则已过时、产生误伤或不再适用当前目标，直接修正规则或解除守卫绑定；
+- **调整参数**：若调用参数误触抑制源或存在违规内容，修正工具入参（注意：修改工具参数与抑制源归零是不同的状态变化，应按传感器的生命周期确认它何时恢复，不能仅因参数已修改就认定守卫已放行）；
+- **重构规则**：若守卫规则已过时、产生误伤或不再适用当前目标，读取 [horon-circuit](../horon-circuit/SKILL.md) 修正规则或解除守卫绑定；
 - **说明缺口**：若需要人类授权或外部关键决策，明确向用户指出阻断原因与具体缺口。
 
 处理拦截就事论事，无需输出道歉、保证或检讨；严禁为了放行而伪造虚假状态。
 
-# 6. 角色约束与图谱维护
+## 传感器误报与漏报的当场记录
 
-## 电路约束速查
+平时对话中，传感器响了但不该响（误报），或该响没响（漏报）时，当场在该传感器节点追加一行原始样本，先不改正则或问题：
 
-| 项目 | plain | sensor | logic | guard |
-| :--- | :--- | :--- | :--- | :--- |
-| activation-rule | 无 | 无 | 必填 | 必填 |
-| lifespan | 无 | 必填 | 无 | 无 |
-| 正向上游输入 | 无 | 无 | 必须有 | 必须有 |
-| 作为下游输入 | 不可 | 可以 | 可以 | 不可 |
-| 作为抑制源 | 不可 | 可以 | 可以 | 不可 |
-| 作为抑制目标 | 不可 | 不可 | 可以 | 可以 |
-| sensor_hook | 不可 | turn/session，每节点一条 | 不可 | 不可 |
-| 手动 set active | 不可 | 仅 permanent | 不可 | 不可 |
-| tool_guard | 不可 | 不可 | 不可 | 每节点一条 |
-| on_fire | 不可 | 可以 | 可以 | 可以 |
+```bash
+python frontend/cli.py update <传感器名> content --append "- [YYYY-MM-DD] 误报：<触发的原文> ｜ <为什么不该响>"
+```
 
-逻辑和守卫电位由依赖派生，不能手动设定。名称、内容和电路必须表达同一个状态；完成信号以实际结果为依据。
+通知开头写着发出它的节点（`notify from <ID> <名称>：`）；如果那是 logic 或 guard，误报记到它的输入传感器上。积累了真实样本，再去读 [horon-circuit](../horon-circuit/SKILL.md) 判断要不要调、怎么调。
+
+# 4. 图谱维护与插件
 
 ## Tag、插件与出口
 
@@ -440,16 +280,16 @@ Tag 插件的 `on_mutation` 可以检查变更并拒绝不合要求的写入，`
 
 图只包含已建模的路径。新证据、他人的成熟经验和图外路线都可以改变计划；未通电可能是工作尚未完成，也可能是前提有误。目标是否值得继续、所谓瓶颈是否成立、是否只在做容易打勾的局部工作，都属于规划本身。
 
-# 7. 命令参考
+# 5. 命令参考
 
-以下命令均接在 `python frontend/cli.py` 后。
+以下命令均接在 `python frontend/cli.py` 后。电路节点的创建、转职、规则与事件/守卫绑定命令见 [horon-circuit](../horon-circuit/SKILL.md)。
 
 ## 节点与检索
 
 | 功能 | 命令 |
 | :--- | :--- |
-| 创建概念 | `create_concept <名称> --content "正文" [--disclosure "在什么情况下需要打开它"] [--role plain\|sensor\|logic\|guard] [--lifespan turn\|session\|permanent] [--activation-rule "..."] [--on-fire '...']` |
-| 读取节点与电路 | `read_concept <名称或ID>` |
+| 创建概念 | `create_concept <名称> --content "正文" [--disclosure "在什么情况下需要打开它"]` |
+| 读取节点与电路 | `read_concept <名称或ID> [更多名称或ID...]` |
 | 列出全部节点 | `list_concepts [--tag "Tag 表达式"]` |
 | 关键词搜索 | `search_concepts <关键词> [--tag "Tag 表达式"] [--limit 50]` |
 | 语义搜索 | `intent "<自然语言查询>" [--limit 10]` |
@@ -457,11 +297,10 @@ Tag 插件的 `on_mutation` 可以检查变更并拒绝不合要求的写入，`
 | 逆向求解与诊断 | `compile --target <目标名称或ID> [--assume <传感器1> <传感器2> ...]` |
 | 起名候选 | `suggest_name <名称或ID> [-n 3]` |
 
-- `list_concepts` 默认输出全库节点清单；加 `--tag` 作为过滤器按标签筛选。
+- `list_concepts` 默认输出全库节点清单；加 `--tag` 作为过滤器按标签筛选。Tag 表达式支持 AND（`TagA & TagB`）与 OR（`TagA | TagB`）。
 - `search_concepts` 是文本关键词匹配，`intent` 是基于书腰（disclosure）嵌入向量的语义搜索，`recent` 输出近期被变更的节点摘要。
 - `suggest_name`：检查节点现名或给节点起名时用。它会根据节点类型（plain 做法·资料·经历 / 电路 sensor·logic·guard / Tag）和起名规则给出 n 个结果（若认为现名已经合适则标“维持现名”），只读不写库。候选只供参考，自己挑或改，改完跑 `audit --scope`。由 gpt-6-luna 生成：`.env` 里有 `OPENCODE_GO_API_KEY` 时走 OpenCode Go，没有就用 `OPENROUTER_API_KEY` 走 OpenRouter。
 - `compile` 递归诊断电路节点（sensor/logic/guard）未就绪的前置与活跃抑制，`--assume` 用于沙盘假设推演（不写库）。
-- Tag 表达式支持 AND（`TagA & TagB`）与 OR（`TagA | TagB`）。
 
 ## 修改节点
 
@@ -469,24 +308,11 @@ Tag 插件的 `on_mutation` 可以检查变更并拒绝不合要求的写入，`
 | :--- | :--- |
 | 修改主名称（重命名） | `set <名称或ID> name <新名称>` |
 | 设置书腰 | `set <名称或ID> disclosure "在什么情况下需要打开它"` |
-| 转换角色 | `set <名称或ID> role plain\|sensor\|logic\|guard [--lifespan turn\|session\|permanent] [--activation-rule "..."]` |
-| 修改激活规则 | `set <名称或ID> activation-rule "规则"` |
-| 修改生命周期 | `set <名称或ID> lifespan turn\|session\|permanent` |
-| 手动拨动电位 | `set <名称或ID> active <0或1>` |
-| 绑定事件感知 | `set <名称或ID> sensor_hook user_message\|model_message\|tool_call\|tool_result --match-pattern "正则" [--tool <工具名>] [--jev "是非题" [--jev-threshold 0.5]]` |
-| 绑定工具守卫 | `set <名称或ID> tool_guard <工具名> [--args-pattern "正则"]` |
-| 配置发火动作 | `set <名称或ID> on_fire '<动作JSON>'` |
+| 手动拨动永久传感器电位 | `set <名称或ID> active <0或1>` |
 | 添加/删除别名 | `add <名称或ID> name <别名>` / `delete <名称或ID> name <别名>` |
 | 挂载/摘除 Tag | `add <名称或ID> tag <Tag名>` / `delete <名称或ID> tag <Tag名>` |
-| 添加/解除抑制 | `add <源名称或ID> inhibition <目标名称或ID>` / `delete <源名称或ID> inhibition <目标名称或ID>` |
 | 清除书腰 | `delete <名称或ID> disclosure` |
-| 清除规则并退回 plain | `delete <名称或ID> activation-rule` |
-| 解绑感知或守卫 | `delete <名称或ID> sensor_hook` / `delete <名称或ID> tool_guard` |
 | 删除节点 | `delete <名称或ID>`，删除条件和关联清理见下文 |
-
-- `set role` 用于节点转职（转为 sensor 需附带 `--lifespan`，转为 logic/guard 需附带 `--activation-rule` 以满足底层约束）；若仅调整现有节点的规则或生命周期，直接使用独立的 `set activation-rule` 或 `set lifespan`。
-- `set active` 仅允许对 `permanent` 传感器使用；`session` / `turn` 传感器由 Hook 自动感知，禁止手动拨动。
-- `sensor_hook` 的 `--tool` 仅在 `tool_call` 与 `tool_result` 时可用，消息类事件严禁指定 `--tool`；`--match-pattern` 为必填。
 
 删除节点时，系统先检查它是否仍被其他节点的 activation-rule 作为成员引用，以及它作为 Tag 源时是否还有其他节点使用该 Tag。有任一情况就拒绝删除，并列出相关节点；需要先修改这些引用或摘除相应 Tag。系统保留概念不可删除，Tag 插件也可能拒绝删除。
 
@@ -539,14 +365,12 @@ inbox
 python frontend/cli.py remind "<关联节点名或ID>" --when "status('<条件节点名>') == 'active'" --msg "条件满足时需要收到的提醒"
 ```
 
-## 批处理、迁移与复位
+## 批处理与迁移
 
 ```text
 batch --file <命令文件> [--all]
 read_memory <uri> [--out <文件>]
-reset
 ```
 
 - **`batch` 批处理**：文件内每行一条命令（省略 `python frontend/cli.py` 前缀），默认仅输出最后一条命令的结果，加 `--all` 输出全部结果。引号内部支持多行换行文本与 JSON 动作。`batch` 逐行独立提交，中途出错退出时，先前成功的命令**不会自动回滚**；重新运行时**需手动删除或注释已执行成功的行**，否则从头重跑会导致同名创建报错或重复追加正文。
 - **`read_memory` 记忆迁移**：从旧版 Nocturne Memory 数据库按 URI 读取正文，加 `--out <文件>` 可直接导出到本地文件，供后续使用 `update --append-file` 合并迁入 Horon 概念。
-- **`reset` 临时状态复位**：仅用于脱离 IDE 的**离线终端调试**，手动清空测试残留的临时电位（turn/session 传感器及 CHAIN 进度），保留 permanent 客观事实。在 IDE 正常对话时，系统会在检测到新会话时由 Hook 自动完成重置，无需手动执行。
