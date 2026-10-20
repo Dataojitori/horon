@@ -250,21 +250,21 @@ def resolve_horon_concept(h_conn: sqlite3.Connection, query: str) -> sqlite3.Row
     query = query.strip()
     if query.isdigit():
         row = h_conn.execute(
-            "SELECT id, name, content, disclosure, role, updated_at FROM concepts WHERE id = ?",
+            "SELECT id, name, content, when_to_read, role, updated_at FROM concepts WHERE id = ?",
             (int(query),)
         ).fetchone()
         if row:
             return row
 
     row = h_conn.execute(
-        "SELECT id, name, content, disclosure, role, updated_at FROM concepts WHERE name = ?",
+        "SELECT id, name, content, when_to_read, role, updated_at FROM concepts WHERE name = ?",
         (query,)
     ).fetchone()
     if row:
         return row
 
     alias_row = h_conn.execute(
-        "SELECT c.id, c.name, c.content, c.disclosure, c.role, c.updated_at "
+        "SELECT c.id, c.name, c.content, c.when_to_read, c.role, c.updated_at "
         "FROM aliases a JOIN concepts c ON a.concept_id = c.id WHERE a.alias = ?",
         (query,)
     ).fetchone()
@@ -665,7 +665,7 @@ def cmd_show(args: argparse.Namespace) -> None:
         if not uuid and horon_concept:
             print(bold(f"\n=== Horon 概念: [{horon_concept['id']}] {horon_concept['name']} ==="))
             print(f"角色: {horon_concept['role']}")
-            print(f"书腰 (disclosure): {horon_concept['disclosure'] or '(无)'}")
+            print(f"书腰 (when_to_read): {horon_concept['when_to_read'] or '(无)'}")
             print(f"更新时间: {horon_concept['updated_at']}")
             print(dim(f"正文长度: {len(horon_concept['content'] or '')} 字符"))
             print(yellow("\n台账状态: 该 Horon 概念在迁移台账中尚未关联任何 MCP 实体。"))

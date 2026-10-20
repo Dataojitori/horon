@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS concepts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL UNIQUE,
     content         TEXT,                           -- 描述、事实、证据笔记
-    disclosure      TEXT,                           -- 一句话触发场景书腰 (1:1，直接挂在 concepts 表)
+    when_to_read      TEXT,                           -- 一句话触发场景书腰 (1:1，直接挂在 concepts 表)
     role            TEXT    NOT NULL DEFAULT 'plain'-- 'plain'(砖块), 'sensor'(传感器), 'logic'(逻辑中继), 'guard'(放行守卫)
                             CHECK(role IN ('plain', 'sensor', 'logic', 'guard')),
     
@@ -193,7 +193,7 @@ CREATE INDEX IF NOT EXISTS idx_pn_session ON pending_notifications(session_id);
 > **保留与配套表说明**：
 > - `aliases` — 概念别名（`_resolve_id` 名字查找路径不变）
 > - `tags`, `concept_tags` — 标签词表与概念-标签关联（标签回归纯元数据角色，结构原样保留）
-> - `concepts.disclosure` — 1:1 纯文本书腰触发场景（直接挂在 concepts 表，极轻量标量）
+> - `concepts.when_to_read` — 1:1 纯文本书腰触发场景（直接挂在 concepts 表，极轻量标量）
 > - `concept_embeddings` — 1:1 书腰嵌入向量表（冷热分离，`intent` 语义搜索专用附加表，1024 维 voyage-4-large）
 > - `concept_transitions` — 注意力路由 `suggest` 数据源
 > - `reminders` — 提醒系统（`remind` / `inbox` 命令依赖）

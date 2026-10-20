@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS concepts (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     name            TEXT    NOT NULL UNIQUE,
     content         TEXT,                           -- 描述、事实、证据笔记
-    disclosure      TEXT,                           -- 一句话触发场景书腰 (1:1)
+    when_to_read    TEXT,                           -- 一句话触发场景书腰 (1:1)
     role            TEXT    NOT NULL DEFAULT 'plain'-- 'plain'(砖块), 'sensor'(传感器), 'logic'(逻辑中继), 'guard'(放行守卫)
                             CHECK(role IN ('plain', 'sensor', 'logic', 'guard')),
     
@@ -202,7 +202,7 @@ CREATE TABLE IF NOT EXISTS snapshots (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id      INTEGER NOT NULL,
     concept_name    TEXT    NOT NULL,
-    field           TEXT    NOT NULL CHECK(field IN ('content', 'disclosure')),
+    field           TEXT    NOT NULL CHECK(field IN ('content', 'when_to_read')),
     original_value  TEXT,                           -- 修改前的原始值（文本），若是新创建概念则为 NULL
     is_creation     INTEGER NOT NULL DEFAULT 0,     -- 是否为新建节点标记 (1=新建, 回滚时执行整节点删除)
     created_at      TEXT    NOT NULL,

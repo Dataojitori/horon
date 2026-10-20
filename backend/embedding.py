@@ -84,13 +84,13 @@ def embed_texts(texts: list[str], timeout: int = 120) -> list[list[float]]:
 
 
 def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
-    """Fetch the embedding of a disclosure and store it in concept_embeddings.
+    """Fetch the embedding of a when_to_read and store it in concept_embeddings.
 
-    Input: the HoronDB, the concept id, and the disclosure text it had when the hook was queued.
+    Input: the HoronDB, the concept id, and the when_to_read text it had when the hook was queued.
     Designed to be called via `_post_commit_hooks` AFTER the main transaction has
     committed, so it doesn't hold up the database lock; failures (no key, network, API
     error) are raised to the caller, which logs them without undoing the mutation.
-    Output: True if the embedding was written; False if the concept's disclosure no longer
+    Output: True if the embedding was written; False if the concept's when_to_read no longer
     equals `text` (it was changed again meanwhile), in which case nothing is written.
     """
     from ._db_common import _now
@@ -102,7 +102,7 @@ def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
             INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
             SELECT id, ?, ?, ?
             FROM concepts
-            WHERE id = ? AND disclosure = ?
+            WHERE id = ? AND when_to_read = ?
             ON CONFLICT(concept_id) DO UPDATE SET
                 embedding=excluded.embedding,
                 embedding_model=excluded.embedding_model,

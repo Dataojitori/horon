@@ -156,7 +156,7 @@
   font-weight: 600;
 }
 
-.inspector-disclosure {
+.inspector-when-to-read {
   font-size: 12px;
   color: var(--text-secondary);
   line-height: 1.5;
@@ -417,7 +417,7 @@
   text-overflow: ellipsis;
 }
 
-.member-disclosure-hint {
+.member-when-to-read-hint {
   font-size: 10px;
   color: var(--text-dim);
   white-space: nowrap;

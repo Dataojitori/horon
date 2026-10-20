@@ -15,7 +15,7 @@ from pydantic import BaseModel
 Role = Literal["plain", "sensor", "logic", "guard"]
 Lifespan = Literal["turn", "session", "permanent"]
 ActivationType = Literal["CHAIN", "AND", "OR"]
-MatchField = Literal["name", "alias", "disclosure", "content"]
+MatchField = Literal["name", "alias", "when_to_read", "content"]
 
 
 # ── 基础表映射 ──────────────────────────────────────────────
@@ -24,7 +24,7 @@ class Concept(BaseModel):
     id: int
     name: str
     content: str | None = None
-    disclosure: str | None = None
+    when_to_read: str | None = None
     role: Role = "plain"
     is_active: int = 0
     lifespan: Lifespan | None = None
@@ -38,7 +38,7 @@ class Concept(BaseModel):
 class SearchMatch(BaseModel):
     """搜索命中的单一匹配项。"""
     field: MatchField
-    target_id: str | None = None   # None for name/alias/disclosure/content
+    target_id: str | None = None   # None for name/alias/when_to_read/content
     snippet: str
 
 
@@ -53,7 +53,7 @@ class ComposeMemberDetail(BaseModel):
     concept_id: int
     name: str
     order_index: int
-    disclosure: str | None = None
+    when_to_read: str | None = None
     is_active: int = 0
     role: Role
 
@@ -98,9 +98,9 @@ class TransitionSuggestion(BaseModel):
     concept_id: int
     concept_name: str
     weight: float
-    disclosure: str | None = None
+    when_to_read: str | None = None
     # 当前节点与推荐节点都是 plain 且都有书腰向量时才有值：两条书腰的余弦相似度，以及两者是否同属至少一个 Tag
-    disclosure_similarity: float | None = None
+    when_to_read_similarity: float | None = None
     shares_tag: bool | None = None
 
 
@@ -143,7 +143,7 @@ class ReadResult(BaseModel):
     id: int
     name: str
     content: str | None = None
-    disclosure: str | None = None
+    when_to_read: str | None = None
     role: Role = "plain"
     is_active: int = 0
     lifespan: Lifespan | None = None
@@ -188,7 +188,7 @@ class CompileResult(BaseModel):
 
 # ── Snapshot & Review 模型 ─────────────────────────────────────
 
-SnapshotField = Literal["content", "disclosure"]
+SnapshotField = Literal["content", "when_to_read"]
 
 
 class SnapshotChange(BaseModel):

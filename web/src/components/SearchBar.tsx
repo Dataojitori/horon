@@ -8,7 +8,7 @@ interface Props {
 }
 
 interface ItemMatch {
-  field: "name" | "alias" | "disclosure" | "content";
+  field: "name" | "alias" | "when_to_read" | "content";
   snippet: string;
   focusedSnippet: string;
 }
@@ -21,7 +21,7 @@ interface SearchItemData {
 
 const FIELD_INFO: Record<string, { label: string; badgeClass: string }> = {
   alias: { label: "别名", badgeClass: "badge-alias" },
-  disclosure: { label: "说明", badgeClass: "badge-disclosure" },
+  when_to_read: { label: "说明", badgeClass: "badge-when-to-read" },
   content: { label: "正文", badgeClass: "badge-content" },
   name: { label: "名称", badgeClass: "badge-name" },
 };

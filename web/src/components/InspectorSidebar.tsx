@@ -158,12 +158,12 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
           </div>
         )}
 
-        {/* ── Disclosure ── */}
-        {concept.disclosure && (
+        {/* ── When to read ── */}
+        {concept.when_to_read && (
           <div className="inspector-section">
-            <h3 className="section-label">Disclosure</h3>
-            <div className="field-content inspector-disclosure">
-              {concept.disclosure}
+            <h3 className="section-label">When to read</h3>
+            <div className="field-content inspector-when-to-read">
+              {concept.when_to_read}
             </div>
           </div>
         )}
@@ -209,14 +209,14 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
                       <button
                         type="button"
                         className="member-flow-card"
-                        title={m.disclosure || undefined}
+                        title={m.when_to_read || undefined}
                         onClick={() => onNavigate(m.concept_id)}
                       >
                         <span className="member-order">{m.order_index}.</span>
                         <div className="member-info">
                           <span className="member-name">{m.name}</span>
-                          {m.disclosure && (
-                            <span className="member-disclosure-hint">{m.disclosure}</span>
+                          {m.when_to_read && (
+                            <span className="member-when-to-read-hint">{m.when_to_read}</span>
                           )}
                         </div>
                         <span className="member-id">#{m.concept_id}</span>
@@ -396,7 +396,7 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
                   key={s.concept_id}
                   type="button"
                   className="suggestion-item"
-                  title={s.disclosure || undefined}
+                  title={s.when_to_read || undefined}
                   onClick={() => onNavigate(s.concept_id)}
                 >
                   <span className="suggestion-name">{s.concept_name}</span>

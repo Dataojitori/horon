@@ -215,7 +215,7 @@ delete <抑制源名> inhibition <目标名>
 
 | 操作 | 命令 |
 | :--- | :--- |
-| 创建电路节点 | `create_concept <名称> --content "正文" [--disclosure "书腰"] --role sensor\|logic\|guard [--lifespan turn\|session\|permanent] [--activation-rule "..."] [--on-fire '...']` |
+| 创建电路节点 | `create_concept <名称> --content "正文" [--when-to-read "书腰"] --role sensor\|logic\|guard [--lifespan turn\|session\|permanent] [--activation-rule "..."] [--on-fire '...']` |
 | 转换角色 | `set <名称或ID> role plain\|sensor\|logic\|guard [--lifespan turn\|session\|permanent] [--activation-rule "..."]` |
 | 修改激活规则 | `set <名称或ID> activation-rule "规则"` |
 | 修改生命周期 | `set <名称或ID> lifespan turn\|session\|permanent` |

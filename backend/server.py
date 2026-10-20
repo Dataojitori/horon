@@ -156,7 +156,7 @@ def get_graph(session_id: str = OFFLINE_DEV_SESSION_ID):
                 "is_active": states[cid],
                 "lifespan": c.lifespan,
                 "activation_type": c.activation_type,
-                "disclosure": c.disclosure,
+                "when_to_read": c.when_to_read,
                 "degree": degree.get(cid, 0),
                 "tags": tags_by_cid.get(cid, []),
                 "byte_size": c.byte_size,
@@ -234,7 +234,7 @@ def get_neighborhood(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
         placeholders = ",".join("?" * len(neighbor_ids))
         with _db_lock:
             rows = db.conn.execute(
-                f"SELECT c.id, c.name, c.disclosure, c.content, "
+                f"SELECT c.id, c.name, c.when_to_read, c.content, "
                 f"       (SELECT COUNT(*) FROM compose_members cm "
                 f"        WHERE cm.member_concept_id = c.id) AS degree "
                 f"FROM concepts c WHERE c.id IN ({placeholders})",
@@ -246,7 +246,7 @@ def get_neighborhood(concept_id: int, session_id: str = OFFLINE_DEV_SESSION_ID):
             neighbors.append({
                 "id": nid,
                 "name": row["name"],
-                "disclosure": row["disclosure"],
+                "when_to_read": row["when_to_read"],
                 "degree": row["degree"],
                 "byte_size": len(c_str.encode("utf-8")) if c_str else 0,
             })

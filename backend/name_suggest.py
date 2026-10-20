@@ -92,7 +92,7 @@ def build_prompt(
     lifespan: str | None = None,
     is_tag_source: bool = False,
     tags: list[str] | None = None,
-    disclosure: str | None = None,
+    when_to_read: str | None = None,
 ) -> tuple[str, str]:
     """Build (type_label, prompt_text) for the given concept."""
     type_label, rules_text = _type_rules(role, lifespan, is_tag_source, tags, name)
@@ -100,8 +100,8 @@ def build_prompt(
         f"当前名字：{name}",
         f"节点类型：{type_label}",
     ]
-    if disclosure:
-        meta_lines.append(f"书腰（何时打开）：{disclosure}")
+    if when_to_read:
+        meta_lines.append(f"书腰（何时打开）：{when_to_read}")
     meta_block = "\n".join(meta_lines)
 
     prompt = f"""下面是你的一条记忆节点，请根据它的类型和起名规则，检查它的「当前名字」是否合适。
@@ -185,7 +185,7 @@ def suggest_names(db, concept, n: int = 3) -> str:
         lifespan=node.lifespan,
         is_tag_source=is_tag_source,
         tags=node.tags,
-        disclosure=node.disclosure,
+        when_to_read=node.when_to_read,
     )
 
     def one(_):

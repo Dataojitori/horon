@@ -56,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # search_keyword
     p = sub.add_parser("search_keyword", allow_abbrev=False)
-    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
+    p.add_argument("query", help="Keyword query to search in concepts, aliases, when_to_read, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
     p.add_argument("--limit", type=int, default=50,

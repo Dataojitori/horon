@@ -300,7 +300,7 @@
   color: #fff;
 }
 
-.dissection-node.internal .node-disclosure {
+.dissection-node.internal .node-when-to-read {
   font-size: 10px;
   margin-top: 2px;
   max-width: 160px;
@@ -331,7 +331,7 @@
   white-space: nowrap;
 }
 
-.node-disclosure {
+.node-when-to-read {
   display: block;
   font-size: 10px;
   color: var(--text-dim);

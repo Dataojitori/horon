@@ -185,7 +185,7 @@ class ConceptProxy:
         fetch_lifespan: Callable[[], str | None] | None = None,
         fetch_activation_type: Callable[[], str | None] | None = None,
         fetch_on_fire: Callable[[], str | None] | None = None,
-        fetch_disclosure: Callable[[], str | None] | None = None,
+        fetch_when_to_read: Callable[[], str | None] | None = None,
         fetch_tags: Callable[[], list[str]],
         fetch_inputs: Callable[[], list[ConceptProxy]] | None = None,
         fetch_downstream: Callable[[], list[ConceptProxy]] | None = None,
@@ -198,7 +198,7 @@ class ConceptProxy:
         self._fetch_lifespan = fetch_lifespan
         self._fetch_activation_type = fetch_activation_type
         self._fetch_on_fire = fetch_on_fire
-        self._fetch_disclosure = fetch_disclosure
+        self._fetch_when_to_read = fetch_when_to_read
         self._fetch_tags = fetch_tags
         self._fetch_inputs = fetch_inputs
         self._fetch_downstream = fetch_downstream
@@ -247,10 +247,10 @@ class ConceptProxy:
         return self._cache["on_fire"]
 
     @property
-    def disclosure(self) -> str | None:
-        if "disclosure" not in self._cache:
-            self._cache["disclosure"] = self._fetch_disclosure() if self._fetch_disclosure else None
-        return self._cache["disclosure"]
+    def when_to_read(self) -> str | None:
+        if "when_to_read" not in self._cache:
+            self._cache["when_to_read"] = self._fetch_when_to_read() if self._fetch_when_to_read else None
+        return self._cache["when_to_read"]
 
     @property
     def tags(self) -> list[str]:

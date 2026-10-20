@@ -9,7 +9,7 @@ export interface GraphNode {
   is_active?: number;
   lifespan?: Lifespan | null;
   activation_type?: ActivationType | null;
-  disclosure?: string | null;
+  when_to_read?: string | null;
   degree: number;
   tags?: string[];
   byte_size?: number;
@@ -36,7 +36,7 @@ export interface ComposeMemberDetail {
   concept_id: number;
   name: string;
   order_index: number;
-  disclosure: string | null;
+  when_to_read: string | null;
 }
 
 export interface SensorHookDetail {
@@ -70,7 +70,7 @@ export interface TransitionSuggestion {
   concept_id: number;
   concept_name: string;
   weight: number;
-  disclosure?: string | null;
+  when_to_read?: string | null;
 }
 
 export interface ReminderDetail {
@@ -91,7 +91,7 @@ export interface ConceptDetail {
   activation_type: ActivationType | null;
   activation_rule: string | null;
   on_fire: string | null;
-  disclosure: string | null;
+  when_to_read: string | null;
   byte_size?: number;
   aliases: string[];
   tags: string[];
@@ -108,7 +108,7 @@ export interface ConceptDetail {
 export interface NeighborNode {
   id: number;
   name: string;
-  disclosure: string | null;
+  when_to_read: string | null;
   degree: number;
   byte_size?: number;
 }
@@ -138,7 +138,7 @@ export interface NeighborhoodData {
 // ── Search results ──────────────────────────────────────
 
 export interface SearchMatch {
-  field: "name" | "alias" | "disclosure" | "content";
+  field: "name" | "alias" | "when_to_read" | "content";
   target_id: string | null;
   snippet: string;
 }
@@ -151,7 +151,7 @@ export interface ConceptSearchResult {
   matches: SearchMatch[];
 }
 
-export type SnapshotField = "content" | "disclosure";
+export type SnapshotField = "content" | "when_to_read";
 
 export interface SnapshotChange {
   field: SnapshotField;

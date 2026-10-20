@@ -25,7 +25,7 @@ interface Props {
 interface SimNode extends SimulationNodeDatum {
   id: number;
   name: string;
-  disclosure: string | null;
+  when_to_read: string | null;
   isFocal: boolean;
   isInternal: boolean;
   degree?: number;
@@ -41,14 +41,14 @@ interface SimLink extends SimulationLinkDatum<SimNode> {
 
 // Helper to extract unique internal members of a focal concept
 const getInternalMembers = (focalConcept: ConceptDetail) => {
-  const map = new Map<number, { id: number; name: string; disclosure: string | null }>();
+  const map = new Map<number, { id: number; name: string; when_to_read: string | null }>();
   if (focalConcept.members) {
     focalConcept.members.forEach((m) => {
       if (m.concept_id !== focalConcept.id) {
         map.set(m.concept_id, {
           id: m.concept_id,
           name: m.name,
-          disclosure: m.disclosure,
+          when_to_read: m.when_to_read,
         });
       }
     });
@@ -139,7 +139,7 @@ export default function DissectionView({
     let totalArea = 0;
 
     internalMembersList.forEach((m) => {
-      const h = m.disclosure ? 42 : 28;
+      const h = m.when_to_read ? 42 : 28;
       const w = Math.min(180, Math.max(80, m.name.length * 8 + 20));
       const halfDiagonal = Math.sqrt((w * w + h * h) / 4);
       if (halfDiagonal > maxHalfDiagonal) {
@@ -170,7 +170,7 @@ export default function DissectionView({
     const focalNode: SimNode = {
       id: focalConcept.id,
       name: focalConcept.name,
-      disclosure: focalConcept.disclosure,
+      when_to_read: focalConcept.when_to_read,
       isFocal: true,
       isInternal: false,
       degree: 0,
@@ -201,7 +201,7 @@ export default function DissectionView({
         nodes.push({
           id: m.id,
           name: m.name,
-          disclosure: m.disclosure,
+          when_to_read: m.when_to_read,
           isFocal: false,
           isInternal: true,
           x: cx,
@@ -216,7 +216,7 @@ export default function DissectionView({
         nodes.push({
           id: m.id,
           name: m.name,
-          disclosure: m.disclosure,
+          when_to_read: m.when_to_read,
           isFocal: false,
           isInternal: true,
           x: cx + Math.cos(internalAngle * i - Math.PI / 2) * internalR,
@@ -236,7 +236,7 @@ export default function DissectionView({
       nodes.push({
         id: n.id,
         name: n.name,
-        disclosure: n.disclosure,
+        when_to_read: n.when_to_read,
         isFocal: false,
         isInternal: false,
         degree: n.degree,
@@ -322,10 +322,10 @@ export default function DissectionView({
         let contentW = nameW;
         let contentH = 15; // line-height of name
         
-        if (node.disclosure) {
-          const discW = Math.min(160, estimateStringWidth(node.disclosure, 10));
+        if (node.when_to_read) {
+          const discW = Math.min(160, estimateStringWidth(node.when_to_read, 10));
           contentW = Math.max(contentW, discW);
-          contentH += 2 + 13; // margin-top + line-height of disclosure
+          contentH += 2 + 13; // margin-top + line-height of when_to_read
         }
         
         return {
@@ -340,8 +340,8 @@ export default function DissectionView({
         let contentW = nameW;
         let contentH = 16; // line-height of name
         
-        if (node.disclosure) {
-          const discW = Math.min(140, estimateStringWidth(node.disclosure, 10));
+        if (node.when_to_read) {
+          const discW = Math.min(140, estimateStringWidth(node.when_to_read, 10));
           contentW = Math.max(contentW, discW);
           contentH += 2 + 13;
         }
@@ -1038,8 +1038,8 @@ export default function DissectionView({
               onMouseEnter={() => onInspect(node.id)}
             >
               <span className="node-name">{node.name}</span>
-              {node.disclosure && (
-                <span className="node-disclosure">{node.disclosure}</span>
+              {node.when_to_read && (
+                <span className="node-when-to-read">{node.when_to_read}</span>
               )}
             </div>
           ))}

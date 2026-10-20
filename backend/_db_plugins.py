@@ -132,7 +132,7 @@ class PluginMixin:
             fetch_lifespan=field("lifespan", None),
             fetch_activation_type=field("activation_type", None),
             fetch_on_fire=field("on_fire", None),
-            fetch_disclosure=field("disclosure", None),
+            fetch_when_to_read=field("when_to_read", None),
             fetch_tags=fetch_tags,
             fetch_inputs=fetch_inputs,
             fetch_downstream=fetch_downstream,

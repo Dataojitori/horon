@@ -16,12 +16,12 @@ class SnapshotMixin:
 
     @transactional
     def capture_snapshot(self, concept: Any, field: str) -> bool:
-        """在修改 content 或 disclosure 之前记录基线快照。
+        """在修改 content 或 when_to_read 之前记录基线快照。
         
         若当前 review 周期内该字段已有快照，则保留最早的基线值，不覆盖并返回 False。
         若成功插入新快照记录，返回 True。
         """
-        if field not in ("content", "disclosure"):
+        if field not in ("content", "when_to_read"):
             return False
 
         try:
@@ -55,7 +55,7 @@ class SnapshotMixin:
     def capture_creation_snapshot(self, concept_id: int, concept_name: str) -> None:
         """在创建新概念后记录初始空快照 (original_value=None, is_creation=1)。"""
         now = _now()
-        for field in ("content", "disclosure"):
+        for field in ("content", "when_to_read"):
             existing = self.conn.execute(
                 "SELECT id FROM snapshots WHERE concept_id = ? AND field = ?",
                 (concept_id, field),
@@ -69,7 +69,7 @@ class SnapshotMixin:
 
     @transactional
     def capture_deletion_snapshot(self, concept: Any) -> bool:
-        """在删除概念之前捕获其当前的 content 与 disclosure 作为原始快照。
+        """在删除概念之前捕获其当前的 content 与 when_to_read 作为原始快照。
         
         若该概念本身为本次新建（snapshots 中存在 is_creation=1），
         则删除节点意味着创建被抵消，直接清除该概念的全部快照并返回 False。
@@ -78,7 +78,7 @@ class SnapshotMixin:
         try:
             cid = self._resolve_id(concept)
             row = self.conn.execute(
-                "SELECT name, content, disclosure FROM concepts WHERE id = ?", (cid,)
+                "SELECT name, content, when_to_read FROM concepts WHERE id = ?", (cid,)
             ).fetchone()
             if not row:
                 return False
@@ -97,7 +97,7 @@ class SnapshotMixin:
 
         now = _now()
         inserted_any = False
-        for field in ("content", "disclosure"):
+        for field in ("content", "when_to_read"):
             existing = self.conn.execute(
                 "SELECT id FROM snapshots WHERE concept_id = ? AND field = ?",
                 (cid, field),
@@ -126,7 +126,7 @@ class SnapshotMixin:
                 c.name AS live_concept_name,
                 c.role AS live_role,
                 c.content AS live_content,
-                c.disclosure AS live_disclosure
+                c.when_to_read AS live_when_to_read
             FROM snapshots s
             LEFT JOIN concepts c ON s.concept_id = c.id
             ORDER BY s.concept_id ASC, s.id ASC
@@ -149,7 +149,7 @@ class SnapshotMixin:
             concept_name = first["live_concept_name"] if not is_deleted else first["snap_concept_name"]
             role = first["live_role"] if not is_deleted else None
             current_content = first["live_content"] if not is_deleted else None
-            current_disclosure = first["live_disclosure"] if not is_deleted else None
+            current_when_to_read = first["live_when_to_read"] if not is_deleted else None
 
             earliest_created = first["snap_created_at"]
             changes: list[SnapshotChange] = []
@@ -165,12 +165,12 @@ class SnapshotMixin:
                             created_at=r["snap_created_at"],
                         )
                     )
-                elif field == "disclosure":
+                elif field == "when_to_read":
                     changes.append(
                         SnapshotChange(
-                            field="disclosure",
+                            field="when_to_read",
                             original_value=r["original_value"],
-                            current_value=current_disclosure,
+                            current_value=current_when_to_read,
                             created_at=r["snap_created_at"],
                         )
                     )
@@ -216,7 +216,7 @@ class SnapshotMixin:
             - 若该概念原本就是新建概念（is_creation=1），回滚即恢复为不存在，直接清除快照；
             - 否则重新恢复该概念并将其 role 设为 'plain'（砖块）；
         - 若概念为本次新创建（is_creation=1 且概念仍存在），则执行整节点删除操作；若因被引用无法删除，抛出错误提示用户解除关联；
-        - 若为普通字段更新，则将 content/disclosure 恢复至 original_value。
+        - 若为普通字段更新，则将 content/when_to_read 恢复至 original_value。
         """
         rows = self.conn.execute(
             "SELECT id, concept_name, field, original_value, is_creation FROM snapshots WHERE concept_id = ?",
@@ -227,7 +227,7 @@ class SnapshotMixin:
 
         cname = rows[0]["concept_name"]
         concept_row = self.conn.execute(
-            "SELECT id, name, role, content, disclosure FROM concepts WHERE id = ?",
+            "SELECT id, name, role, content, when_to_read FROM concepts WHERE id = ?",
             (concept_id,),
         ).fetchone()
 
@@ -246,23 +246,23 @@ class SnapshotMixin:
 
             # 1b. 概念原本存在而后被删除：恢复为 plain 砖块
             content_row = next((r for r in rows if r["field"] == "content"), None)
-            disclosure_row = next((r for r in rows if r["field"] == "disclosure"), None)
+            when_to_read_row = next((r for r in rows if r["field"] == "when_to_read"), None)
 
             orig_content = content_row["original_value"] if content_row else None
-            orig_disclosure = disclosure_row["original_value"] if disclosure_row else None
+            orig_when_to_read = when_to_read_row["original_value"] if when_to_read_row else None
 
             self.conn.execute(
-                "INSERT INTO concepts (id, name, content, disclosure, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "
+                "INSERT INTO concepts (id, name, content, when_to_read, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, 'plain', 0, NULL, NULL, NULL, ?, ?)",
-                (concept_id, cname, orig_content, orig_disclosure, now, now),
+                (concept_id, cname, orig_content, orig_when_to_read, now, now),
             )
             self.conn.execute(
                 "INSERT OR IGNORE INTO aliases (alias, concept_id) VALUES (?, ?)",
                 (cname, concept_id),
             )
 
-            if orig_disclosure:
-                def _sync_hook(cid=concept_id, disc=orig_disclosure):
+            if orig_when_to_read:
+                def _sync_hook(cid=concept_id, disc=orig_when_to_read):
                     sync_single_embedding(self, cid, disc)
                 self._post_commit_hooks.append(_sync_hook)
             else:
@@ -276,9 +276,9 @@ class SnapshotMixin:
             self.delete_concept(concept_id)
 
         else:
-            # 3. 概念依然存在且为普通修改：恢复 content / disclosure
+            # 3. 概念依然存在且为普通修改：恢复 content / when_to_read
             content_row = next((r for r in rows if r["field"] == "content"), None)
-            disclosure_row = next((r for r in rows if r["field"] == "disclosure"), None)
+            when_to_read_row = next((r for r in rows if r["field"] == "when_to_read"), None)
 
             if content_row:
                 orig_content = content_row["original_value"]
@@ -287,14 +287,14 @@ class SnapshotMixin:
                     (orig_content, now, concept_id),
                 )
 
-            if disclosure_row:
-                orig_disclosure = disclosure_row["original_value"]
+            if when_to_read_row:
+                orig_when_to_read = when_to_read_row["original_value"]
                 self.conn.execute(
-                    "UPDATE concepts SET disclosure = ?, updated_at = ? WHERE id = ?",
-                    (orig_disclosure, now, concept_id),
+                    "UPDATE concepts SET when_to_read = ?, updated_at = ? WHERE id = ?",
+                    (orig_when_to_read, now, concept_id),
                 )
-                if orig_disclosure:
-                    def _sync_hook(cid=concept_id, disc=orig_disclosure):
+                if orig_when_to_read:
+                    def _sync_hook(cid=concept_id, disc=orig_when_to_read):
                         sync_single_embedding(self, cid, disc)
                     self._post_commit_hooks.append(_sync_hook)
                 else:

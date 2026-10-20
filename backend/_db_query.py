@@ -100,7 +100,7 @@ class QueryMixin:
     def search_concepts(
         self, query: str, tag_expr: str | None = None, limit: int | None = 50,
     ) -> list[ConceptSearchResult]:
-        """按 alias、disclosure 或 content 模糊搜索 concept，可選按 tag 過濾。
+        """按 alias、when_to_read 或 content 模糊搜索 concept，可選按 tag 過濾。
 
         返回 ConceptSearchResult（concept 身份 + 命中字段明細）。
         query 為必需的非空字符串；可選 limit 限制返回数量（默认 50）。
@@ -126,7 +126,7 @@ class QueryMixin:
 
         sql = f"""
         WITH target_concepts AS (
-            SELECT DISTINCT c.id, c.name, c.disclosure, c.content FROM concepts c
+            SELECT DISTINCT c.id, c.name, c.when_to_read, c.content FROM concepts c
             {tag_join}
         )
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'name' AS field, NULL AS target_id, tc.name AS text
@@ -142,9 +142,9 @@ class QueryMixin:
 
         UNION ALL
 
-        SELECT tc.id AS concept_id, tc.name AS concept_name, 'disclosure' AS field, NULL AS target_id, tc.disclosure AS text
+        SELECT tc.id AS concept_id, tc.name AS concept_name, 'when_to_read' AS field, NULL AS target_id, tc.when_to_read AS text
         FROM target_concepts tc
-        WHERE tc.disclosure LIKE ? ESCAPE '\\' AND tc.disclosure IS NOT NULL
+        WHERE tc.when_to_read LIKE ? ESCAPE '\\' AND tc.when_to_read IS NOT NULL
 
         UNION ALL
 
@@ -160,7 +160,7 @@ class QueryMixin:
 
         # Rank each concept by its best-matching field, then cut to limit.
         # Lower is better: name/alias equal < starts with < contains
-        # < disclosure < content. Ties: more total occurrences of the query
+        # < when_to_read < content. Ties: more total occurrences of the query
         # (case-insensitive, across all matched fields) first, then id.
         q_lower = query.lower()
 
@@ -168,7 +168,7 @@ class QueryMixin:
             if field in ("name", "alias"):
                 t = text.lower()
                 return 0 if t == q_lower else 1 if t.startswith(q_lower) else 2
-            return 3 if field == "disclosure" else 4
+            return 3 if field == "when_to_read" else 4
 
         best: dict[int, int] = {}
         hits: dict[int, int] = {}
@@ -286,7 +286,7 @@ class QueryMixin:
                 "id": c.id,
                 "name": c.name,
                 "content": c.content,
-                "disclosure": c.disclosure,
+                "when_to_read": c.when_to_read,
                 "role": c.role,
                 "is_active": states[c.id],
                 "lifespan": c.lifespan,
@@ -385,7 +385,7 @@ class QueryMixin:
     def _get_compose_members(self, concept_id: int, states: dict[int, int]) -> list[ComposeMemberDetail]:
         """列出组合节点的成员。states 是 load_active_states 的结果，用来填每个成员的激活状态。"""
         rows = self.conn.execute(
-            "SELECT c.id AS concept_id, c.name, c.disclosure, c.role, cm.order_index "
+            "SELECT c.id AS concept_id, c.name, c.when_to_read, c.role, cm.order_index "
             "FROM compose_members cm "
             "JOIN concepts c ON cm.member_concept_id = c.id "
             "WHERE cm.parent_concept_id = ? "
@@ -397,7 +397,7 @@ class QueryMixin:
                 concept_id=r["concept_id"],
                 name=r["name"],
                 order_index=r["order_index"],
-                disclosure=r["disclosure"],
+                when_to_read=r["when_to_read"],
                 is_active=states[r["concept_id"]],
                 role=r["role"],
             )
@@ -540,7 +540,7 @@ class QueryMixin:
             id=cid,
             name=row["name"],
             content=content_val,
-            disclosure=row["disclosure"],
+            when_to_read=row["when_to_read"],
             role=row["role"],
             is_active=states[cid],
             lifespan=row["lifespan"],
@@ -566,18 +566,18 @@ class QueryMixin:
     def search_by_intent(
         self, intent_text: str, limit: int = 10,
     ) -> list[dict]:
-        """Search concept disclosures by semantic similarity to an intent string.
+        """Search concept when_to_read by semantic similarity to an intent string.
 
         Computes the intent's embedding, then ranks all concepts that have
-        stored disclosure embeddings by cosine similarity. Returns top-N results.
+        stored when_to_read embeddings by cosine similarity. Returns top-N results.
         """
         query_vec = embed_texts([intent_text], timeout=30)[0]
 
         rows = self.conn.execute(
-            "SELECT c.id, c.name, c.disclosure, ce.embedding "
+            "SELECT c.id, c.name, c.when_to_read, ce.embedding "
             "FROM concept_embeddings ce "
             "JOIN concepts c ON ce.concept_id = c.id "
-            "WHERE c.disclosure IS NOT NULL AND c.disclosure != ''"
+            "WHERE c.when_to_read IS NOT NULL AND c.when_to_read != ''"
         ).fetchall()
 
         if not rows:
@@ -615,7 +615,7 @@ class QueryMixin:
             {
                 "concept_id": valid_rows[i]["id"],
                 "concept_name": valid_rows[i]["name"],
-                "disclosure_text": valid_rows[i]["disclosure"],
+                "when_to_read_text": valid_rows[i]["when_to_read"],
                 "similarity": round(float(sims[i]), 4),
             }
             for i in top_indices
@@ -629,11 +629,11 @@ class QueryMixin:
         """按转移权重取推荐跳转；当前节点是 plain 时，顺带给其中的 plain 推荐算书腰相似度和是否同 Tag。
 
         输入：当前节点 ID、推荐条数上限。
-        输出：TransitionSuggestion 列表（按权重降序）。disclosure_similarity / shares_tag 只在
+        输出：TransitionSuggestion 列表（按权重降序）。when_to_read_similarity / shares_tag 只在
         当前节点与该推荐都是 plain、且两边都有书腰向量时填写，其余为 None。只用库里已存的向量，不调 API。
         """
         rows = self.conn.execute(
-            "SELECT ct.to_concept_id, c.name, c.disclosure, c.role, ct.weight "
+            "SELECT ct.to_concept_id, c.name, c.when_to_read, c.role, ct.weight "
             "FROM concept_transitions ct "
             "JOIN concepts c ON ct.to_concept_id = c.id "
             "WHERE ct.from_concept_id = ? "
@@ -675,9 +675,9 @@ class QueryMixin:
             TransitionSuggestion(
                 concept_id=r["to_concept_id"],
                 concept_name=r["name"],
-                disclosure=r["disclosure"],
+                when_to_read=r["when_to_read"],
                 weight=round(r["weight"], 4),
-                disclosure_similarity=sims.get(r["to_concept_id"]),
+                when_to_read_similarity=sims.get(r["to_concept_id"]),
                 shares_tag=shared.get(r["to_concept_id"], False) if r["to_concept_id"] in sims else None,
             )
             for r in rows
@@ -1017,13 +1017,13 @@ class QueryMixin:
               电位变化时都会刷新它，而加 Tag/别名又不会刷新。
         输出: dict 列表，每项含 concept_id, name（节点已删除时为日志里最后的名字）,
               deleted (bool), last_at, actions（该批次内 [("命令:子动作", 次数)]，
-              最近优先）, disclosure。
+              最近优先）, when_to_read。
         """
         ph = ",".join("?" for _ in self._MUTATING_COMMANDS)
         rows = self.conn.execute(
             f"SELECT a.concept_id, a.session_id, a.timestamp AS last_at, "
             f"       a.concept_name AS logged_name, "
-            f"       c.name AS cur_name, c.disclosure AS disclosure "
+            f"       c.name AS cur_name, c.when_to_read AS when_to_read "
             f"FROM cli_audit_log a "
             f"JOIN (SELECT concept_id, MAX(id) AS max_id FROM cli_audit_log "
             f"      WHERE success = 1 AND concept_id IS NOT NULL AND command IN ({ph}) "
@@ -1058,6 +1058,6 @@ class QueryMixin:
                 "deleted": deleted,
                 "last_at": r["last_at"],
                 "actions": actions,
-                "disclosure": r["disclosure"],
+                "when_to_read": r["when_to_read"],
             })
         return results

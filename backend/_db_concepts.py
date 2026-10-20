@@ -19,7 +19,7 @@ class ConceptMixin:
     def create_concept(
         self,
         name: str,
-        disclosure: str | None = None,
+        when_to_read: str | None = None,
         content: str | None = None,
         role: str = "plain",
         lifespan: str | None = None,
@@ -30,7 +30,7 @@ class ConceptMixin:
 
         Args:
             name: 概念名（自动注册为 alias）。
-            disclosure: 初始书腰（1:1 挂在 concepts 上）。
+            when_to_read: 初始书腰（1:1 挂在 concepts 上）。
             content: 初始正文。
             role: 'plain' | 'sensor' | 'logic' | 'guard'
             lifespan: 仅 role='sensor' 时有效 ('turn' | 'session' | 'permanent')，默认 'session'。
@@ -104,12 +104,12 @@ class ConceptMixin:
             raise ValueError("Plain concepts cannot have on_fire actions.")
 
         clean_content = content.strip() if content else None
-        clean_disclosure = disclosure.strip() if disclosure and disclosure.strip() else None
+        clean_when_to_read = when_to_read.strip() if when_to_read and when_to_read.strip() else None
 
         cursor = self.conn.execute(
-            "INSERT INTO concepts (name, content, disclosure, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "
+            "INSERT INTO concepts (name, content, when_to_read, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, clean_content, clean_disclosure, role, is_active, lifespan, activation_type, clean_on_fire, now, now),
+            (name, clean_content, clean_when_to_read, role, is_active, lifespan, activation_type, clean_on_fire, now, now),
         )
         concept_id = cursor.lastrowid
 
@@ -141,8 +141,8 @@ class ConceptMixin:
         )
 
         # 触发 embedding 同步
-        if clean_disclosure:
-            def _sync_hook(cid=concept_id, disc=clean_disclosure):
+        if clean_when_to_read:
+            def _sync_hook(cid=concept_id, disc=clean_when_to_read):
                 sync_single_embedding(self, cid, disc)
             self._post_commit_hooks.append(_sync_hook)
 
@@ -244,7 +244,7 @@ class ConceptMixin:
         if getattr(self, "snapshot_mode", False):
             self.capture_deletion_snapshot(cid)
 
-        # 执行删除（外键约束自动清理 compose_members, aliases, disclosures, reminders, sensor_hooks, tool_guards, inhibitions 等）
+        # 执行删除（外键约束自动清理 compose_members, aliases, when_to_read, reminders, sensor_hooks, tool_guards, inhibitions 等）
         self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
 
         eval_res = self._evaluator().evaluate()

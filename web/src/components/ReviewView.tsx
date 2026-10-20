@@ -208,7 +208,7 @@ const ReviewCard = memo(function ReviewCard({
   onNavigateToNode,
 }: ReviewCardProps) {
   const contentChange = item.changes.find((c) => c.field === "content");
-  const disclosureChange = item.changes.find((c) => c.field === "disclosure");
+  const whenToReadChange = item.changes.find((c) => c.field === "when_to_read");
 
   return (
     <div
@@ -277,14 +277,14 @@ const ReviewCard = memo(function ReviewCard({
           </div>
         ) : null}
 
-        {disclosureChange && (
+        {whenToReadChange && (
           <div className="change-section">
             <div className="change-section-title">
-              <span className="field-dot" /> 书腰变更 (Disclosure Diff)
+              <span className="field-dot" /> 书腰变更 (When-to-read Diff)
             </div>
             <DiffViewer
-              original={disclosureChange.original_value}
-              current={disclosureChange.current_value}
+              original={whenToReadChange.original_value}
+              current={whenToReadChange.current_value}
               mode={diffMode}
             />
           </div>

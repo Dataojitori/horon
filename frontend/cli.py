@@ -37,7 +37,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 # read_concept 推荐块里，当前节点与某条 plain 推荐的书腰相似度达到这个值，就提示考虑合并/改书腰/并 Tag。
 # 2026-09-28 全库两两相似度：中位数 0.31，99.9% 分位 0.72；>=0.75 约 100 对。
-DISCLOSURE_SIMILAR_THRESHOLD = 0.75
+WHEN_TO_READ_SIMILAR_THRESHOLD = 0.75
 
 # 这条命令属于哪个会话。
 # 输入：宿主给它启动的命令设的环境变量（Claude Code / Codex / Antigravity 各一个，
@@ -170,10 +170,10 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
     if alt_names:
         lines.append(f"Also known as: {', '.join(alt_names)}")
 
-    if result.disclosure:
-        lines.append(f"Disclosure: {result.disclosure}")
+    if result.when_to_read:
+        lines.append(f"When to read: {result.when_to_read}")
     else:
-        lines.append("Disclosure: (none)")
+        lines.append("When to read: (none)")
 
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
@@ -248,22 +248,22 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
                 block.append(f"  #{rank} [{s.concept_id}] (listed above, w={s.weight:.2f})")
                 continue
             block.append(f"  #{rank} [{s.concept_id}] {s.concept_name} (w={s.weight:.2f})")
-            if s.disclosure:
-                block.append(f"    ↳ When: {s.disclosure}")
+            if s.when_to_read:
+                block.append(f"    ↳ When: {s.when_to_read}")
         footer_blocks.append(block)
 
         # 同属一个 Tag 的不提示：已经被归到一起管理，书腰相近可以是有意的
         similar = [s for s in result.suggested_next
                    if s.concept_id not in listed_above
-                   and s.disclosure_similarity is not None
-                   and s.disclosure_similarity >= DISCLOSURE_SIMILAR_THRESHOLD
+                   and s.when_to_read_similarity is not None
+                   and s.when_to_read_similarity >= WHEN_TO_READ_SIMILAR_THRESHOLD
                    and not s.shares_tag]
         if similar:
             block = ["[ 书腰相近的节点 ]"]
             for s in similar:
                 block.append(
                     f"  - 你正在读的 [{result.id}] {result.name}，和上面推荐的 "
-                    f"[{s.concept_id}] {s.concept_name}，书腰相似度 {s.disclosure_similarity:.2f}，"
+                    f"[{s.concept_id}] {s.concept_name}，书腰相似度 {s.when_to_read_similarity:.2f}，"
                     "不在同一个 Tag 里。可以考虑要不要合并、挂进同一个 Tag、或改书腰写清各自什么时候打开；"
                     "看过觉得现在这样合理，也可以不动。")
             footer_blocks.append(block)
@@ -289,8 +289,8 @@ def _format_search_concepts(results) -> str:
                 lines.append("     ↳ Name")
             elif m.field == "alias":
                 lines.append(f'     ↳ Alias: "{m.snippet}"')
-            elif m.field == "disclosure":
-                lines.append(f'     ↳ Disclosure: "{m.snippet}"')
+            elif m.field == "when_to_read":
+                lines.append(f'     ↳ When to read: "{m.snippet}"')
             elif m.field == "content":
                 lines.append(f'     ↳ Content: "{m.snippet}"')
     return "\n".join(lines)
@@ -329,8 +329,8 @@ def _format_recent(rows) -> str:
         lines.append(
             f"[{r['concept_id']}] {r['name']}{tag}  — {r['last_at'].replace('T', ' ')}"
             f"  ({', '.join(a if n == 1 else f'{a}×{n}' for a, n in r['actions'])})")
-        if r.get("disclosure"):
-            d = " ".join(r["disclosure"].split())
+        if r.get("when_to_read"):
+            d = " ".join(r["when_to_read"].split())
             lines.append(f"    ↳ When: {d[:120]}{'…' if len(d) > 120 else ''}")
     return "\n".join(lines)
 
@@ -597,7 +597,7 @@ def _build_parser():
     # create_concept
     p = sub.add_parser("create_concept", allow_abbrev=False)
     p.add_argument("name")
-    p.add_argument("--disclosure", default=None)
+    p.add_argument("--when-to-read", default=None)
     p.add_argument("--content", default=None,
                    help="Why this concept exists and what observation prompted it.")
     p.add_argument("--content-file", "--content_file", dest="content_file", default=None,
@@ -633,7 +633,7 @@ def _build_parser():
 
     # search_keyword
     p = sub.add_parser("search_keyword", allow_abbrev=False)
-    p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
+    p.add_argument("query", help="Keyword query to search in concepts, aliases, when_to_read, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
     p.add_argument("--limit", type=int, default=50,
@@ -651,17 +651,17 @@ def _build_parser():
     p.add_argument("kind", choices=["name", "tag", "inhibition"])
     p.add_argument("value")
 
-    # delete (default=concept, or name/activation-rule/tag/disclosure/sensor_hook/tool_guard/inhibition)
+    # delete (default=concept, or name/activation-rule/tag/when_to_read/sensor_hook/tool_guard/inhibition)
     p = sub.add_parser("delete", allow_abbrev=False)
     p.add_argument("target")
     p.add_argument("kind", nargs="?", default=None,
-                   choices=["name", "activation-rule", "activation_rule", "tag", "disclosure", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard", "inhibition"])
+                   choices=["name", "activation-rule", "activation_rule", "tag", "when_to_read", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard", "inhibition"])
     p.add_argument("value", nargs="?", default=None)
 
-    # set (name, disclosure, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
+    # set (name, when_to_read, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
     p = sub.add_parser("set", allow_abbrev=False)
     p.add_argument("target")
-    p.add_argument("prop", choices=["name", "disclosure", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
+    p.add_argument("prop", choices=["name", "when_to_read", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
     p.add_argument("value")
     p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"],
                    help="Lifespan when setting role to sensor")
@@ -759,9 +759,9 @@ def _build_parser():
     sub.add_parser("inbox", allow_abbrev=False,
         help="Evaluate all reminder conditions and show triggered ones.")
 
-    # search_semantic (semantic search by disclosure embedding)
+    # search_semantic (semantic search by when_to_read embedding)
     p = sub.add_parser("search_semantic", allow_abbrev=False,
-        help="Search concepts by semantic intent (vector similarity on disclosures).")
+        help="Search concepts by semantic intent (vector similarity on when_to_read).")
     p.add_argument("query", help="Natural language intent to search for")
     p.add_argument("--limit", type=int, default=10,
         help="Maximum number of results to return (default: 10)")
@@ -813,7 +813,7 @@ def _dispatch(args, db):
             raise ValueError("create_concept requires non-empty --content or --content-file.")
         return db.create_concept(
             args.name,
-            args.disclosure,
+            args.when_to_read,
             content=content,
             role=getattr(args, "role", "plain"),
             lifespan=getattr(args, "lifespan", None),
@@ -1048,13 +1048,13 @@ def _dispatch(args, db):
     elif args.command == "search_semantic":
         results = db.search_by_intent(args.query, limit=args.limit)
         if not results:
-            return RawOutput("(no results — disclosures may lack embeddings)")
+            return RawOutput("(no results — when_to_read may lack embeddings)")
         lines = []
         for i, r in enumerate(results, 1):
             lines.append(
                 f"{i}. [{r['concept_id']}] {r['concept_name']} "
                 f"(sim={r['similarity']:.4f})")
-            lines.append(f"   disclosure: {r['disclosure_text']}")
+            lines.append(f"   when_to_read: {r['when_to_read_text']}")
         return RawOutput("\n".join(lines))
 
 

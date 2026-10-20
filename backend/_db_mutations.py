@@ -24,10 +24,10 @@ class MutationMixin:
             return self._add_name(concept, value)
         elif kind == "tag":
             return self._add_tag(concept, value)
-        elif kind == "disclosure":
+        elif kind == "when_to_read":
             raise ValueError(
-                "disclosure is a 1:1 property. "
-                "Use 'set <concept> disclosure \"...\"' instead."
+                "when_to_read is a 1:1 property. "
+                "Use 'set <concept> when_to_read \"...\"' instead."
             )
         elif kind in ("sensor_hook", "sensor-hook"):
             raise ValueError(
@@ -123,25 +123,25 @@ class MutationMixin:
         )
 
     @transactional
-    def _set_disclosure(self, concept, text: str) -> MutationResult:
+    def _set_when_to_read(self, concept, text: str) -> MutationResult:
         """设置/更新概念的书腰 (1:1 覆盖)。"""
         text = text.strip()
         if not text:
-            raise ValueError("Disclosure text cannot be empty.")
+            raise ValueError("When to read text cannot be empty.")
         cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
         now = _now()
         old_row = self.conn.execute(
-            "SELECT disclosure FROM concepts WHERE id=?", (cid,)
+            "SELECT when_to_read FROM concepts WHERE id=?", (cid,)
         ).fetchone()
-        old_disc = old_row["disclosure"] if old_row else None
+        old_disc = old_row["when_to_read"] if old_row else None
 
         if getattr(self, "snapshot_mode", False):
-            self.capture_snapshot(cid, "disclosure")
+            self.capture_snapshot(cid, "when_to_read")
 
         self.conn.execute(
-            "UPDATE concepts SET disclosure=?, updated_at=? WHERE id=?",
+            "UPDATE concepts SET when_to_read=?, updated_at=? WHERE id=?",
             (text, now, cid),
         )
         self.conn.execute(
@@ -153,10 +153,10 @@ class MutationMixin:
             sync_single_embedding(self, d_cid, d_text)
         self._post_commit_hooks.append(_sync_hook)
 
-        diff = {"disclosure": {"concept_id": cid, "old": old_disc, "new": text}}
+        diff = {"when_to_read": {"concept_id": cid, "old": old_disc, "new": text}}
         self._run_mutation_hooks(cid, diff)
         return MutationResult(
-            message=f"Success. Set disclosure of {label} to: {text}",
+            message=f"Success. Set when_to_read of {label} to: {text}",
             concept_id=cid, concept_name=cname,
         )
 
@@ -366,7 +366,7 @@ class MutationMixin:
         name:          删除别名（value=要删的别名，必填）。
         activation-rule: 清除激活规则（降级为 plain）。
         tag:           揭掉概念上的 tag（value=要揭的 tag，必填）。
-        disclosure:    清除概念上的书腰。
+        when_to_read:    清除概念上的书腰。
         sensor_hook:   删除感知钩子。
         tool_guard:    删除工具守卫规则。
         inhibition:    解除抑制关系（target=inhibitor, value=target_concept，必填）。
@@ -386,12 +386,12 @@ class MutationMixin:
             if value is None:
                 raise ValueError("Specify which tag to delete.")
             return self._delete_tag(target, value)
-        elif kind == "disclosure":
+        elif kind == "when_to_read":
             if value is not None:
                 raise ValueError(
-                    f"delete disclosure takes no extra argument, but got: '{value}'. "
-                    f"Use 'delete <concept> disclosure' to clear the disclosure.")
-            return self._delete_disclosure(target)
+                    f"delete when_to_read takes no extra argument, but got: '{value}'. "
+                    f"Use 'delete <concept> when_to_read' to clear the when_to_read.")
+            return self._delete_when_to_read(target)
         elif kind in ("sensor_hook", "sensor-hook"):
             if value is not None:
                 raise ValueError(
@@ -408,7 +408,7 @@ class MutationMixin:
             return self._delete_inhibition(inhibitor_concept=target, target_concept=value)
         raise ValueError(
             f"Unknown type: '{kind}'. "
-            f"Use 'name', 'activation_rule', 'tag', 'disclosure', 'sensor_hook', 'tool_guard', or 'inhibition'.")
+            f"Use 'name', 'activation_rule', 'tag', 'when_to_read', 'sensor_hook', 'tool_guard', or 'inhibition'.")
 
     @transactional
     def _delete_name(self, concept, name: str) -> MutationResult:
@@ -474,35 +474,35 @@ class MutationMixin:
         )
 
     @transactional
-    def _delete_disclosure(self, concept) -> MutationResult:
+    def _delete_when_to_read(self, concept) -> MutationResult:
         """清除概念的书腰。"""
         cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
         row = self.conn.execute(
-            "SELECT disclosure FROM concepts WHERE id = ?",
+            "SELECT when_to_read FROM concepts WHERE id = ?",
             (cid,),
         ).fetchone()
-        if not row or not row["disclosure"]:
-            raise ValueError(f"Concept {label} has no disclosure to delete.")
-        old_text = row["disclosure"]
+        if not row or not row["when_to_read"]:
+            raise ValueError(f"Concept {label} has no when_to_read to delete.")
+        old_text = row["when_to_read"]
 
         if getattr(self, "snapshot_mode", False):
-            self.capture_snapshot(cid, "disclosure")
+            self.capture_snapshot(cid, "when_to_read")
 
         now = _now()
         self.conn.execute(
-            "UPDATE concepts SET disclosure=NULL, updated_at=? WHERE id=?",
+            "UPDATE concepts SET when_to_read=NULL, updated_at=? WHERE id=?",
             (now, cid),
         )
         self.conn.execute(
             "DELETE FROM concept_embeddings WHERE concept_id=?",
             (cid,),
         )
-        diff = {"disclosure": {"concept_id": cid, "old": old_text, "new": None}}
+        diff = {"when_to_read": {"concept_id": cid, "old": old_text, "new": None}}
         self._run_mutation_hooks(cid, diff)
         return MutationResult(
-            message=f"Success. Removed disclosure from {label}.",
+            message=f"Success. Removed when_to_read from {label}.",
             concept_id=cid, concept_name=cname,
         )
 
@@ -651,7 +651,7 @@ class MutationMixin:
     # ── Set ──────────────────────────────────────────────────────────────────
 
     def set(self, target, prop: str, value: Any, **kwargs) -> MutationResult:
-        """设置属性或单值配置：name, disclosure, activation_rule, role, lifespan, active, on_fire, sensor_hook, tool_guard。"""
+        """设置属性或单值配置：name, when_to_read, activation_rule, role, lifespan, active, on_fire, sensor_hook, tool_guard。"""
         if prop == "tag":
             raise ValueError(
                 "Tag is multi-valued. "
@@ -662,8 +662,8 @@ class MutationMixin:
                 "Inhibition is multi-valued. "
                 "Use 'add <inhibitor> inhibition <target>' to add, "
                 "or 'delete <inhibitor> inhibition <target>' to remove.")
-        elif prop == "disclosure":
-            return self._set_disclosure(target, str(value))
+        elif prop == "when_to_read":
+            return self._set_when_to_read(target, str(value))
         elif prop == "name":
             return self._set_name(target, str(value))
         elif prop in ("activation_rule", "activation-rule"):
@@ -699,7 +699,7 @@ class MutationMixin:
             )
         raise ValueError(
             f"Unknown property: '{prop}'. "
-            f"Use 'name', 'disclosure', 'activation_rule', 'role', 'lifespan', 'active', 'on_fire', 'sensor_hook', or 'tool_guard'.")
+            f"Use 'name', 'when_to_read', 'activation_rule', 'role', 'lifespan', 'active', 'on_fire', 'sensor_hook', or 'tool_guard'.")
 
     @transactional
     def _set_active(self, concept, is_active: Any) -> MutationResult:

@@ -93,7 +93,7 @@ def audit_cluster(ctx):
 - **`.activation_type`** (`str | None`): 激活规则类型（`'AND'`, `'OR'`, `'CHAIN'` 或 `None`）。
 - **`.on_fire`** (`str | None`): 发火动作 JSON 配置文本。
 - **`.tags`** (`list[str]`): 当前概念持有的标签列表。
-- **`.disclosure`** (`str | None`): 一句话书腰（触发场景）。
+- **`.when_to_read`** (`str | None`): 一句话书腰（触发场景）。
 - **`.inputs`** (`list[ConceptProxy]`): 上游输入引脚（当前概念在 `activation-rule` 中依赖的前置成员概念列表；CHAIN 的顺序与回访会保留，可能有重复）。
 - **`.downstream`** (`list[ConceptProxy]`): 下游承接节点（将当前概念作为输入引脚引用的所有下游逻辑中继与守卫列表，已去重）。
 - 查询不存在的概念时，标量字段返回默认值（`""` / `"plain"` / `0` / `None`），列表字段返回 `[]`。
@@ -117,7 +117,7 @@ def audit_cluster(ctx):
     - `"activation-rule"`: `{"concept_id": 1, "old": "...", "new": "A & B"}`
     - `"role"`: `{"concept_id": 1, "old": "plain", "new": "logic"}`
     - `"lifespan"`: `{"concept_id": 1, "old": "session", "new": "permanent"}`
-    - `"disclosure"`: `{"concept_id": 1, "old": "...", "new": "..."}`（删除书腰时 `new` 为 `None`）
+    - `"when_to_read"`: `{"concept_id": 1, "old": "...", "new": "..."}`（删除书腰时 `new` 为 `None`）
     - `"name"`: `{"concept_id": 1, "old": "旧主名称", "new": "新主名称"}`（主名称变更）
     - `"names"`: `{"added": [{"concept_id": 1, "name": "..."}], "removed": [...]}`（别名增删）
     - `"concepts"`: `{"removed": [{"concept_id": 1, "name": "...", "members": [2, 3]}]}`（概念被删除；被删概念本身与其成员都会收到这份 diff）

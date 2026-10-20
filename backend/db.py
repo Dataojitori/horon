@@ -445,18 +445,18 @@ class HoronDB(
         """Audit system-level database integrity (e.g., missing embeddings) and auto-patch them."""
         lines = ["## Database Integrity Audit"]
         
-        # Check concepts with disclosure for missing embeddings
+        # Check concepts with when_to_read for missing embeddings
         rows = self.conn.execute(
             """
-            SELECT c.id, c.disclosure
+            SELECT c.id, c.when_to_read
             FROM concepts c
             LEFT JOIN concept_embeddings ce ON c.id = ce.concept_id
-            WHERE c.disclosure IS NOT NULL AND c.disclosure != '' AND ce.embedding IS NULL
+            WHERE c.when_to_read IS NOT NULL AND c.when_to_read != '' AND ce.embedding IS NULL
             """
         ).fetchall()
         
         if not rows:
-            lines.append("  - Embeddings: All concept disclosures have embeddings ✓")
+            lines.append("  - Embeddings: All concept when_to_read have embeddings ✓")
         else:
             lines.append(f"  - Embeddings: Found {len(rows)} concepts missing embeddings. Syncing...")
             from .embedding import sync_single_embedding
@@ -464,7 +464,7 @@ class HoronDB(
             failed_count = 0
             for r in rows:
                 try:
-                    ok = sync_single_embedding(self, r["id"], r["disclosure"])
+                    ok = sync_single_embedding(self, r["id"], r["when_to_read"])
                     if ok:
                         success_count += 1
                     else:
