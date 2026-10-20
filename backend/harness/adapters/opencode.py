@@ -6,8 +6,8 @@ opencode 没有 hooks.json 式的命令钩子，只有 JS 插件。插件
 把下面几个事件写成 JSON 从 stdin 交给 `run_gateway.py <事件> --adapter opencode`，
 再按这里返回的 JSON 动手。payload 和返回值的形状是我们自己定的，不是 opencode 的格式：
 
-  SessionStart     {session_id}                          → {context?}
-  UserPromptSubmit {session_id, prompt}                  → {context?}   插件把 context 接在这条用户消息最后一个文本段的末尾
+  SessionStart     {session_id, source?, reset?}          → {context?}   新会话或上下文压缩（source="compact" / reset=true）时重置状态并返回提示
+  UserPromptSubmit {session_id, prompt, reset?}           → {context?}   插件把 context 接在这条用户消息最后一个文本段的末尾
   PreToolUse       {session_id, tool_name, tool_input, mcp_servers}
                                                          → {decision:"deny", reason} 或 {}
                    工具名和参数先经 normalize_tool 翻成 Claude Code 的叫法再匹配。
@@ -105,15 +105,17 @@ def handle_opencode(
     db: HoronDB,
 ) -> tuple[int, dict[str, Any] | None, str | None]:
     """处理 opencode 插件转来的事件。返回 (exit_code, stdout_dict, stderr)。"""
+    reset = payload.get("source") in ("compact", "clear") or bool(payload.get("reset"))
+
     if event_name == "SessionStart":
-        init_msg = sync_session(db, ADAPTER)
+        init_msg = sync_session(db, ADAPTER, reset=reset)
         if init_msg:
             return 0, {"context": wrap_harness_message([init_msg])}, None
         return 0, {}, None
 
     if event_name == "UserPromptSubmit":
         notifications: list[str] = []
-        if init_msg := sync_session(db, ADAPTER):
+        if init_msg := sync_session(db, ADAPTER, reset=reset):
             notifications.append(init_msg)
         end_turn(db)
 
@@ -127,10 +129,12 @@ def handle_opencode(
         return 0, ({"context": banner} if banner else {}), None
 
     if event_name == "PreToolUse":
-        sync_session(db, ADAPTER)
+        init_msg = sync_session(db, ADAPTER, reset=reset)
         tool_name, tool_input = normalize_tool(
             _text(payload, "tool_name"), payload.get("tool_input") or {}, payload.get("mcp_servers"))
         allowed, deny_reason, fired = guard(db, tool_name, tool_input)
+        if init_msg:
+            fired = [init_msg, *fired]
         if not allowed:
             reason = deny_reason or "Blocked by Horon guard policy."
             return 0, {"decision": "deny", "reason": wrap_harness_message([*fired, reason])}, None

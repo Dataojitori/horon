@@ -1,6 +1,6 @@
 ---
 name: horon-circuit
-description: 当你需要为 Horon 创建或修改传感器（sensor）、逻辑节点（logic）、工具守卫（guard），配置事件监听（sensor_hook、Jev 复筛、on_fire）、工具拦截（tool_guard）、抑制条件（inhibition），或把长期计划搭成电路时，阅读此说明书。
+description: 当你需要把一条靠自觉记不住的做法做成自动触发的膝跳反射（传感器提醒或工具门禁），创建或修改 sensor、logic、guard，配置事件监听（sensor_hook、Jev 复筛、on_fire）、工具拦截（tool_guard）、抑制条件（inhibition），或把长期计划搭成电路时，阅读此说明书。
 ---
 
 # Horon 电路与传感器制作说明书

@@ -68,7 +68,8 @@ def handle_codex(
         tuple[exit_code, stdout_dict, stderr_content]
     """
     if event_name == "SessionStart":
-        init_msg = sync_session(db, "codex")
+        reset = payload.get("source") in ("compact", "clear") or bool(payload.get("reset"))
+        init_msg = sync_session(db, "codex", reset=reset)
         if init_msg:
             return 0, {
                 "hookSpecificOutput": {

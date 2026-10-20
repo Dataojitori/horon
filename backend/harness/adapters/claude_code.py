@@ -159,7 +159,8 @@ def handle_claude_code(
         tuple[exit_code, stdout_content, stderr_content]
     """
     if event_name == "SessionStart":
-        init_msg = sync_session(db, "claude-code")
+        reset = payload.get("source") in ("compact", "clear") or bool(payload.get("reset"))
+        init_msg = sync_session(db, "claude-code", reset=reset)
         if init_msg:
             return 0, wrap_harness_message([init_msg]), None
         return 0, None, None

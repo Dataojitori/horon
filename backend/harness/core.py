@@ -56,17 +56,27 @@ def wrap_harness_message(items: list[str]) -> str:
     return f"{HARNESS_PREFIX}\n" + "\n".join(lines)
 
 
-def sync_session(db: HoronDB, adapter: str | None = None) -> str | None:
+def sync_session(db: HoronDB, adapter: str | None = None, *, reset: bool = False) -> str | None:
     """会话对齐（对齐的是 db 这个连接的会话）。每个钩子事件和每次 CLI 运行开头调用。
 
-    输入：adapter 是宿主程序名称（例如 claude-code、codex、antigravity），
-    供网页显示，也供 Tag 插件限制哪些宿主可以修改节点。
+    输入：adapter 是宿主程序名称（例如 claude-code、codex、antigravity、opencode），
+    供网页显示，也供 Tag 插件限制哪些宿主可以修改节点；
+    reset=True 表示宿主发生了上下文压缩或清空（session_id 不变，但模型上下文已丢失），
+    需要清空本会话的临时状态并重新返回提示。
     行为：首次见到的会话 → 登记并清空它的临时状态，返回就绪提示；
-      已登记的会话 → 只更新最后活跃时间。
+      reset=True 的会话 → 清空它的临时状态，返回上下文压缩重置提示；
+      其余已登记的会话 → 只更新最后活跃时间。
       （不需要重算：逻辑节点和守卫不存状态，每次读取都按当前输入现算。）
-    输出：首次登记时的提示文字，否则 None。
+    输出：首次登记或重置时的提示文字，否则 None。
     """
     row = db.conn.execute("SELECT session_id FROM sessions WHERE session_id = ?", (db.session_id,)).fetchone()
+    if reset:
+        db.init_session(adapter)
+        return (
+            f"当前会话刚刚发生了上下文压缩（Session: `{db.session_id}`），"
+            "Horon 会话临时状态已重置；压缩前的 `login` 输出与 `horon-cli` 说明书已不在上下文中，"
+            "请先重新执行 `python frontend/cli.py login` 并完整读取 `horon-cli` 说明书（SKILL.md）。"
+        )
     if not row:
         db.init_session(adapter)
         return f"Horon 系统已初始化就绪（Session: `{db.session_id}`）。"

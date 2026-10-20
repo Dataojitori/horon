@@ -11,6 +11,10 @@
 //
 // Mapping:
 //   chat.message          -> UserPromptSubmit  (banner appended to the end of her last text part)
+//   experimental.session.compacting / event session.compacted / experimental.chat.messages.transform
+//                         -> marks session compacted; next user message (UserPromptSubmit with reset)
+//                            or auto-continue turn (SessionStart with source="compact") resets Horon
+//                            session state and attaches the compaction banner
 //   tool.execute.before   -> PreToolUse        (deny = throw, opencode returns the error to the model)
 //   tool.execute.after    -> PostToolUse       (banner appended to the tool output)
 //   event session.idle    -> Stop              (block = send the reason back into the session once)
@@ -153,11 +157,21 @@ export const HoronHarness = async ({ client }) => {
   const ownMessages = new Set() // message IDs of the continuations we sent; only these skip UserPromptSubmit
   const children = new Set() // subagent sessions: never block their Stop
   const aborted = new Set() // sessions the user just interrupted
+  const compacting = new Map() // sessionID -> "running" | "consumed" during compaction lifecycle
+  const compacted = new Set() // sessions whose context was compacted and await state reset + banner injection
+  const injectedBanners = new Map() // sessionID -> {messageID, context} for auto-continue messages bypassing chat.message
   let mcpServers = [] // MCP server names from the config, so Python can map <server>_<tool> to mcp__<server>__<tool>
   const turnOf = new Map() // sessionID -> counter bumped by every real user message (a new user turn)
   const queues = new Map() // sessionID -> tail of that session's gateway calls
 
   const skipped = (sessionID) => !sessionID || SKIP_AGENTS.has(agentOf.get(sessionID))
+
+  const consumeCompacted = (sid) => {
+    if (!compacted.delete(sid)) return false
+    if (compacting.get(sid) === "running") compacting.set(sid, "consumed")
+    else compacting.delete(sid)
+    return true
+  }
 
   // opencode does not await `event` callbacks, so a Stop can still be in the gateway when the next user
   // message arrives. Gateway calls of one session therefore run one at a time, in arrival order: the new
@@ -194,7 +208,10 @@ export const HoronHarness = async ({ client }) => {
         .map((p) => ownText(p.text)) // a forked or edited message still carries the banner we appended
         .filter(Boolean)
         .join("\n")
-      const res = await inOrder(sid, () => callGateway("UserPromptSubmit", { session_id: sid, prompt }, log))
+      const reset = consumeCompacted(sid)
+      const res = await inOrder(sid, () =>
+        callGateway("UserPromptSubmit", { session_id: sid, prompt, ...(reset ? { reset: true } : {}) }, log),
+      )
       if (res?.context) {
         // The banner goes at the end of her last text part, not into a part of its own. Not synthetic on
         // purpose: opencode's UI hides synthetic parts, and she wants to see these to debug. A part of its own
@@ -219,10 +236,17 @@ export const HoronHarness = async ({ client }) => {
     "tool.execute.before": async (input, output) => {
       const sid = input.sessionID
       if (skipped(sid)) return
+      const reset = consumeCompacted(sid)
       const res = await inOrder(sid, () =>
         callGateway(
           "PreToolUse",
-          { session_id: sid, tool_name: input.tool, tool_input: output.args ?? {}, mcp_servers: mcpServers },
+          {
+            session_id: sid,
+            tool_name: input.tool,
+            tool_input: output.args ?? {},
+            mcp_servers: mcpServers,
+            ...(reset ? { reset: true } : {}),
+          },
           log,
         ),
       )
@@ -247,7 +271,74 @@ export const HoronHarness = async ({ client }) => {
       })
     },
 
+    "experimental.session.compacting": async (input) => {
+      const sid = input.sessionID
+      if (!sid) return
+      compacting.set(sid, "running")
+      compacted.delete(sid)
+      lastText.delete(sid)
+    },
+
+    "experimental.compaction.autocontinue": async (input) => {
+      const sid = input.sessionID
+      if (!sid || skipped(sid)) return
+      if (compacting.get(sid) !== "consumed") compacted.add(sid)
+    },
+
+    "experimental.chat.messages.transform": async (_input, output) => {
+      const msgs = output?.messages
+      if (!Array.isArray(msgs) || msgs.length === 0) return
+      let lastUser = null
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        if (msgs[i]?.info?.role === "user") {
+          lastUser = msgs[i]
+          break
+        }
+      }
+      if (!lastUser?.info?.sessionID) return
+      const sid = lastUser.info.sessionID
+      if (skipped(sid)) return
+
+      if (compacting.get(sid) === "running" && msgs.some((m) => m?.info?.role === "assistant" && m?.info?.summary)) {
+        compacted.add(sid)
+      }
+
+      // Auto-compaction inserts a synthetic user continuation message directly into storage without
+      // triggering `chat.message`. Reset the session and attach the compaction banner here before the
+      // model sees the compacted context.
+      if (consumeCompacted(sid)) {
+        const res = await inOrder(sid, () =>
+          callGateway("SessionStart", { session_id: sid, source: "compact" }, log),
+        )
+        if (res?.context) {
+          injectedBanners.set(sid, { messageID: lastUser.info.id, context: res.context })
+        }
+      }
+
+      const inj = injectedBanners.get(sid)
+      if (!inj) return
+      const target = msgs.find((m) => m?.info?.id === inj.messageID)
+      if (!target || !Array.isArray(target.parts)) return
+      const textParts = target.parts.filter((p) => p?.type === "text" && typeof p.text === "string")
+      const lastPart = textParts[textParts.length - 1]
+      if (lastPart) {
+        if (!lastPart.text.endsWith(inj.context)) {
+          lastPart.text = `${lastPart.text}${BANNER_SEP}${inj.context}`
+        }
+      } else {
+        target.parts.push({
+          id: ascendingID("prt"),
+          sessionID: sid,
+          messageID: target.info.id,
+          type: "text",
+          text: inj.context,
+          metadata: { horon: true },
+        })
+      }
+    },
+
     "experimental.text.complete": async (input, output) => {
+      if (compacting.get(input.sessionID) === "running") return
       const prev = lastText.get(input.sessionID)
       const text = output.text ?? ""
       if (prev && prev.messageID === input.messageID) prev.text = prev.text ? `${prev.text}\n${text}` : text
@@ -266,12 +357,25 @@ export const HoronHarness = async ({ client }) => {
       }
       if (event.type === "session.deleted") {
         const id = props.info?.id
-        for (const m of [agentOf, modelOf, lastText, turnOf, queues]) m.delete(id)
-        for (const s of [continuing, children, aborted]) s.delete(id)
+        for (const m of [agentOf, modelOf, lastText, turnOf, queues, compacting, injectedBanners]) m.delete(id)
+        for (const s of [continuing, children, aborted, compacted]) s.delete(id)
+        return
+      }
+      if (event.type === "session.compacted") {
+        const sid = props.sessionID
+        if (!sid) return
+        const state = compacting.get(sid)
+        compacting.delete(sid)
+        lastText.delete(sid)
+        if (state !== "consumed" && !skipped(sid)) compacted.add(sid)
         return
       }
       if (event.type === "session.error") {
         const sid = props.sessionID
+        if (sid && compacting.get(sid) === "running") {
+          compacting.delete(sid)
+          compacted.delete(sid)
+        }
         if (sid && props.error?.name === "MessageAbortedError") {
           aborted.add(sid)
           continuing.delete(sid)
@@ -284,6 +388,11 @@ export const HoronHarness = async ({ client }) => {
 
       const sid = props.sessionID
       if (skipped(sid)) return
+      if (compacting.get(sid) === "running" || compacted.has(sid)) {
+        // Manual `/compact` goes idle immediately after writing the summary; do not run Stop on the summary.
+        compacting.delete(sid)
+        return
+      }
       if (aborted.has(sid)) {
         aborted.delete(sid) // Interrupt already ended the turn
         return
