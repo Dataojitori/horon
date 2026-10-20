@@ -6,7 +6,7 @@
 
 - 你是哪种 Agent：Claude Code、Codex，还是 Antigravity？
 - 用户想把 Horon 放在哪个目录（默认 `~/horon`）？
-- 用户有没有 OpenRouter API key？没有也能装，只是 `intent`（按场景语义检索）不可用。
+- 用户有没有 OpenRouter API key？没有也能装，只是 `search_semantic`（按场景语义检索）不可用。
 - 钩子想全局生效（所有项目都用 Horon），还是只在某一个项目里生效？
 
 ## 1. 获取代码与依赖

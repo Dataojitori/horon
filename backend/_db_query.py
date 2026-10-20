@@ -107,7 +107,7 @@ class QueryMixin:
         """
         if not query or not query.strip():
             raise ValueError(
-                "search_concepts requires a non-empty query string. "
+                "search_keyword requires a non-empty query string. "
                 "Use list_concepts [--tag ...] to browse concepts."
             )
         query = query.strip()

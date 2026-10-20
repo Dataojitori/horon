@@ -1,6 +1,6 @@
 """Read-only Horon CLI for the external reviewer (外审).
 
-Exposes ONLY non-mutating commands: read_concept, search_concepts,
+Exposes ONLY non-mutating commands: read_concept, search_keyword,
 list_concepts, compile, read_memory. It wires up NO mutation path at all — so
 even if the reviewer's prompt or its opencode bash permissions were somehow
 bypassed, this entrypoint CANNOT add / set / delete / update / create / batch
@@ -13,7 +13,7 @@ reviewer mutate.
 
 Usage (same shape as cli.py, minus every write command):
     python frontend/review_cli.py read_concept <name>
-    python frontend/review_cli.py search_concepts <query> [--tag <tag>] [--limit <n>]
+    python frontend/review_cli.py search_keyword <query> [--tag <tag>] [--limit <n>]
     python frontend/review_cli.py list_concepts [--tag <tag>]
     python frontend/review_cli.py compile --target <name> [--assume ...]
     python frontend/review_cli.py read_memory <uri>
@@ -54,8 +54,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("read_concept", allow_abbrev=False)
     p.add_argument("concept")
 
-    # search_concepts
-    p = sub.add_parser("search_concepts", allow_abbrev=False)
+    # search_keyword
+    p = sub.add_parser("search_keyword", allow_abbrev=False)
     p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
@@ -100,7 +100,7 @@ def _dispatch(args: argparse.Namespace, db: HoronDB):
     if args.command == "read_concept":
         return db.read_concept(args.concept)
 
-    if args.command == "search_concepts":
+    if args.command == "search_keyword":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
         return RawOutput(_format_search_concepts(results))
 

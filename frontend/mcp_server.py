@@ -1,7 +1,7 @@
 """Horon 只读 MCP 适配器。
 
 给 run_command 会从头部截断长输出的宿主（Antigravity）用：
-login / read_concept / search_concepts / intent 原样转调 frontend/cli.py，
+login / read_concept / search_keyword / search_semantic 原样转调 frontend/cli.py，
 返回 CLI 的完整 stdout，不做任何截断、分页或改写。
 写操作仍走 CLI。
 
@@ -62,18 +62,18 @@ def read_concept(concepts: list[str], ctx: Context) -> str:
 
 
 @mcp.tool()
-def search_concepts(query: str, ctx: Context, tag: str | None = None, limit: int = 50) -> str:
+def search_keyword(query: str, ctx: Context, tag: str | None = None, limit: int = 50) -> str:
     """关键词搜索节点名称、别名、书腰与正文。tag 为可选的 Tag 表达式（A & B / A | B）。"""
-    args = ["search_concepts", query, "--limit", str(limit)]
+    args = ["search_keyword", query, "--limit", str(limit)]
     if tag:
         args += ["--tag", tag]
     return _run(*args, ctx=ctx)
 
 
 @mcp.tool()
-def intent(query: str, ctx: Context, limit: int = 10) -> str:
+def search_semantic(query: str, ctx: Context, limit: int = 10) -> str:
     """按书腰语义检索：用大白话描述当前情境或疑问。"""
-    return _run("intent", query, "--limit", str(limit), ctx=ctx)
+    return _run("search_semantic", query, "--limit", str(limit), ctx=ctx)
 
 
 if __name__ == "__main__":

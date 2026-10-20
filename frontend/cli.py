@@ -631,8 +631,8 @@ def _build_parser():
     p.add_argument("--bloat", nargs="?", type=int, const=BLOAT_BYTES, default=None, metavar="BYTES",
                    help=f"List concepts that passed the --scope audit (unchanged since) but whose content is at least BYTES UTF-8 bytes (default {BLOAT_BYTES}), largest first")
 
-    # search_concepts
-    p = sub.add_parser("search_concepts", allow_abbrev=False)
+    # search_keyword
+    p = sub.add_parser("search_keyword", allow_abbrev=False)
     p.add_argument("query", help="Keyword query to search in concepts, aliases, disclosures, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
@@ -759,8 +759,8 @@ def _build_parser():
     sub.add_parser("inbox", allow_abbrev=False,
         help="Evaluate all reminder conditions and show triggered ones.")
 
-    # intent (semantic search by disclosure embedding)
-    p = sub.add_parser("intent", allow_abbrev=False,
+    # search_semantic (semantic search by disclosure embedding)
+    p = sub.add_parser("search_semantic", allow_abbrev=False,
         help="Search concepts by semantic intent (vector similarity on disclosures).")
     p.add_argument("query", help="Natural language intent to search for")
     p.add_argument("--limit", type=int, default=10,
@@ -883,7 +883,7 @@ def _dispatch(args, db):
             )
         return RawOutput(f"{report}\n\n{reminder}" if reminder else report)
 
-    elif args.command == "search_concepts":
+    elif args.command == "search_keyword":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)
         return RawOutput(_format_search_concepts(results))
 
@@ -1045,7 +1045,7 @@ def _dispatch(args, db):
     elif args.command == "login":
         return RawOutput(_format_login(db, args.recent_n))
 
-    elif args.command == "intent":
+    elif args.command == "search_semantic":
         results = db.search_by_intent(args.query, limit=args.limit)
         if not results:
             return RawOutput("(no results — disclosures may lack embeddings)")
