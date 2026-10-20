@@ -27,7 +27,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backend._db_common import OFFLINE_DEV_SESSION_ID
+from backend._db_common import OFFLINE_DEV_SESSION_ID, resolve_db_path
 from backend.db import HoronDB
 from frontend.cli import (
     RawOutput,
@@ -48,6 +48,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="horon-review",
         description="Horon read-only CLI (external reviewer)",
         allow_abbrev=False)
+    parser.add_argument("--db", dest="db_alias", default=None,
+                        help="Database alias (see HORON_DBS; default: HORON_DB_DEFAULT).")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # read_concept
@@ -124,7 +126,12 @@ def main() -> None:
     """Parse args, run one read-only command, print the result."""
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB(session_id=OFFLINE_DEV_SESSION_ID)
+    try:
+        db_path = resolve_db_path(getattr(args, "db_alias", None))
+    except ValueError as e:
+        print(f"Fail. {e}")
+        sys.exit(1)
+    db = HoronDB(session_id=OFFLINE_DEV_SESSION_ID, db_path=db_path)
     try:
         _print(_dispatch(args, db))
     except Exception as e:

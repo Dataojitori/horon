@@ -125,6 +125,40 @@
   background: var(--bg-secondary);
 }
 
+/* ── Database switcher ─────────────────── */
+
+.db-badge {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.db-select {
+  margin-right: 8px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-glass-hover);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.db-select:hover {
+  color: var(--text-primary);
+  border-color: var(--text-dim);
+}
+
+.db-select option {
+  color: var(--text-primary);
+  background: var(--bg-secondary);
+}
+
 .stat {
   font-size: 11px;
   color: var(--text-dim);

@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 from backend.db import HoronDB
-from backend._db_common import OFFLINE_DEV_SESSION_ID
+from backend._db_common import OFFLINE_DEV_SESSION_ID, resolve_db_path
 from backend.harness.core import sync_session
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
@@ -577,6 +577,12 @@ class HoronArgumentParser(argparse.ArgumentParser):
 def _build_parser():
     parser = HoronArgumentParser(prog="horon", description="Horon CLI",
                                  allow_abbrev=False)
+    # --db 的 dest 必须避开 audit 子命令自带的 --db（database integrity，
+    # 上游原有，store_true）。全局这个是库别名，用 db_alias 存，两者共存：
+    # `cli.py --db rp audit --db` = 在 rp 库上跑 integrity 审计。
+    parser.add_argument("--db", dest="db_alias", default=None,
+                        help="Database alias (see HORON_DBS; default: HORON_DB_DEFAULT). "
+                             "Omitted = default database, old scripts keep working.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # reset
@@ -1141,7 +1147,12 @@ def _parse_batch_commands(text: str) -> list[tuple[int, list[str], str]]:
 def main():
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB(snapshot_mode=True, session_id=SESSION_ID)
+    try:
+        db_path = resolve_db_path(getattr(args, "db_alias", None))
+    except ValueError as e:
+        print(f"Fail. {e}")
+        sys.exit(1)
+    db = HoronDB(snapshot_mode=True, session_id=SESSION_ID, db_path=db_path)
     if SESSION_ID != OFFLINE_DEV_SESSION_ID:
         # 宿主没装钩子时这个会话还没登记；首次登记会顺带算一遍它的电路状态
         sync_session(db, ADAPTER)

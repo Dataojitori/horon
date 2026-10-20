@@ -53,6 +53,60 @@ if "HORON_DB" not in os.environ:
     raise RuntimeError("HORON_DB not set. Check .env file.")
 _DB_PATH = _PROJECT_DIR / os.environ["HORON_DB"]
 
+# ── Multi-database registry ──────────────────────────────────────────────
+# HORON_DBS (optional JSON): {"main": "horon.db", "rp": "horon-rp.db"}.
+# Keys are frontend-facing aliases (never raw paths); values are resolved
+# relative to the project dir unless absolute (absolute is handy for tests).
+# Unset → single-DB mode identical to before: {"main": <HORON_DB>}.
+# HORON_DB_DEFAULT picks the alias used when callers don't specify one.
+
+
+def _resolve_registry_path(value: str) -> Path:
+    p = Path(value)
+    return p if p.is_absolute() else _PROJECT_DIR / value
+
+
+def _load_db_registry() -> tuple[dict[str, Path], str]:
+    raw = os.environ.get("HORON_DBS", "").strip()
+    if not raw:
+        return {"main": _DB_PATH}, "main"
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise RuntimeError(f"HORON_DBS is not valid JSON: {e}")
+    if not isinstance(data, dict) or not data:
+        raise RuntimeError("HORON_DBS must be a non-empty JSON object {alias: path}.")
+    registry = {}
+    for alias, value in data.items():
+        if not isinstance(alias, str) or not alias.strip():
+            raise RuntimeError(f"HORON_DBS has an invalid alias: {alias!r}.")
+        if not isinstance(value, str) or not value.strip():
+            raise RuntimeError(f"HORON_DBS[{alias!r}] must be a non-empty path string.")
+        registry[alias.strip()] = _resolve_registry_path(value.strip())
+    default = os.environ.get("HORON_DB_DEFAULT", "").strip() or "main"
+    if default not in registry:
+        raise RuntimeError(
+            f"HORON_DB_DEFAULT={default!r} is not in HORON_DBS "
+            f"(available: {', '.join(sorted(registry))}).")
+    return registry, default
+
+
+DB_REGISTRY, DEFAULT_DB_ALIAS = _load_db_registry()
+
+
+def resolve_db_path(alias: str | None = None) -> Path:
+    """Frontend/CLI-facing alias → sqlite file path.
+
+    alias 为空或 None 时回默认库（老客户端不带参不断兼容）。
+    未知别名抛 ValueError（server.py 转成 400，绝不接受前端传原始路径）。
+    """
+    key = (alias or "").strip() or DEFAULT_DB_ALIAS
+    try:
+        return DB_REGISTRY[key]
+    except KeyError:
+        raise ValueError(
+            f"Unknown database {key!r} (available: {', '.join(sorted(DB_REGISTRY))}).")
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _now():

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { api } from "./api";
+import { api, setDb as setDbModule } from "./api";
+import type { DatabaseInfo, } from "./api";
 import type { GraphData, ViewMode, ConceptDetail, SessionInfo } from "./types";
 import GalaxyView from "./components/GalaxyView";
 import DissectionView from "./components/DissectionView";
@@ -38,23 +39,67 @@ function ErrorScreen({ error }: { error: string }) {
   );
 }
 
-// 先取会话列表：主界面的每个请求都要带会话 ID（激活状态按会话显示），
-// 所以拿到列表之前不渲染主界面，主界面里的会话因此一定有值。
+// 库别名 → 徽标色：纯展示，同一个别名在不同前端上颜色一致，好认。
+function dbColor(alias: string): string {
+  let h = 0;
+  for (let i = 0; i < alias.length; i++) h = (h * 31 + alias.charCodeAt(i)) >>> 0;
+  return `hsl(${h % 360} 60% 45%)`;
+}
+
+// 先定库、再取会话：库选择（URL ?db= > 本地记忆 > 服务端缺省）决定之后所有请求带哪个库。
+// 每个前端连的后端缺省库可能不同（主前端缺省 main，RP 前端缺省 rp），
+// 所以缺省值向服务端要，而不是写死——两边前端缺省看到的和以前一字不差。
 export default function App() {
-  const [sessions, setSessions] = useState<SessionInfo[] | null>(null);
+  const [init, setInit] = useState<{
+    sessions: SessionInfo[];
+    db: string;
+    databases: DatabaseInfo[];
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getSessions().then(setSessions).catch((e) => setError(e.message));
+    api
+      .listDatabases()
+      .then((dbs) => {
+        if (dbs.length === 0) throw new Error("No databases reported by API");
+        const params = new URLSearchParams(window.location.search);
+        const want = params.get("db") || localStorage.getItem("horon.db");
+        const hit = dbs.find((d) => d.alias === want);
+        const initial =
+          hit?.alias ?? dbs.find((d) => d.default)?.alias ?? dbs[0].alias;
+        setDbModule(initial);
+        return api.getSessions().then((sessions) => {
+          if (sessions.length === 0) throw new Error("No sessions reported by API");
+          setInit({ sessions, db: initial, databases: dbs });
+        });
+      })
+      .catch((e) => setError(e.message));
   }, []);
 
   if (error) return <ErrorScreen error={error} />;
-  if (!sessions) return <LoadingScreen />;
-  return <Workspace initialSessions={sessions} />;
+  if (!init) return <LoadingScreen />;
+  return (
+    <Workspace
+      initialSessions={init.sessions}
+      initialDb={init.db}
+      databases={init.databases}
+    />
+  );
 }
 
-function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
+function Workspace({
+  initialSessions,
+  initialDb,
+  databases,
+}: {
+  initialSessions: SessionInfo[];
+  initialDb: string;
+  databases: DatabaseInfo[];
+}) {
   const [mode, setMode] = useState<ViewMode>("galaxy");
+  const [db, setDb] = useState(initialDb);
+  const dbRef = useRef(db);
+  dbRef.current = db;
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [focalId, setFocalId] = useState<number | null>(null);
   const [inspectedConcept, setInspectedConcept] =
@@ -72,19 +117,20 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
 
   const reloadGraph = useCallback(() => {
     const reqId = ++graphRequestId.current;
+    const reqDb = dbRef.current;
     api
       .getGraph(session)
       .then((data) => {
-        if (reqId !== graphRequestId.current) return;
+        if (reqId !== graphRequestId.current || reqDb !== dbRef.current) return;
         setGraphData(data);
         setError(null);
       })
       .catch((e) => {
-        if (reqId !== graphRequestId.current) return;
+        if (reqId !== graphRequestId.current || reqDb !== dbRef.current) return;
         setError(e.message);
       })
       .finally(() => {
-        if (reqId === graphRequestId.current) setLoading(false);
+        if (reqId === graphRequestId.current && reqDb === dbRef.current) setLoading(false);
       });
 
     api
@@ -97,16 +143,17 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
 
   const inspectNode = useCallback((nodeId: number) => {
     const reqId = ++inspectRequestId.current;
+    const reqDb = dbRef.current;
     api
       .getConcept(nodeId, session)
       .then((detail) => {
-        if (reqId !== inspectRequestId.current) return;
+        if (reqId !== inspectRequestId.current || reqDb !== dbRef.current) return;
         setInspectedConcept(detail);
         setSidebarOpen(true);
       })
       .catch((e) => {
         // 单次 inspect 失败不该清空整张图，只是没法打开侧栏；记录即可。
-        if (reqId !== inspectRequestId.current) return;
+        if (reqId !== inspectRequestId.current || reqDb !== dbRef.current) return;
         console.error("Failed to inspect concept", nodeId, e);
       });
   }, [session]);
@@ -119,13 +166,57 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
     inspectNode(nodeId);
   }, [inspectNode]);
 
-  // 刚进入主界面、以及每次切换会话时：按当前会话重新取整张图（顺带刷新待审数量），
+  // 刚进入主界面、以及每次切换会话/库时：按当前会话重新取整张图（顺带刷新待审数量），
   // 侧栏开着的节点也按新会话刷新。
-  // 依赖故意只写 session：侧栏换了别的节点不该触发重新取图。
+  // 依赖故意只写 session 和 db：侧栏换了别的节点不该触发重新取图。
   useEffect(() => {
     reloadGraph();
     if (sidebarOpen && inspectedConcept) inspectNode(inspectedConcept.id);
-  }, [session]);
+  }, [session, db]);
+
+  // 切库：所有状态按新库重来。会话 id 两边库可能撞车（devonly 两边都有），
+  // 所以即使新库第一个会话和旧值相同，也要强制重拉（见下面的手动 reloadGraph）。
+  const handleDbChange = useCallback((next: string) => {
+    if (next === dbRef.current) return;
+    // 立刻废弃尚未完成的旧库请求，避免旧库的结果随后覆盖新库的界面。
+    graphRequestId.current += 1;
+    inspectRequestId.current += 1;
+    setDbModule(next);
+    try {
+      localStorage.setItem("horon.db", next);
+    } catch {
+      // 隐私模式写不进 localStorage：无视，下次回服务端缺省。
+    }
+    const url = new URL(window.location.href);
+    url.searchParams.set("db", next);
+    window.history.replaceState(null, "", url);
+    setDb(next);
+    setGraphData(null);
+    setFocalId(null);
+    setInspectedConcept(null);
+    setSidebarOpen(false);
+    setMode("galaxy");
+    setLoading(true);
+    setError(null);
+    api
+      .getSessions()
+      .then((freshSessions) => {
+        if (dbRef.current !== next) return; // 切库中又切了一次，旧结果丢掉。
+        if (freshSessions.length === 0) {
+          setError("No sessions reported by API");
+          setLoading(false);
+          return;
+        }
+        setSessions(freshSessions);
+        setSession(freshSessions[0].session_id);
+        if (freshSessions[0].session_id === sessionRef.current) reloadGraph();
+      })
+      .catch((e) => {
+        if (dbRef.current !== next) return;
+        setError(e.message);
+        setLoading(false);
+      });
+  }, [reloadGraph]);
 
   const handleNodeClick = useCallback(
     (nodeId: number) => {
@@ -201,6 +292,24 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
           <SearchBar onSelect={handleSearchSelect} />
         </div>
         <div className="topbar-right">
+          {/* 当前库：颜色徽 + 下拉。各库记忆/闸门/会话完全隔离，切库清空重拉。 */}
+          <span
+            className="db-badge"
+            style={{ background: dbColor(db) }}
+            title={`当前数据库：${db}`}
+          />
+          <select
+            className="db-select"
+            title="切换数据库（各库记忆/闸门/会话完全隔离）"
+            value={db}
+            onChange={(e) => handleDbChange(e.target.value)}
+          >
+            {databases.map((d) => (
+              <option key={d.alias} value={d.alias}>
+                {d.alias}
+              </option>
+            ))}
+          </select>
           {/* 获得焦点时刷新列表，让「几分钟前」和最近的会话保持最新 */}
           <select
             className="session-select"
