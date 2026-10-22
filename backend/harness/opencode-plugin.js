@@ -19,8 +19,9 @@
 //   tool.execute.after    -> PostToolUse       (banner appended to the tool output)
 //   event session.idle    -> Stop              (block = send the reason back into the session once)
 //   event session.error   -> Interrupt         (only for MessageAbortedError, i.e. the user pressed stop)
-//   (tool names/args are mapped to Claude Code's -- bash->Bash, filePath->file_path, bluesky_send_post->
-//    mcp__bluesky__send_post -- in Python, so the existing sensors and guards apply unchanged)
+//   (built-in tool names and args reach Horon as opencode has them -- bash, filePath -- so only rules written
+//    for those names apply; MCP tools <server>_<tool> become mcp__<server>__<tool> in Python, the name
+//    Claude Code and dsh use, so rules on an MCP tool apply in every host)
 //   shell.env             -> sets HORON_OPENCODE_SESSION_ID so frontend/cli.py run from the bash tool
 //                            knows which session it belongs to.
 //

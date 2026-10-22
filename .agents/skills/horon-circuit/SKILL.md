@@ -97,13 +97,13 @@ python frontend/cli.py set <传感器名> sensor_hook <event_type> \
   --match-pattern "<正则>" \
   [--tool <工具名>] \
   [--jev "<是非题>"] [--jev-threshold 0.5] \
-  [--adapter claude-code|codex|antigravity|opencode]
+  [--adapter claude-code|codex|antigravity|opencode|dsh]
 ```
 
 匹配分两步：先用正则筛；挂了 `--jev` 的传感器，正则命中后再由 Jev 按意思复筛。重新执行会覆盖原有 Hook。
 
 - `--match-pattern`：必填 Python 正则，按 `re.search(..., re.IGNORECASE)` 匹配：全文任意位置命中即可，不区分大小写。要匹配某个工具的全部调用而不限制参数或结果，传入 `".*"`。
-- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，按工具名精确匹配；消息类事件不能指定。`--tool` 和正则按 Claude Code 的工具名和参数名写（`Bash`、`Write`、`"file_path"`、`mcp__bluesky__send_post`），同一条规则在 opencode 里也生效，不用另写一份。
+- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，消息类事件不能指定。它是正则，与工具名整串匹配、区分大小写：`Bash` 只管 `Bash`，`Bash|bash` 同时管 Claude Code 和 opencode 的 shell。`--tool` 和参数正则按要管的那个宿主自己的工具名和参数名写（Claude Code 是 `Bash`、`"file_path"`；opencode 是 `bash`、`"filePath"`；dsh 是 `pwsh`、`horon` 的 `{"args": [...]}`），并加 `--adapter` 限定宿主。MCP 工具例外：各宿主统一叫 `mcp__<服务器>__<工具>`（如 `mcp__bluesky__send_post`），一条规则所有宿主通用，不加 `--adapter`。
 - `--adapter`：可选，只在该宿主的会话里匹配。省略则所有宿主都匹配；宿主未知的会话（如终端手敲）只匹配省略了它的 Hook。重新绑定时省略 `--adapter` 会恢复为所有宿主。
 - `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 `backend/embedding.py` 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
   - 判定机制：Jev 判定为“是”的概率不低于 `--jev-threshold`（默认 0.5）才点火；调用失败（超时、无 Key 等）时降级按正则结果点火。
@@ -176,12 +176,12 @@ guard 将前置条件绑定到工具规则。匹配调用只有在守卫通电�
 
 ```text
 create_concept <守卫名> --role guard --activation-rule "<前置状态名>" --content "这个前置条件为何决定该调用能否执行，以及适用的调用范围"
-set <守卫名> tool_guard <实际工具名> [--args-pattern "参数匹配正则"] [--adapter claude-code|codex|antigravity|opencode]
+set <守卫名> tool_guard <实际工具名> [--args-pattern "参数匹配正则"] [--adapter claude-code|codex|antigravity|opencode|dsh]
 ```
 
-工具名精确匹配；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
+工具名是正则，整串匹配、区分大小写（同上文 `--tool`）；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
 
-`--tool` 和正则按 Claude Code 的工具名和参数名写（`Bash`、`Write`、`"file_path"`、`mcp__bluesky__send_post`），同一条规则在 opencode 里也生效，不用另写一份。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
+工具名和正则按要管的那个宿主自己的叫法写（各宿主的叫法见第 3 节「配置命令」的 `--tool`），一条守卫只管一个宿主的工具。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
 
 配置后用 `read_concept` 查看守卫的 Tool Guard 和 Circuit，核对匹配范围及当前放行条件。
 

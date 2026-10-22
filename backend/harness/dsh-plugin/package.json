@@ -1,0 +1,8 @@
+{
+  "name": "dsh-horon",
+  "version": "0.1.0",
+  "description": "Horon long-term memory CLI as a DeepSeek Harness tool",
+  "type": "module",
+  "main": "index.js",
+  "files": ["index.js"]
+}

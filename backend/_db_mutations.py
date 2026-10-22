@@ -3,12 +3,22 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from typing import Any
 
 from . import tag_sandbox
 from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
 from .models import MutationResult
+
+
+def _check_tool_regex(tool: str) -> None:
+    """工具名规则是正则，按整串匹配（re.fullmatch）。写错的正则当场报错，不等到匹配时静默失效。"""
+    try:
+        re.compile(tool)
+    except re.error as e:
+        raise ValueError(f"tool 正则写错了：{tool!r}（{e}）") from None
+
 
 _logger = logging.getLogger(__name__)
 
@@ -199,10 +209,12 @@ class MutationMixin:
         if not match_pattern or not match_pattern.strip():
             raise ValueError("match_pattern cannot be empty.")
 
-        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode"):
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode", "dsh"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_tool = tool.strip() if (tool and event_type in ("tool_call", "tool_result")) else None
+        if clean_tool:
+            _check_tool_regex(clean_tool)
 
         jev_question = (jev_question or "").strip() or None
         if jev_question is None and jev_threshold is not None:
@@ -268,8 +280,9 @@ class MutationMixin:
 
         if not tool or not tool.strip():
             raise ValueError("tool name cannot be empty.")
+        _check_tool_regex(tool.strip())
 
-        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode"):
+        if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode", "dsh"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_args = args_pattern.strip() if args_pattern and args_pattern.strip() else None

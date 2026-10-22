@@ -48,9 +48,12 @@ WHEN_TO_READ_SIMILAR_THRESHOLD = 0.75
 # 读取记录、审计日志、激活状态显示、compile、inbox 都按这个会话算。
 # 嵌套启动（在一个宿主里启动另一个宿主）时可能同时存在多个变量，暂不处理。
 _ADAPTER_SESSION_VARS = {
+    # dsh 的变量由 Horon 的 dsh 插件只设给它自己起的 cli.py 进程（horon 工具），不进任何 shell，
+    # 所以它在的时候一定是最内层，放第一位（从 opencode 的 bash 里起的 dsh 还会带着 opencode 的变量）。
+    "HORON_DSH_SESSION_ID": "dsh",
     # opencode 的变量由 Horon 插件经 shell.env 只注入到 opencode 的 bash 工具里，
     # 而那些 bash 会继承启动 opencode 的父进程环境（比如从 Claude Code 里起的 opencode），
-    # 所以它放第一位：同时存在时，最内层的宿主是 opencode。
+    # 所以它排在其余宿主前面：同时存在时，最内层的宿主是 opencode。
     "HORON_OPENCODE_SESSION_ID": "opencode",
     "CLAUDE_CODE_SESSION_ID": "claude-code",
     "CODEX_THREAD_ID": "codex",
@@ -671,8 +674,8 @@ def _build_parser():
     p.add_argument("--match-pattern", "--match_pattern", dest="match_pattern", default="",
                    help="Regex or substring match pattern for sensor_hook")
     p.add_argument("--tool", default=None,
-                   help="Tool name for sensor_hook (tool_call/tool_result)")
-    p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity", "opencode"], default=None,
+                   help="Tool name regex for sensor_hook (tool_call/tool_result), full match, case-sensitive, e.g. Bash|bash")
+    p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity", "opencode", "dsh"], default=None,
                    help="Limit sensor_hook/tool_guard to this host; omitted means all hosts")
     p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
                    help="Args regex pattern for tool_guard")

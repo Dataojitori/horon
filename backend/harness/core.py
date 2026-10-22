@@ -93,6 +93,19 @@ def end_turn(db: HoronDB) -> None:
     db.turn_end()
 
 
+def _tool_matches(rule_tool: str, tool_name: str | None) -> bool:
+    """传感器或守卫上写的工具名规则是不是管这个工具：规则是正则，整串匹配、区分大小写。
+
+    纯字母数字下划线的旧规则（Bash、mcp__bluesky__send_post）等于精确比较；
+    要跨宿主就在规则里写明，如 Bash|bash。写坏的正则（绑定时已拦，库里旧数据才可能有）不匹配任何工具。
+    """
+    try:
+        return re.fullmatch(rule_tool, tool_name or "") is not None
+    except re.error as e:
+        logger.debug(f"Regex error in tool rule {rule_tool!r}: {e}")
+        return False
+
+
 def sense(
     db: HoronDB,
     event_type: str,
@@ -129,7 +142,7 @@ def sense(
     activated: list[int] = []
     to_ask: list[Any] = []
     for r in rows:
-        if r["tool"] and r["tool"] != tool_name:
+        if r["tool"] and not _tool_matches(r["tool"], tool_name):
             continue
         try:
             hit = re.search(r["match_pattern"], text, re.IGNORECASE)
@@ -291,11 +304,11 @@ def guard(
         "SELECT tg.id AS guard_rule_id, tg.guard_concept_id, tg.tool, tg.args_pattern, c.name "
         "FROM tool_guards tg "
         "JOIN concepts c ON tg.guard_concept_id = c.id "
-        "WHERE tg.tool = ? "
-        "AND (tg.adapter IS NULL OR tg.adapter = "
+        "WHERE (tg.adapter IS NULL OR tg.adapter = "
         "(SELECT adapter FROM sessions WHERE session_id = ?))"
     )
-    guards = db.conn.execute(query, (tool_name, db.session_id)).fetchall()
+    guards = [g for g in db.conn.execute(query, (db.session_id,)).fetchall()
+              if _tool_matches(g["tool"], tool_name)]
     states = load_active_states(db.conn, db.session_id)
 
     for g in guards:
