@@ -20,6 +20,7 @@ _PRUNING_THRESHOLD = 0.05
 _AUTO_TRANSITION_STEP = 0.8
 _PLACE_TOP_GAP = 1.0     # place 放到第 1 名时，比原第 1 名高出的权重
 _PLACE_BELOW_LAST = 0.9  # place 放到所有边之后时，取最后一名权重的这个倍数
+_SUGGESTION_LIMIT = 8     # 读节点和 place/cut 后展示的推荐条数
 _TIE_EPSILON = 1e-9      # 两条边权重差不超过它就算等权（批量读取平摊出的份量会精确相等）
 
 
@@ -624,7 +625,7 @@ class QueryMixin:
     # ── Attention routing ────────────────────────────────────────────────────
 
     def _get_suggested_transitions(
-        self, concept_id: int, limit: int = 10,
+        self, concept_id: int, limit: int = _SUGGESTION_LIMIT,
     ) -> list[TransitionSuggestion]:
         """按转移权重取推荐跳转；当前节点是 plain 时，顺带给其中的 plain 推荐算书腰相似度和是否同 Tag。
 
@@ -824,34 +825,34 @@ class QueryMixin:
         return None
 
     def _format_suggestion_list(self, src_id: int) -> list[str]:
-        """把 src 当前的推荐前 10 格式化成多行文本，给 place / cut 的回显用。"""
+        """把 src 当前的推荐前 _SUGGESTION_LIMIT 条格式化成多行文本，给 place / cut 的回显用。"""
         name = self._resolve_concept_name(src_id)
         rows = self.conn.execute(
             "SELECT ct.to_concept_id, c.name, ct.weight FROM concept_transitions ct "
             "JOIN concepts c ON ct.to_concept_id = c.id "
             "WHERE ct.from_concept_id = ? "
-            "ORDER BY ct.weight DESC, ct.to_concept_id ASC LIMIT 10",
-            (src_id,),
+            "ORDER BY ct.weight DESC, ct.to_concept_id ASC LIMIT ?",
+            (src_id, _SUGGESTION_LIMIT),
         ).fetchall()
         lines = [f"Suggestions from [{src_id}] {name} now:"]
         if not rows:
             lines.append("  (none)")
         for idx, r in enumerate(rows, 1):
-            lines.append(f"  #{idx} [{r['to_concept_id']}] {r['name']} (w={r['weight']:.2f})")
+            lines.append(f"  #{idx} [{r['to_concept_id']}] {r['name']}")
         return lines
 
     @transactional
     def place_transition(self, from_concept, to_concept, rank: int) -> MutationResult:
         """把 from → to 这条推荐边放到 from 的推荐列表第 rank 位（1 = 最前）。
 
-        输入：起点、目标（名称/别名/ID）、目标名次（正整数，可以大于 10，表示放到前 10 之外）。
+        输入：起点、目标（名称/别名/ID）、目标名次（正整数，可以大于 _SUGGESTION_LIMIT，表示放到展示范围之外）。
         行为：取 from 除这条边以外的所有出边按权重降序排好，给这条边算一个刚好落在第 rank 位的权重：
           - rank = 1：比当前第 1 名高 _PLACE_TOP_GAP；
           - 落在两条边之间：取两者权重的中点；两者等权时，把插入点以上与之等权的边抬高一点腾出空当
             （不越过更靠前的边，其余顺序不变）；
           - rank 超过其余边的条数：取最后一名权重的 _PLACE_BELOW_LAST 倍（没有其余边时给 _PLACE_TOP_GAP）。
           边不存在就新建。之后的自动共读与衰减照常作用在这条边上，名次会随之变化。
-        输出：MutationResult，message 含这条边的 旧权重 -> 新权重、实际名次，以及 from 当前的推荐前 10。
+        输出：MutationResult，message 含这条边的实际名次，以及 from 当前展示的推荐列表。
         """
         if rank < 1:
             raise ValueError(f"Rank must be a positive integer, got {rank}.")
@@ -862,13 +863,6 @@ class QueryMixin:
             raise ValueError(
                 f"Cannot place a transition from a concept to itself: '{from_name}' (id={from_id})."
             )
-
-        row = self.conn.execute(
-            "SELECT weight FROM concept_transitions "
-            "WHERE from_concept_id = ? AND to_concept_id = ?",
-            (from_id, to_id),
-        ).fetchone()
-        w0 = row["weight"] if row else None
 
         others = [
             (r["to_concept_id"], r["weight"]) for r in self.conn.execute(
@@ -917,10 +911,9 @@ class QueryMixin:
 
         to_name = self._resolve_concept_name(to_id)
         actual = self._get_transition_rank(from_id, to_id)
-        old_str = f"{w0:.2f}" if w0 is not None else "new edge"
         lines = [
             f"Success. Placed [{from_id}] {from_name} -> [{to_id}] {to_name}: "
-            f"{old_str} -> {new_weight:.2f}, requested #{rank}, now #{actual}."
+            f"requested #{rank}, now #{actual}."
         ]
         expected = min(rank, len(others) + 1)
         if actual != expected:
@@ -947,7 +940,7 @@ class QueryMixin:
 
         输入：起点、一个或多个目标（名称/别名/ID）。
         行为：边存在就删除；不存在的列出来，不报错。以后真被一起读，这条边会从 0 重新长。
-        输出：MutationResult，message 含每条边的处理结果，以及受影响起点当前的推荐前 10。
+        输出：MutationResult，message 含每条边的处理结果，以及受影响起点当前展示的推荐列表。
         """
         from_id = self._resolve_id(from_concept)
         from_name = self._resolve_concept_name(from_id)
@@ -984,7 +977,7 @@ class QueryMixin:
                 "WHERE from_concept_id = ? AND to_concept_id = ?",
                 (src_id, dst_id),
             )
-            lines.append(f"{label}: {row['weight']:.2f} -> cut")
+            lines.append(f"{label}: cut")
             if src_id not in sources:
                 sources.append(src_id)
 

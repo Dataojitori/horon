@@ -18,6 +18,7 @@ from typing import Any
 from backend.db import HoronDB
 from backend.embedding import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
 from backend.evaluator import load_active_states
+from backend.integrity import check_at_session_start
 
 logger = logging.getLogger("horon.harness")
 
@@ -63,7 +64,8 @@ def sync_session(db: HoronDB, adapter: str | None = None, *, reset: bool = False
     供网页显示，也供 Tag 插件限制哪些宿主可以修改节点；
     reset=True 表示宿主发生了上下文压缩或清空（session_id 不变，但模型上下文已丢失），
     需要清空本会话的临时状态并重新返回提示。
-    行为：首次见到的会话 → 登记并清空它的临时状态，返回就绪提示；
+    行为：首次见到的会话 → 登记并清空它的临时状态，跑一次数据库完整性检查
+      （backend.integrity.check_at_session_start：缺向量后台补，电路组合违规附在提示后），返回就绪提示；
       reset=True 的会话 → 清空它的临时状态，返回上下文压缩重置提示；
       其余已登记的会话 → 只更新最后活跃时间。
       （不需要重算：逻辑节点和守卫不存状态，每次读取都按当前输入现算。）
@@ -79,7 +81,9 @@ def sync_session(db: HoronDB, adapter: str | None = None, *, reset: bool = False
         )
     if not row:
         db.init_session(adapter)
-        return f"Horon 系统已初始化就绪（Session: `{db.session_id}`）。"
+        ready = f"Horon 系统已初始化就绪（Session: `{db.session_id}`）。"
+        problems = check_at_session_start(db)
+        return f"{ready}\n- {problems}" if problems else ready
     db.touch_session(adapter)
     return None
 
@@ -167,7 +171,7 @@ def sense(
                 f"Jev 调用失败：{e}\n"
                 "断网或超时就检查网络；没有 key、HTTP 401/402 就检查 .env 里的 OPENROUTER_API_KEY 和 OpenRouter 余额；"
                 "HTTP 404 No endpoints found 多半是这个版本被新版接替了，去 openrouter.ai/perplexity 看有没有更新的 decider，"
-                "有就改 backend/embedding.py 的 JEV_MODEL，再跑 audit --scope 验证（模型详情页显示在线不可信）。\n"
+                "有就改 backend/embedding.py 的 JEV_MODEL，再跑 audit --concept 验证（模型详情页显示在线不可信）。\n"
                 f"这次以下传感器没经过 Jev，只按正则点火：{'、'.join(r['name'] for r in to_ask)}")
         else:
             for r in to_ask:

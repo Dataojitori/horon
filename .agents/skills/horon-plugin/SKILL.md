@@ -72,7 +72,7 @@ def on_mutation(ctx):
     pass
 
 def audit_cluster(ctx):
-    """当运行 CLI `audit <tag>` 或 `audit --all` 时被显式调用。
+    """当运行 CLI `audit <tag>` 或 `audit` 时被显式调用。
     遍历 ctx.cluster.concepts，批量检视存量。
     警告：ctx.warn("警告消息")
     """
@@ -154,6 +154,6 @@ def audit_cluster(ctx):
 # Part 4 · 插件生命周期与调试
 
 1. **挂载标签**：`python frontend/cli.py add <概念名> tag <标签名>`
-2. **离线集群审计**：`python frontend/cli.py audit <标签名>` 或 `python frontend/cli.py audit --all`
+2. **离线集群审计**：`python frontend/cli.py audit <标签名>` 或 `python frontend/cli.py audit`
 3. **热重载 (mtime)**：修改 `backend/tag_plugins/<tag_name>.py` 后无需重启服务，引擎会在下一个事务开始前自动重新加载。
 4. **改名与删除联动**：对 tag 源概念执行 `set name` 或 `delete` 时，系统会自动对底层 `.py` 文件进行物理 rename 或 unlink。
