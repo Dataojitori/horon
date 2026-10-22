@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from backend._db_common import _now
+from backend.name_suggest import suggest_names
 from backend.embedding import (
     DECISIONS_ENDPOINT, EMBEDDING_MODEL, JEV_MODEL, blob_to_embedding, embed_texts,
     embedding_to_blob, openrouter_post,
@@ -47,9 +48,9 @@ PROMPT = {
 }
 
 # Shown under every report. Like PROMPT, swap it together with the language.
-REPORT_FOOTER = """每行问 Jev 留在本节点还是移走；移走概率 > 0.5 的行加起来满 {min_bytes} B（UTF-8）判待检查。
+REPORT_FOOTER = """跑题：每行问 Jev 留在本节点还是移走；移走概率 > 0.5 的行加起来满 {min_bytes} B（UTF-8）判跑题。
 这是节点健康度的读数，不是修改清单：不要照着标出的行挪，也不要读一遍就说“不用改”。
-待检查说明名字和内容有一边出了问题。Jev 只看得到名字和正文，相当于一个没有上下文的陌生读者。读完整个节点，逐一排查：
+跑题说明名字和内容有一边出了问题。Jev 只看得到名字和正文，相当于一个没有上下文的陌生读者。读完整个节点，逐一排查：
 1. 名字太窄、太空，装不下正文 → 改名字。
 2. 缺一句交代，陌生读者接不上（别名、身份、前后关系）→ 补一句。
 3. 装了两件事 → 拆开。去处先看上面列出的相近节点，再用 search_semantic 搜，都没有才新建。
@@ -58,15 +59,18 @@ REPORT_FOOTER = """每行问 Jev 留在本节点还是移走；移走概率 > 0.
 改完重跑：改名后反而更差，问题在内容；改名后还要查别处对旧名字的引用。
 认为某一行 Jev 判错了，要说得出它为什么读不懂这一行；同一种误判反复出现，就去改审核规则。"""
 
-# Header of the audit --bloat listing. Like PROMPT, swap it together with the language.
-BLOAT_COUNT = "[臃肿节点] {count} 个（正文范围审计健康、正文满 {min_bytes} B）"
-BLOAT_ROW = "  [{id}] {name}  {size} B（读 {reads} 次）"
-BLOAT_HEADER = BLOAT_COUNT + """，按大小排列：
-{rows}
-这些节点该反思了：如何避开自己原有的偏见，从外界观察到的信息中提炼出知见。"""
-# Default size for audit --bloat. Nodes this large are several times the scope audit's
-# MIN_BYTES; adjust once there are real readings of which large nodes needed work.
-BLOAT_BYTES = 4000
+# Size line, the second half of the node health reading. Set on 2026-10-21 after
+# compressing the four heaviest relationship nodes by hand: three got under 8192 B without
+# deleting anything that still changed behaviour, one (a boot node) did not.
+# audit / audit <tag> list every node over it, and audit --concept reads it as 超长,
+# until the content is brought under.
+OVERSIZE_BYTES = 8192
+# Like PROMPT, swap these together with the language.
+OVERSIZE_ROW = "[{id}] {name} {size} B（读 {reads} 次）"
+OVERSIZE_TEXT = "[超长节点] {count} 个节点正文满 {limit} B（UTF-8，只算非空行），最大的在前：{rows}\n{advice}"
+OVERSIZE_ADVICE = ("超长：正文满 {limit} B，压到线下才不再报。办法是想清楚这个节点要改变哪个时刻的做法，"
+                   "再去重、删掉不再改变做法的内容、拆开装了两件事的节点；"
+                   "把正文挪进别的节点或档案好让报警消失，不算压下去。")
 
 
 def load_name_embeddings(db) -> tuple[list[int], list[str], np.ndarray]:
@@ -169,34 +173,45 @@ def jev_line_verdicts(name: str, content: str, other_names: list[str],
 
 
 def format_report(results: list[dict[str, Any]], preview: int = 40) -> str:
-    """Render audit_concepts results as the text printed by audit --scope.
+    """Render audit_concepts results as the text printed by audit --concept.
 
     Input: the results, and how many characters of each flagged line to show.
-    Output: one block per node (verdict; for audited nodes the moved UTF-8 bytes and their
-    share of the content, each line Jev would move, and the similar nodes when flagged),
-    followed by REPORT_FOOTER.
+    Output: one block per node. The verdict is 健康 only when the node is neither 跑题
+    (Jev's moved lines reach MIN_BYTES) nor 超长 (content reaches OVERSIZE_BYTES); otherwise
+    it names whichever of the two apply. Under it: the content size, and for nodes sent to
+    Jev the moved UTF-8 bytes and their share, each line Jev would move, and the similar
+    nodes when 跑题. Followed by REPORT_FOOTER, plus OVERSIZE_ADVICE when any node is 超长.
     """
     out: list[str] = []
+    any_oversize = False
     for index, result in enumerate(results):
         if index:
             out.append("")
-        status = "待检查" if result["needs_review"] else "健康"
-        out.append(f"[{status}] [{result['id']}] {result['name']}")
+        oversize = result["total_bytes"] >= OVERSIZE_BYTES
+        any_oversize |= oversize
+        problems = [label for label, hit in (("跑题", result["needs_review"]), ("超长", oversize)) if hit]
+        out.append(f"[{'、'.join(problems) or '健康'}] [{result['id']}] {result['name']}")
+        size = f"正文 {result['total_bytes']} B（满 {OVERSIZE_BYTES} B 判超长）"
         if result.get("unchanged"):
-            out.append("  名字和正文自上次判为健康后没改过，不送 Jev")
+            out.append(f"  {size}；名字和正文自上次判为没跑题后没改过，不送 Jev")
         elif result["skipped"]:
-            out.append(f"  正文 {result['total_bytes']} B，不到 {MIN_BYTES} B，不送 Jev，判为健康")
+            out.append(f"  {size}；不到 {MIN_BYTES} B，不送 Jev，判为没跑题")
         else:
             share = result["moved_bytes"] / result["total_bytes"]
-            out.append(f"  该移走的行共 {result['moved_bytes']} B，占正文 {share:.0%}"
-                       f"（{result['total_bytes']} B；满 {MIN_BYTES} B 判待检查）")
+            out.append(f"  {size}；该移走的行共 {result['moved_bytes']} B，占正文 {share:.0%}"
+                       f"（满 {MIN_BYTES} B 判跑题）")
             for line in result["lines"]:
                 if line["move"] > MOVE_THRESHOLD:
                     out.append(f"  → L{line['n']} 移走={line['move']:.2f} | {line['text'][:preview]}")
             if result["needs_review"] and result["others"]:
                 out.append("  给 Jev 对照的相近节点：" + "；".join(f"[{i}] {n}" for i, n in result["others"]))
+        if result.get("names"):
+            out.append("  名字检查（正文改过，回头看名字还对不对得上；对不上就 set <ID> name 当场改）：")
+            out.extend("    " + line for line in result["names"].splitlines())
     out.append("")
     out.append(REPORT_FOOTER.format(min_bytes=MIN_BYTES))
+    if any_oversize:
+        out.append(OVERSIZE_ADVICE.format(limit=OVERSIZE_BYTES))
     return "\n".join(out)
 
 
@@ -218,7 +233,8 @@ def audit_concepts(db, concepts: list[str]) -> list[dict[str, Any]]:
     Input: an open HoronDB and node names, aliases or ids (duplicates are audited once).
     For each node, in the order given:
     - name and content unchanged since its last pass (stored fingerprint matches):
-      not sent to Jev; result {"id", "name", "unchanged": True, "needs_review": False};
+      not sent to Jev; result {"id", "name", "unchanged": True, "needs_review": False,
+      "total_bytes"};
     - non-empty lines under MIN_BYTES bytes: passed without Jev ("skipped": True);
     - otherwise Jev judges every line, shown the NEIGHBOURS most similar node names (name
       embeddings are loaded on the first such node); the node needs review when the lines
@@ -226,6 +242,10 @@ def audit_concepts(db, concepts: list[str]) -> list[dict[str, Any]]:
     Audited results hold {"id", "name", "total_bytes", "skipped", "others", "lines",
     "moved_bytes", "needs_review"}; "others" is (id, name) of the similar nodes, so the
     report can show where misplaced lines might belong; "lines" is jev_line_verdicts().
+    Every node that is not "unchanged" also gets "names": the suggest_name check of its
+    current name (backend.name_suggest.suggest_names, one candidate from gpt-6-luna), since
+    a rewritten body is when the name most often stops fitting. It is shown in the report
+    but does not affect the verdict: the candidates are only a reference.
     Side effect: every node that passes has its fingerprint stored.
     Output: one result per node, ready for format_report.
     """
@@ -239,7 +259,8 @@ def audit_concepts(db, concepts: list[str]) -> list[dict[str, Any]]:
         content = n["content"] or ""
         fingerprint = audit_fingerprint(n["name"], content)
         if n["scope_audit_fingerprint"] == fingerprint:
-            results.append({"id": n["id"], "name": n["name"], "unchanged": True, "needs_review": False})
+            results.append({"id": n["id"], "name": n["name"], "unchanged": True, "needs_review": False,
+                            "total_bytes": audit_content_bytes(content)})
             continue
 
         total = audit_content_bytes(content)
@@ -253,39 +274,38 @@ def audit_concepts(db, concepts: list[str]) -> list[dict[str, Any]]:
             moved = sum(len(line["text"].encode("utf-8")) for line in lines if line["move"] > MOVE_THRESHOLD)
             result.update(others=others, lines=lines, moved_bytes=moved, needs_review=moved >= MIN_BYTES)
 
+        result["names"] = suggest_names(db, n["id"])
         if not result["needs_review"]:
             record_pass(db, n["id"], fingerprint)
         results.append(result)
     return results
 
 
-def list_bloated(db, min_bytes: int = BLOAT_BYTES) -> str:
-    """List nodes that passed the content-scope audit but have grown large, largest first.
+def oversize_warning(db, tag_expr: str | None = None, limit: int = OVERSIZE_BYTES) -> str | None:
+    """List every node whose content reaches the size line, largest first.
 
-    Input: an open HoronDB and the size threshold in UTF-8 bytes (counted like the audit:
-    non-empty lines only, see audit_content_bytes).
-    A node counts as passed when the fingerprint of its current name and content equals
-    concepts.scope_audit_fingerprint, i.e. it passed and has not been edited since.
-    Read-only: nothing is recorded.
-    Output: BLOAT_HEADER with one line per node (id, name, bytes, read_concept count),
-    or just the BLOAT_COUNT line (count 0) when no passed node reaches min_bytes.
+    Input: an open HoronDB; tag_expr limits the check to that tag's members (None = all
+    nodes); limit is the line in UTF-8 bytes, counted like the scope audit (non-empty lines
+    only, see audit_content_bytes).
+    The Jev reading is ignored: a node that is not 跑题 but over the line is still listed.
+    Read-only.
+    Output: OVERSIZE_TEXT naming each node with its size and read_concept count, followed
+    by OVERSIZE_ADVICE, or None when no node reaches the line.
     """
     read_counts = db.get_read_counts()
-    stored = dict(db.conn.execute("SELECT id, scope_audit_fingerprint FROM concepts").fetchall())
-    bloated = []
-    for node in db.get_all_concepts_overview():
-        if stored.get(node["id"]) != audit_fingerprint(node["name"], node["content"]):
-            continue
+    over = []
+    for node in db.get_all_concepts_overview(tag_expr=tag_expr):
         size = audit_content_bytes(node["content"])
-        if size >= min_bytes:
-            bloated.append((size, node))
-    if not bloated:
-        return BLOAT_COUNT.format(count=0, min_bytes=min_bytes)
-    bloated.sort(key=lambda pair: pair[0], reverse=True)
-    rows = "\n".join(BLOAT_ROW.format(id=n["id"], name=n["name"], size=size,
-                                      reads=read_counts.get(n["id"], 0))
-                     for size, n in bloated)
-    return BLOAT_HEADER.format(count=len(bloated), min_bytes=min_bytes, rows=rows)
+        if size >= limit:
+            over.append((size, node))
+    if not over:
+        return None
+    over.sort(key=lambda pair: pair[0], reverse=True)
+    rows = "、".join(OVERSIZE_ROW.format(id=n["id"], name=n["name"], size=size,
+                                        reads=read_counts.get(n["id"], 0))
+                    for size, n in over)
+    return OVERSIZE_TEXT.format(count=len(over), limit=limit, rows=rows,
+                                advice=OVERSIZE_ADVICE.format(limit=limit))
 
 
 def refresh_audit_coverage(db, tag_expr: str | None = None, preview: int = 10) -> str | None:
@@ -316,8 +336,8 @@ def refresh_audit_coverage(db, tag_expr: str | None = None, preview: int = 10) -
     pending.sort(key=lambda n: read_counts.get(n["id"], 0), reverse=True)
     shown = "、".join(f"[{n['id']}] {n['name']}（读 {read_counts.get(n['id'], 0)} 次）"
                      for n in pending[:preview])
-    return (f"[正文范围审计] 这是节点的健康度检查：名字是找回节点的唯一入口，正文长出了名字覆盖不到的内容，"
-            f"那部分就按名字找不回来，读者看到名字产生的预期也会落空。audit --scope 让 Jev 逐行判断正文的每一行"
-            f"是否属于节点的名字，给出健康读数。目前有 {len(pending)} 个节点没有当前有效的健康读数"
-            f"（从没查过、查出不健康，或查过后正文又改了），其中被 read_concept 读得最多的 "
+    return (f"[待查跑题] 名字是找回节点的唯一入口，正文长出了名字覆盖不到的内容，"
+            f"那部分就按名字找不回来，读者看到名字产生的预期也会落空。audit --concept 让 Jev 逐行判断正文的每一行"
+            f"是否属于节点的名字。目前有 {len(pending)} 个节点没有当前有效的读数"
+            f"（从没查过、查出跑题，或查过后正文又改了），其中被 read_concept 读得最多的 "
             f"{min(preview, len(pending))} 个：{shown}")

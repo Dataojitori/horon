@@ -104,6 +104,7 @@ if __name__ == "__main__":
     from backend.db import HoronDB
 
     load_dotenv(_PROJECT_ROOT / ".env")
+    (_PROJECT_ROOT / ".horon-local").mkdir(exist_ok=True)
     logging.basicConfig(filename=_PROJECT_ROOT / ".horon-local" / "integrity.log", level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     written, failed = repair_embeddings(HoronDB(session_id="integrity-repair"))

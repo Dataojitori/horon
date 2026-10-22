@@ -30,7 +30,7 @@ from backend.text_patch import (
     try_normalized_patch,
 )
 from backend.content_scope_audit import (
-    BLOAT_BYTES, audit_concepts, format_report, list_bloated, refresh_audit_coverage,
+    OVERSIZE_BYTES, audit_concepts, format_report, oversize_warning, refresh_audit_coverage,
 )
 
 load_dotenv(Path(__file__).parent.parent / ".env")
@@ -245,9 +245,9 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
         # 所以这里不要过滤列表，不想重复展示的用 listed_above 缩成一行
         for rank, s in enumerate(result.suggested_next, 1):
             if s.concept_id in listed_above:
-                block.append(f"  #{rank} [{s.concept_id}] (listed above, w={s.weight:.2f})")
+                block.append(f"  #{rank} [{s.concept_id}] (listed above)")
                 continue
-            block.append(f"  #{rank} [{s.concept_id}] {s.concept_name} (w={s.weight:.2f})")
+            block.append(f"  #{rank} [{s.concept_id}] {s.concept_name}")
             if s.when_to_read:
                 block.append(f"    ↳ When: {s.when_to_read}")
         footer_blocks.append(block)
@@ -620,16 +620,15 @@ def _build_parser():
     # list_tags
     sub.add_parser("list_tags", allow_abbrev=False)
 
-    # audit (tag cluster lints, database integrity, or paid Jev content-scope review)
+    # audit: the argument only picks the scope; what runs is fixed per scope
     p = sub.add_parser("audit", allow_abbrev=False,
-                       help="Run diagnostic audits on tag clusters, database integrity, or node content scope.")
-    p.add_argument("tag", nargs="?", default=None, help="Tag name for tag cluster audit")
-    p.add_argument("--all", action="store_true", help="Run all audits (all tag clusters + database integrity)")
-    p.add_argument("--db", action="store_true", help="Run database system integrity audit (e.g. missing embeddings)")
-    p.add_argument("--scope", nargs="+", metavar="CONCEPT", default=None,
-                   help="Ask Jev (OpenRouter, paid), line by line, whether each line of these concepts' content belongs under the concept's name")
-    p.add_argument("--bloat", nargs="?", type=int, const=BLOAT_BYTES, default=None, metavar="BYTES",
-                   help=f"List concepts that passed the --scope audit (unchanged since) but whose content is at least BYTES UTF-8 bytes (default {BLOAT_BYTES}), largest first")
+                       help="audit = whole graph, audit <tag> = one tag's members: plugin audits plus a node "
+                            "health summary (nodes not yet read for drifting off-topic, nodes over the size line). "
+                            "audit --concept <concept...> = full health reading of those nodes.")
+    p.add_argument("tag", nargs="?", default=None, help="Limit the audit to this tag's members")
+    p.add_argument("--concept", nargs="+", metavar="CONCEPT", default=None,
+                   help=f"Health reading of these nodes: off-topic (Jev, OpenRouter, paid, asks line by line "
+                        f"whether each line belongs under the name) and oversize (content >= {OVERSIZE_BYTES} B)")
 
     # search_keyword
     p = sub.add_parser("search_keyword", allow_abbrev=False)
@@ -776,7 +775,6 @@ def _build_parser():
     p = sub.add_parser("suggest_name", allow_abbrev=False,
         help="Ask gpt-6-luna to check a concept's name or suggest better names based on its type (plain/circuit/tag) and content. Read-only.")
     p.add_argument("concept", help="Concept name, alias or ID")
-    p.add_argument("-n", type=int, default=3, help="How many candidates (default: 3)")
 
     # login — 会话开场：boot 节点 + recent（说明书只给路径）
     sub.add_parser("login", allow_abbrev=False,
@@ -846,42 +844,17 @@ def _dispatch(args, db):
 
     elif args.command == "suggest_name":
         from backend.name_suggest import suggest_names
-        return RawOutput(suggest_names(db, args.concept, args.n))
+        return RawOutput(suggest_names(db, args.concept))
 
     elif args.command == "audit":
-        if args.bloat is not None:
-            if args.scope or args.tag or args.all or args.db:
-                raise ValueError("--bloat cannot be combined with other audit targets. Run 'audit --bloat [BYTES]' on its own.")
-            return RawOutput(list_bloated(db, args.bloat))
-        if args.scope and (args.tag or args.all or args.db):
-            raise ValueError(
-                "--scope cannot be combined with a tag name, --all or --db. "
-                "Run 'audit --scope <concept> ...' on its own."
-            )
-        if args.scope:
-            return RawOutput(format_report(audit_concepts(db, args.scope)))
-
-        if args.tag and (args.all or args.db):
-            raise ValueError(
-                "Cannot combine a specific tag name with --all or --db. "
-                "Use 'audit <tag>' for a tag cluster audit, 'audit --db' for database integrity, "
-                "or 'audit --all' to run all checks."
-            )
-        if args.all:
-            report = f"{db.audit_clusters_report()}\n\n{db.audit_db_integrity()}"
-            reminder = refresh_audit_coverage(db)
-        elif args.db:
-            return RawOutput(db.audit_db_integrity())
-        elif args.tag:
-            report = db.audit_clusters_report(args.tag)
-            reminder = refresh_audit_coverage(db, tag_expr=args.tag)
-        else:
-            raise ValueError(
-                "Specify an audit target: a tag name (e.g., 'audit plan'), "
-                "'--db' (database integrity), '--all' (all tag clusters + database integrity), "
-                "or '--scope <concept> ...' (Jev content-scope review)."
-            )
-        return RawOutput(f"{report}\n\n{reminder}" if reminder else report)
+        if args.concept:
+            if args.tag:
+                raise ValueError("--concept cannot be combined with a tag name. Run 'audit --concept <concept> ...' on its own.")
+            return RawOutput(format_report(audit_concepts(db, args.concept)))
+        parts = [db.audit_clusters_report(args.tag),
+                 refresh_audit_coverage(db, tag_expr=args.tag),
+                 oversize_warning(db, tag_expr=args.tag)]
+        return RawOutput("\n\n".join(filter(None, parts)))
 
     elif args.command == "search_keyword":
         results = db.search_concepts(args.query, tag_expr=args.tag, limit=args.limit)

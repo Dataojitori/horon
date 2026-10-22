@@ -10,7 +10,6 @@ import json
 import os
 import urllib.request
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 
 MODEL = "gpt-6-luna"
 # 有 OPENCODE_GO_API_KEY 走 OpenCode Go；没有就用 OPENROUTER_API_KEY 走 OpenRouter 上的同一个模型
@@ -165,12 +164,12 @@ def ask_name(prompt: str) -> str:
     return lines[-1] if lines else ""
 
 
-def suggest_names(db, concept, n: int = 3) -> str:
-    """Look up `concept` in `db`, ask for `n` candidate names in parallel, and format for CLI.
+def suggest_names(db, concept) -> str:
+    """Look up `concept` in `db`, ask for one candidate name, and format for CLI.
 
-    Input: open HoronDB `db`, concept name/alias/ID `concept`, and `n` = how many candidates.
-    Output: the current name, detected node type, and one numbered candidate per line
-    (marking candidates that keep the current name).
+    Input: open HoronDB `db`, concept name/alias/ID `concept`.
+    Output: the current name, detected node type, and the single candidate
+    (marked when it keeps the current name).
     """
     cid = db._resolve_id(concept)
     node = db._make_concept_proxy(cid)
@@ -188,19 +187,14 @@ def suggest_names(db, concept, n: int = 3) -> str:
         when_to_read=node.when_to_read,
     )
 
-    def one(_):
-        try:
-            s = ask_name(prompt)
-            return f"{s}（维持现名）" if s == node.name else s
-        except Exception as e:
-            return f"[失败] {e!r}"
-
-    with ThreadPoolExecutor(n) as pool:
-        names = list(pool.map(one, range(n)))
-    rows = "\n".join(f"  {i}. {s}" for i, s in enumerate(names, 1))
+    try:
+        s = ask_name(prompt)
+        candidate = f"{s}（维持现名）" if s == node.name else s
+    except Exception as e:
+        candidate = f"[失败] {e!r}"
     return (
         f"现名：{node.name}\n"
         f"类型：{type_label}\n"
         f"{MODEL} 的检查与候选（只供参考，挑之前核对是否符合该类型起名规则）：\n"
-        f"{rows}"
+        f"  1. {candidate}"
     )
