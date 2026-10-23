@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -13,6 +14,7 @@ import shlex
 import sqlite3
 import sys
 import uuid
+from contextvars import ContextVar
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -397,26 +399,33 @@ class BatchReadOutput(RawOutput):
         super().__init__("\n\n".join(_format_read_concept(r) for r in results))
 
 
-def _print(obj):
+def _render(obj) -> str:
+    """一次命令的结果 → 要打印的完整文本（每段以换行结尾）。
+
+    _print 把它写到 stdout；远程 HTTP 接口（backend/remote_api.py）直接取这个字符串，
+    不用去重定向进程级的 sys.stdout。
+    """
     if isinstance(obj, MutationResult):
-        print(obj.message)
+        text = obj.message + "\n"
         if obj.fired_actions:
-            print("\n[ FIRED ACTIONS ]")
+            text += "\n[ FIRED ACTIONS ]\n"
             for fa in obj.fired_actions:
                 act_str = json.dumps(fa.action, ensure_ascii=False) if isinstance(fa.action, (dict, list)) else str(fa.action)
-                print(f"  * {fa.concept} (id={fa.concept_id}): {act_str}")
-    elif isinstance(obj, ReadResult):
-        print(_format_read_concept(obj))
-    elif isinstance(obj, CompileResult):
-        print(_format_compile(obj))
-    elif isinstance(obj, RawOutput):
-        sys.stdout.write(obj.content)
-        if not obj.content.endswith("\n"):
-            sys.stdout.write("\n")
-    elif isinstance(obj, str):
-        print(obj)
-    else:
-        print(str(obj))
+                text += f"  * {fa.concept} (id={fa.concept_id}): {act_str}\n"
+        return text
+    if isinstance(obj, ReadResult):
+        return _format_read_concept(obj) + "\n"
+    if isinstance(obj, CompileResult):
+        return _format_compile(obj) + "\n"
+    if isinstance(obj, RawOutput):
+        return obj.content if obj.content.endswith("\n") else obj.content + "\n"
+    if isinstance(obj, str):
+        return obj + "\n"
+    return str(obj) + "\n"
+
+
+def _print(obj):
+    sys.stdout.write(_render(obj))
 
 
 def _read_file(path):
@@ -570,19 +579,35 @@ def _read_nocturne_memory(uri: str) -> str:
         conn.close()
 
 
+# 设了它，argparse 的用法/错误/帮助文字不写 stderr/stdout，改写进这个缓冲区（远程接口用来取回错误信息）。
+# 用 ContextVar 而不是改全局 sys.stderr：并发的请求线程各有各的值，互不干扰；不设置时行为与原来完全一致。
+_PARSER_OUTPUT: ContextVar["io.StringIO | None"] = ContextVar("horon_parser_output", default=None)
+
+
 class HoronArgumentParser(argparse.ArgumentParser):
     """Custom ArgumentParser providing friendly diagnostic hints on shell argument splitting."""
 
+    def _print_message(self, message, file=None):
+        # argparse 所有对外输出（usage、error、--help）最后都经过这里
+        buf = _PARSER_OUTPUT.get()
+        if buf is not None:
+            if message:
+                buf.write(message)
+            return
+        super()._print_message(message, file)
+
     def error(self, message: str):
-        if "unrecognized arguments" in message:
-            sys.stderr.write(
+        # 下面的提示说的是 Shell 拆参数和改用文件参数，对不经过 Shell 的调用方（捕获模式）没有意义
+        if "unrecognized arguments" in message and _PARSER_OUTPUT.get() is None:
+            self._print_message(
                 f"{self.format_usage()}\n"
                 f"{self.prog}: error: {message}\n\n"
                 f"[提示] 检测到命令行参数疑似被 Shell 截断（例如 PowerShell 将中文引号“”‘’当作代码定界符而拆分参数）。\n"
                 f"       若内容包含复杂引号、特殊符号或多行长文本，请避免在命令行内联传参，改用文件传递：\n"
                 f"       - create_concept: 使用 --content-file <文件>\n"
                 f"       - update: 使用 --old-file <文件> / --new-file <文件> / --append-file <文件>\n"
-                f"       - batch:  使用 batch --file <命令文件>\n"
+                f"       - batch:  使用 batch --file <命令文件>\n",
+                sys.stderr,
             )
             self.exit(2)
         super().error(message)
@@ -1159,6 +1184,48 @@ def _parse_batch_commands(text: str) -> list[tuple[int, list[str], str]]:
     return commands
 
 
+def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[str, str | None]:
+    """执行一段 batch 命令文本（每行一条命令，省略 `python frontend/cli.py` 前缀）。
+
+    输入：parser 是 _build_parser() 的结果；raw_text 是命令文本；print_all 对应 --all；
+    check 可选，签名 check(已解析的参数)，在每条命令执行前调用，抛异常就当这一行失败
+    （远程接口用它再过一遍白名单）。
+    行为：逐行独立提交，某行出错就停，前面成功的不回滚（与原来一致）。
+    输出：(out, err)。out 是成功命令的结果文本（默认只含最后一条，print_all 时含全部）；
+    err 是失败信息，成功时为 None。本地 CLI 把 out 和 err 依次写到 stdout，err 非空则退出码 1。
+    """
+    try:
+        commands = _parse_batch_commands(raw_text)
+    except Exception as e:
+        return "", f"Fail. Syntax error in batch script: {e}\n"
+
+    out: list[str] = []
+    last_result = None
+    for start_line, tokens, raw_cmd in commands:
+        try:
+            cmd_args = parser.parse_args(tokens)
+            if cmd_args.command == "batch":
+                # 这里的 sys.exit 会被下面的 except SystemExit 接住，所以嵌套 batch 会连输出两行：
+                # 先这一句，再 “Fail. ... invalid command”。保持原有输出。
+                out.append(f"Line {start_line}: batch inside batch is not allowed\n")
+                sys.exit(1)
+            if check is not None:
+                check(cmd_args)
+            result = _audited_dispatch(cmd_args, db)
+            if print_all:
+                out.append(_render(result))
+            last_result = result
+        except SystemExit:
+            first_line = raw_cmd.splitlines()[0] if raw_cmd else ""
+            return "".join(out), f"Fail. Line {start_line}: invalid command: {first_line}\n"
+        except Exception as e:
+            return "".join(out), f"Fail. Line {start_line}: {e}\n"
+
+    if not print_all and last_result is not None:
+        out.append(_render(last_result))
+    return "".join(out), None
+
+
 def main():
     parser = _build_parser()
     args = parser.parse_args()
@@ -1174,33 +1241,11 @@ def main():
             else:
                 raw_text = sys.stdin.read()
 
-            try:
-                commands = _parse_batch_commands(raw_text)
-            except Exception as e:
-                print(f"Fail. Syntax error in batch script: {e}")
+            out, err = _run_batch(parser, db, raw_text, args.all)
+            sys.stdout.write(out)
+            if err is not None:
+                sys.stdout.write(err)
                 sys.exit(1)
-
-            last_result = None
-            for start_line, tokens, raw_cmd in commands:
-                try:
-                    cmd_args = parser.parse_args(tokens)
-                    if cmd_args.command == "batch":
-                        print(f"Line {start_line}: batch inside batch is not allowed")
-                        sys.exit(1)
-                    result = _audited_dispatch(cmd_args, db)
-                    if args.all:
-                        _print(result)
-                    last_result = result
-                except SystemExit:
-                    first_line = raw_cmd.splitlines()[0] if raw_cmd else ""
-                    print(f"Fail. Line {start_line}: invalid command: {first_line}")
-                    sys.exit(1)
-                except Exception as e:
-                    print(f"Fail. Line {start_line}: {e}")
-                    sys.exit(1)
-
-            if not args.all and last_result is not None:
-                _print(last_result)
 
         else:
             result = _audited_dispatch(args, db)

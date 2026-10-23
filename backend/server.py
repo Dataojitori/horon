@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from ._db_common import OFFLINE_DEV_SESSION_ID
 from .db import HoronDB
 from .evaluator import load_active_states
+from .remote_api import router as remote_api_router
 
 db: HoronDB | None = None
 # 同步 endpoint 跑在 FastAPI 线程池里，共用同一个 sqlite 连接（check_same_thread=False）。
@@ -33,6 +34,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Horon API", lifespan=lifespan)
+# 给网页版 AI 用的远程接口 POST /v1/cli（自带 API key 鉴权，见 remote_api.py）。
+# 上面给前端用的 /api/* 读接口仍然没有鉴权，只适合本机开发。
+app.include_router(remote_api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
