@@ -32,7 +32,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _BACKFILL_LOCK_STALE_SECONDS = 15 * 60
 
 
-def _backfill_lock_path(db_path: Path) -> Path:
+def backfill_lock_path(db_path: Path) -> Path:
     """db_path（已 resolve）对应的补向量锁文件。放在 .horon-local/ 下（已被 git 忽略），
     不放库旁边：库默认就在仓库根目录。文件名带库的完整路径的哈希，同名的不同库各用各的锁。"""
     digest = hashlib.sha1(str(db_path).encode("utf-8")).hexdigest()[:16]
@@ -41,7 +41,7 @@ def _backfill_lock_path(db_path: Path) -> Path:
 
 def _claim_backfill(db_path: Path) -> bool:
     """抢这个库的补向量锁；抢到返回 True，已有进程在补返回 False。"""
-    lock = _backfill_lock_path(db_path)
+    lock = backfill_lock_path(db_path)
     lock.parent.mkdir(exist_ok=True)
     for _ in range(2):
         try:
@@ -111,7 +111,7 @@ def check_at_session_start(db) -> str | None:
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              creationflags=flags, start_new_session=sys.platform != "win32")
         except Exception:
-            _backfill_lock_path(db.db_path).unlink(missing_ok=True)
+            backfill_lock_path(db.db_path).unlink(missing_ok=True)
             raise
     violations = circuit_violations(db)
     if not violations:
@@ -168,4 +168,4 @@ if __name__ == "__main__":
         logger.info("embedding repair of %s: %d written, %d failed, cost_usd=%.8f, input_tokens=%d",
                     cli_args.db, written, failed, meter.cost_usd, meter.summary()["input_tokens"])
     finally:
-        _backfill_lock_path(Path(cli_args.db).resolve()).unlink(missing_ok=True)
+        backfill_lock_path(Path(cli_args.db).resolve()).unlink(missing_ok=True)

@@ -8,11 +8,11 @@ Horon 本地网页后台：把 backend/web_api.py 的前端接口挂在 /api 下
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ._db_common import OFFLINE_DEV_SESSION_ID
@@ -33,17 +33,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-@contextmanager
-def _open_local_db(_request: Request, session_id: str):
-    """每次请求按它带的会话开一个连接，用完关闭。HoronDB 的会话创建时定下、之后不变，所以不共用连接。
-    同步接口整个在一个线程池线程里跑，打开、使用、关闭连接都在同一个线程。"""
-    db = HoronDB(db_path=_db_path, session_id=session_id)
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 app = FastAPI(title="Horon API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
@@ -51,4 +40,4 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(make_router(_open_local_db), prefix="/api")
+app.include_router(make_router(lambda _request: _db_path, remote=False), prefix="/api")

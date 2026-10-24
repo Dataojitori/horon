@@ -1,13 +1,15 @@
 """
 Horon 远程执行引擎：把「一条 CLI 命令」安全地跑在指定的库上。
 
-    from backend.remote_api import create_database, run_remote_cli
+    from backend.remote_cli import create_database, delete_database, run_remote_cli
     create_database(db_path)                      # 新建 AI 时调一次
+    delete_database(db_path)                      # 删 AI 时调一次
     result = run_remote_cli(db_path, ["read_concept", "951"])
     result = run_remote_cli(db_path, ["batch"], batch_text="read_concept 951\nrecent 5")
 
   create_database  在 db_path 建一个空库（建表、迁移记录、系统 Tag）。路径上已有库就抛
                    FileExistsError；父目录不存在会先建。定义在 backend/db.py，这里转出。
+  delete_database  删掉 db_path 这个库和 Horon 为它留下的所有文件。
   db_path     要打开的 SQLite 库文件，必须已经由 create_database 建好；不存在就返回 404，
               不会顺手建一个。每次调用只碰这一个库。
   args        就是 `python frontend/cli.py` 后面那串参数，一项一个，不要拼成一个字符串。
@@ -46,10 +48,10 @@ from typing import Any
 
 from .llm import CostMeter
 from .db import HoronDB, create_database  # noqa: F401  create_database 是给调用方的建库入口
-from .integrity import check_at_session_start
+from .integrity import backfill_lock_path, check_at_session_start
 from frontend import cli as _cli
 
-logger = logging.getLogger("horon.remote_api")
+logger = logging.getLogger("horon.remote_cli")
 
 REMOTE_SESSION_ID = "remote-api"
 REMOTE_ADAPTER = "remote-api"
@@ -186,14 +188,14 @@ def _validate_batch(parser, batch_text: str) -> None:
             raise _Rejected(f"batch_text 第 {start_line} 行被拒绝：{r}") from None
 
 
-def _open_db(db_path: Path) -> HoronDB:
-    db = HoronDB(db_path=db_path, snapshot_mode=True, session_id=REMOTE_SESSION_ID, plugins_enabled=False)
-    try:
-        db.touch_session(REMOTE_ADAPTER)  # 登记会话；已登记的只刷新最后活跃时间
-    except Exception:
-        db.close()
-        raise
-    return db
+
+def delete_database(db_path: str | Path) -> None:
+    """删掉 db_path 这个库，连同 SQLite 的旁路文件（-wal、-shm、-journal）和补向量锁。
+    不存在的文件跳过。正在跑的命令不等：它们之后打不开库，得到 404。"""
+    db_path = Path(db_path).resolve()
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+    backfill_lock_path(db_path).unlink(missing_ok=True)
 
 
 def _session_start_check(db: HoronDB) -> str:
@@ -210,13 +212,19 @@ def _session_start_check(db: HoronDB) -> str:
 def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None) -> tuple[int, bool, str, str]:
     """已通过策略检查的命令在这里真正执行。返回 (HTTP 状态, ok, output, error)。"""
     try:
-        db = _open_db(db_path)
+        db = HoronDB(
+            db_path=db_path,
+            snapshot_mode=True,
+            session_id=REMOTE_SESSION_ID,
+            plugins_enabled=False,
+        )
     except FileNotFoundError:
         return 404, False, "", "这个记忆库不存在（可能已被删除）。"
     except Exception as e:
         logger.exception("remote cli: failed to open database")
         return 500, False, "", f"打开数据库失败：{type(e).__name__}: {e}"
     try:
+        db.touch_session(REMOTE_ADAPTER)  # 登记 remote-api 会话；已登记的只刷新最后活跃时间
         if ns.command == "batch":
             buf = io.StringIO()
             reset_token = _cli._PARSER_OUTPUT.set(buf)

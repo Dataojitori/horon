@@ -404,7 +404,7 @@ class BatchReadOutput(RawOutput):
 def _render(obj) -> str:
     """一次命令的结果 → 要打印的完整文本（每段以换行结尾）。
 
-    _print 把它写到 stdout；远程 HTTP 接口（backend/remote_api.py）直接取这个字符串，
+    _print 把它写到 stdout；远程执行（backend/remote_cli.py）直接取这个字符串，
     不用去重定向进程级的 sys.stdout。
     """
     if isinstance(obj, MutationResult):
