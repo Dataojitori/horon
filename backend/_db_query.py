@@ -8,7 +8,8 @@ import numpy as np
 
 from ._db_common import _now, transactional
 from .evaluator import load_active_states
-from .embedding import embed_texts, EMBEDDING_DIMENSIONS
+from .embedding import embed_texts
+from .llm import EMBEDDING_DIMENSIONS
 from .models import (
     Concept, ComposeMemberDetail, MutationResult, ReadResult,
     ReminderDetail, TransitionSuggestion,

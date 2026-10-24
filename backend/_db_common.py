@@ -9,13 +9,11 @@ from __future__ import annotations
 import ast
 import json
 import logging
-import os
 import re
 import time
 from functools import wraps
 from pathlib import Path
 
-from dotenv import load_dotenv
 from . import tag_sandbox
 from .tag_sandbox import load_plugin
 
@@ -47,11 +45,6 @@ _PROJECT_DIR = Path(__file__).parent.parent
 _SCHEMA_PATH = _PROJECT_DIR / "backend" / "schema.sql"
 _MIGRATIONS_DIR = _PROJECT_DIR / "backend" / "migrations"
 
-load_dotenv(_PROJECT_DIR / ".env")
-
-if "HORON_DB" not in os.environ:
-    raise RuntimeError("HORON_DB not set. Check .env file.")
-_DB_PATH = _PROJECT_DIR / os.environ["HORON_DB"]
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -22,11 +22,13 @@ Usage (same shape as cli.py, minus every write command):
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from dotenv import load_dotenv
 from backend._db_common import OFFLINE_DEV_SESSION_ID
 from backend.db import HoronDB
 from frontend.cli import (
@@ -124,7 +126,9 @@ def main() -> None:
     """Parse args, run one read-only command, print the result."""
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB(session_id=OFFLINE_DEV_SESSION_ID)
+    root = Path(__file__).parent.parent
+    load_dotenv(root / ".env")
+    db = HoronDB(db_path=root / os.environ["HORON_DB"], session_id=OFFLINE_DEV_SESSION_ID)
     try:
         _print(_dispatch(args, db))
     except Exception as e:

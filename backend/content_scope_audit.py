@@ -22,10 +22,8 @@ import numpy as np
 
 from backend._db_common import _now
 from backend.name_suggest import suggest_names
-from backend.embedding import (
-    DECISIONS_ENDPOINT, EMBEDDING_MODEL, JEV_MODEL, blob_to_embedding, embed_texts,
-    embedding_to_blob, openrouter_post,
-)
+from backend.embedding import blob_to_embedding, embed_texts, embedding_to_blob
+from backend.llm import DECISIONS_ENDPOINT, EMBEDDING_MODEL, JEV_MODEL, openrouter_post
 
 
 # A line counts as misplaced when Jev's "move" probability exceeds this.
@@ -71,6 +69,8 @@ OVERSIZE_TEXT = "[超长节点] {count} 个节点正文满 {limit} B（UTF-8，�
 OVERSIZE_ADVICE = ("超长：正文满 {limit} B，压到线下才不再报。办法是想清楚这个节点要改变哪个时刻的做法，"
                    "再去重、删掉不再改变做法的内容、拆开装了两件事的节点；"
                    "把正文挪进别的节点或档案好让报警消失，不算压下去。")
+# One line in the read_concept header when the node being read is 超长.
+OVERSIZE_READ_NOTE = "Size: {size} B，超过 {limit} B 的膨胀线。有时间时维护这个节点。"
 
 
 def load_name_embeddings(db) -> tuple[list[int], list[str], np.ndarray]:

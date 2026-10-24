@@ -21,7 +21,7 @@ from pathlib import Path
 
 from ._db_common import (
     _now, _validate_condition_ast, SYSTEM_TAGS, transactional,  # noqa: F401  re-exported
-    _SCHEMA_PATH, _MIGRATIONS_DIR, _DB_PATH, OFFLINE_DEV_SESSION_ID,
+    _SCHEMA_PATH, _MIGRATIONS_DIR, OFFLINE_DEV_SESSION_ID,
 )
 from ._db_plugins import PluginMixin
 from ._db_concepts import ConceptMixin
@@ -34,6 +34,31 @@ from .evaluator import GraphEvaluator
 from .models import EvaluationResult
 
 
+def database_exists(db_path: str | Path) -> bool:
+    """db_path 上有没有一个能打开的库。0 字节文件不算（sqlite3.connect 碰一下不存在的路径就会留下它），
+    create_database 会在它上面照常建库。"""
+    path = Path(db_path)
+    return path.is_file() and path.stat().st_size > 0
+
+
+def create_database(db_path: str | Path) -> None:
+    """在 db_path 新建一个空的 Horon 库：建表、把现有迁移都记为已应用，建完就关（系统 Tag 由 HoronDB 打开时登记）。
+    路径上已有库（非空文件）时抛 FileExistsError，不碰它；0 字节文件照建；父目录不存在会先建。"""
+    path = Path(db_path).resolve()
+    if database_exists(path):
+        raise FileExistsError(f"Horon database already exists: {path}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        conn.executemany("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                         [(p.stem, _now()) for p in HoronDB._migration_files()])
+        conn.commit()
+    finally:
+        conn.close()
+
+
 class HoronDB(
     PluginMixin,
     ConceptMixin,
@@ -43,33 +68,37 @@ class HoronDB(
     CompileMixin,
     SnapshotMixin,
 ):
-    def __init__(self, *, session_id: str, db_path: str | Path | None = None, check_same_thread: bool = True,
-                 snapshot_mode: bool = False):
-        """session_id：这个连接代表哪个会话，创建时定下，之后不变。
+    def __init__(self, *, session_id: str, db_path: str | Path, check_same_thread: bool = True,
+                 snapshot_mode: bool = False, plugins_enabled: bool = True):
+        """打开一个已有的库，补跑它还没记录的迁移。库文件不存在或是 0 字节时抛 FileNotFoundError，
+        不会建库；要不要建由入口决定，建库用本模块的 create_database。
+
+        db_path：要打开的库文件。HoronDB 不读 .env，用哪个库由入口决定后传进来
+        （本地 CLI、钩子、网页后台在各自的 main 里读 HORON_DB；远程接口按账号传）。
+
+        session_id：这个连接代表哪个会话，创建时定下，之后不变。
         读激活状态、求值、通知队列、审计日志、插件看到的 is_active 全部按它算。
         会话在进程启动时就已确定：CLI 取宿主环境变量（没有则 devonly），钩子取 payload，
-        网页后台按每个请求带的会话各开一个连接。"""
+        网页后台按每个请求带的会话各开一个连接。
+
+        plugins_enabled：False 时这个连接不加载、不运行任何 Tag 插件（写入时不过 on_mutation，
+        audit 不跑 audit_cluster），Tag 源节点改名、删除时也不连带改名/删除插件文件。远程 HTTP 接口用 False；
+        本地 CLI、钩子、网页后台保持默认的 True，行为不变。"""
         if not session_id or not isinstance(session_id, str) or not session_id.strip():
             raise ValueError("HoronDB 要求非空的 session_id。")
         self.snapshot_mode = snapshot_mode
+        self.plugins_enabled = plugins_enabled
         self.session_id = session_id.strip()
-        target_path = Path(db_path) if db_path else _DB_PATH
-        is_new = not target_path.exists() or target_path.stat().st_size == 0
+        self.db_path = Path(db_path).resolve()
+        if not database_exists(self.db_path):
+            raise FileNotFoundError(f"Horon database not found: {self.db_path}")
         self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
         self._txn_plugin_snapshot: dict[str, dict | None] = {}
         self.conn = sqlite3.connect(
-            str(target_path), check_same_thread=check_same_thread)
+            str(self.db_path), check_same_thread=check_same_thread)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
-        if is_new:
-            self.conn.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
-            self.conn.executemany(
-                "INSERT INTO schema_migrations (version, applied_at) "
-                "VALUES (?, ?)",
-                [(path.stem, _now()) for path in self._migration_files()],
-            )
-        else:
-            self._apply_migrations()
+        self._apply_migrations()
         for tag in SYSTEM_TAGS:
             self.conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?)", (tag,))
         self.cleanup_expired_sessions(days=7)

@@ -206,7 +206,7 @@ def open_horon_db():
     """
     from backend._db_common import OFFLINE_DEV_SESSION_ID
     from backend.db import HoronDB
-    return HoronDB(session_id=OFFLINE_DEV_SESSION_ID)
+    return HoronDB(db_path=M.HORON_DB_PATH, session_id=OFFLINE_DEV_SESSION_ID)
 
 
 def cmd_seed(args: argparse.Namespace) -> None:

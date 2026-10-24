@@ -20,8 +20,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
-from backend.db import HoronDB
+from backend.db import HoronDB, create_database, database_exists
 from backend._db_common import OFFLINE_DEV_SESSION_ID
+from backend._db_mutations import ConcurrentUpdateError
 from backend.harness.core import sync_session
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
@@ -32,10 +33,8 @@ from backend.text_patch import (
     try_normalized_patch,
 )
 from backend.content_scope_audit import (
-    OVERSIZE_BYTES, audit_concepts, format_report, oversize_warning, refresh_audit_coverage,
+    OVERSIZE_BYTES, OVERSIZE_READ_NOTE, audit_concepts, audit_content_bytes, format_report, oversize_warning, refresh_audit_coverage,
 )
-
-load_dotenv(Path(__file__).parent.parent / ".env")
 
 # read_concept 推荐块里，当前节点与某条 plain 推荐的书腰相似度达到这个值，就提示考虑合并/改书腰/并 Tag。
 # 2026-09-28 全库两两相似度：中位数 0.31，99.9% 分位 0.72；>=0.75 约 100 对。
@@ -182,6 +181,9 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
 
     if result.tags:
         lines.append(f"Tags: {', '.join(result.tags)}")
+    size = audit_content_bytes(result.content)
+    if size >= OVERSIZE_BYTES:
+        lines.append(OVERSIZE_READ_NOTE.format(size=size, limit=OVERSIZE_BYTES))
     if result.tag_source_info:
         lines.append(f"[Tag Source] {result.tag_source_info}")
 
@@ -920,24 +922,31 @@ def _dispatch(args, db):
         )
 
     elif args.command == "update":
-        # 使用 DB 提供的 helper 获取当前值，避免在 CLI 层重复查询
-        _, _, current_value = db.get_concept_field(args.node, args.field)
-        notices = []
-        resolved = _resolve_text(
-            old=args.old,
-            old_file=args.old_file,
-            new=args.new,
-            new_file=args.new_file,
-            append=args.append,
-            append_file=args.append_file,
-            field_name=args.field,
-            current_value=current_value,
-            notices=notices,
-        )
-        if resolved is None:
-            raise ValueError(
-                "Provide --old/--new (patch) or --append.")
-        result = db.update(args.node, args.field, resolved)
+        # 读旧值 → 算新值 → 写回。写回带 expected_old，读写之间被别的连接改过就整个重来，
+        # 免得并发的 --append / patch 互相覆盖（SQLite 自己的锁只保证单条语句，管不到这段空档）。
+        for attempt in range(5):
+            _, _, current_value = db.get_concept_field(args.node, args.field)
+            notices = []
+            resolved = _resolve_text(
+                old=args.old,
+                old_file=args.old_file,
+                new=args.new,
+                new_file=args.new_file,
+                append=args.append,
+                append_file=args.append_file,
+                field_name=args.field,
+                current_value=current_value,
+                notices=notices,
+            )
+            if resolved is None:
+                raise ValueError(
+                    "Provide --old/--new (patch) or --append.")
+            try:
+                result = db.update(args.node, args.field, resolved, expected_old=current_value)
+                break
+            except ConcurrentUpdateError:
+                if attempt == 4:
+                    raise
         if notices:
             result.message += "\n" + "\n".join(notices)
         return result
@@ -1229,7 +1238,12 @@ def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[
 def main():
     parser = _build_parser()
     args = parser.parse_args()
-    db = HoronDB(snapshot_mode=True, session_id=SESSION_ID)
+    root = Path(__file__).parent.parent
+    load_dotenv(root / ".env")
+    db_path = root / os.environ["HORON_DB"]
+    if not database_exists(db_path):  # 第一次用 Horon：在 HORON_DB 指的位置建一个空库
+        create_database(db_path)
+    db = HoronDB(db_path=db_path, snapshot_mode=True, session_id=SESSION_ID)
     if SESSION_ID != OFFLINE_DEV_SESSION_ID:
         # 宿主没装钩子时这个会话还没登记；首次登记会顺带算一遍它的电路状态
         sync_session(db, ADAPTER)

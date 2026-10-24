@@ -28,7 +28,9 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from backend.db import HoronDB
+from dotenv import load_dotenv
+
+from backend.db import HoronDB, create_database, database_exists
 from backend.harness.adapters.antigravity import handle_antigravity
 from backend.harness.adapters.claude_code import handle_claude_code
 from backend.harness.adapters.codex import handle_codex
@@ -61,7 +63,7 @@ def _read_stdin_payload() -> dict[str, Any]:
 
 
 def detect_adapter_type(payload: dict[str, Any], explicit_adapter: str | None = None) -> str:
-    """根据命令行参数、环境变量或 payload 特征自动检测适配器类型。"""
+    """根据命令行参数或 payload 特征自动检测适配器类型。"""
     if explicit_adapter:
         clean = explicit_adapter.strip().lower()
         if clean in ("claude", "claude-code", "claudecode"):
@@ -74,18 +76,6 @@ def detect_adapter_type(payload: dict[str, Any], explicit_adapter: str | None = 
             return "opencode"
         if clean == "dsh":
             return "dsh"
-
-    env_adapter = os.environ.get("HORON_HOOK_ENV", "").strip().lower()
-    if env_adapter in ("claude-code", "claude"):
-        return "claude-code"
-    if env_adapter in ("codex", "openai"):
-        return "codex"
-    if env_adapter in ("antigravity", "cursor"):
-        return "antigravity"
-    if env_adapter == "opencode":
-        return "opencode"
-    if env_adapter == "dsh":
-        return "dsh"
 
     # 基于 Payload 结构特征启发式自动探测
     if "hook_event_name" in payload or "tool_response" in payload:
@@ -127,36 +117,26 @@ def payload_session_id(payload: dict[str, Any], adapter_type: str) -> str:
 def dispatch_hook(
     event_name: str,
     payload: dict[str, Any],
-    db: HoronDB | None = None,
+    db: HoronDB,
     adapter_type: str = "antigravity",
 ) -> tuple[int, Any, str | None]:
     """通用生命周期事件分发入口。
 
-    输入：事件名；payload；db 可由调用方传入（其会话须与 payload 一致），
-      不传则按 payload 里的会话新开一个连接，用完关闭。
+    输入：事件名；payload；db 是已打开的连接，会话须与 payload 一致，由调用方负责关闭。
     Returns:
         tuple[exit_code, stdout_data, stderr_data]
     """
-    should_close = False
-    if db is None:
-        db = HoronDB(session_id=payload_session_id(payload, adapter_type))
-        should_close = True
-
-    try:
-        if adapter_type == "claude-code":
-            return handle_claude_code(event_name, payload, db)
-        elif adapter_type == "codex":
-            return handle_codex(event_name, payload, db)
-        elif adapter_type == "opencode":
-            return handle_opencode(event_name, payload, db)
-        elif adapter_type == "dsh":
-            return handle_dsh(event_name, payload, db)
-        else:
-            res = handle_antigravity(event_name, payload, db)
-            return 0, res, None
-    finally:
-        if should_close:
-            db.close()
+    if adapter_type == "claude-code":
+        return handle_claude_code(event_name, payload, db)
+    elif adapter_type == "codex":
+        return handle_codex(event_name, payload, db)
+    elif adapter_type == "opencode":
+        return handle_opencode(event_name, payload, db)
+    elif adapter_type == "dsh":
+        return handle_dsh(event_name, payload, db)
+    else:
+        res = handle_antigravity(event_name, payload, db)
+        return 0, res, None
 
 
 def main():
@@ -184,7 +164,15 @@ def main():
         return
 
     adapter_type = detect_adapter_type(payload, args.adapter)
-    exit_code, stdout_data, stderr_data = dispatch_hook(event_name, payload, adapter_type=adapter_type)
+    load_dotenv(_PROJECT_ROOT / ".env")
+    db_path = _PROJECT_ROOT / os.environ["HORON_DB"]
+    if not database_exists(db_path):  # 刚装好 Horon、还没跑过 CLI 时，第一次 hook 建库
+        create_database(db_path)
+    db = HoronDB(db_path=db_path, session_id=payload_session_id(payload, adapter_type))
+    try:
+        exit_code, stdout_data, stderr_data = dispatch_hook(event_name, payload, db, adapter_type)
+    finally:
+        db.close()
 
     if stderr_data:
         sys.stderr.write(stderr_data)
