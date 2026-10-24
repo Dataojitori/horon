@@ -1,6 +1,7 @@
 import type { GraphData, ConceptDetail, NeighborhoodData, ConceptSearchResult, ConceptReviewItem, SessionInfo } from "./types";
 
-const BASE = "/api";
+// 相对路径：页面挂在哪个路径下，接口就跟着走（本地 / -> /api，aisoulkeeper /ai/<id>/ -> /ai/<id>/api）
+const BASE = "api";
 
 async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, options);

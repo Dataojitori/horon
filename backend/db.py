@@ -94,8 +94,14 @@ class HoronDB(
             raise FileNotFoundError(f"Horon database not found: {self.db_path}")
         self._plugin_cache: dict[str, tuple[dict | None, float | None]] = {}
         self._txn_plugin_snapshot: dict[str, dict | None] = {}
-        self.conn = sqlite3.connect(
-            str(self.db_path), check_same_thread=check_same_thread)
+        # mode=rw：文件在上面检查之后、这里打开之前被删掉时报错，不让 connect 在原路径建出一个新文件。
+        try:
+            self.conn = sqlite3.connect(
+                f"{self.db_path.as_uri()}?mode=rw", uri=True, check_same_thread=check_same_thread)
+        except sqlite3.OperationalError as e:
+            if not self.db_path.exists():
+                raise FileNotFoundError(f"Horon database not found: {self.db_path}") from e
+            raise
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._apply_migrations()

@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  // 打包出的资源用相对路径，同一份 dist 挂在 / 或 /ai/<id>/ 下都能用
+  base: "./",
   server: {
     port: 5173,
     proxy: {
