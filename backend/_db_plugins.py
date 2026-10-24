@@ -18,7 +18,7 @@ from .tag_sandbox import (
 
 def _ask_jev(state: str, question: str) -> float | None:
     """问 Jev 一道是非题，返回“是”的概率；调用失败返回 None（交给插件自己决定怎么处理）。"""
-    from .embedding import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
+    from .llm import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
     try:
         answers = openrouter_post(DECISIONS_ENDPOINT, {
             "model": JEV_MODEL,
@@ -44,7 +44,12 @@ class PluginMixin:
         ).fetchone() is not None
 
     def _get_plugin(self, tag_name: str) -> dict | None:
-        """Load plugin with mtime-based hot-reload. Returns None for pure tags."""
+        """Load plugin with mtime-based hot-reload. Returns None for pure tags.
+
+        plugins_enabled=False 的连接（远程接口）一律返回 None：不读插件文件、不执行任何插件代码。
+        所有插件入口（写入时的 on_mutation、audit_cluster、list_tags 的插件说明）都经过这里。"""
+        if not self.plugins_enabled:
+            return None
         filepath = tag_sandbox._PLUGINS_DIR / f"{tag_name}.py"
 
         in_txn = getattr(self, '_in_transaction', False)
@@ -221,6 +226,10 @@ class PluginMixin:
         Input: optional tag_name. If provided, audits only that cluster;
         if None, sweeps all plugin-bearing clusters with a coverage footer.
         """
+        if not self.plugins_enabled:
+            # 不能走下面的流程：它按插件文件是否存在选 Tag，再经 _get_plugin（此处恒为 None）
+            # 得到“无警告”，会把“没跑插件”显示成“插件审计通过 ✓”。
+            return "(这个连接不运行 Tag 插件，插件审计已跳过；要审计请在本地跑 audit)"
         if tag_name is not None:
             registered = self.conn.execute(
                 "SELECT 1 FROM tags WHERE name=?", (tag_name,)

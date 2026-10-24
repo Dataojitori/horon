@@ -266,7 +266,9 @@ class ConceptMixin:
             tag_name_to_remove = tag_row["name"]
             self.conn.execute("DELETE FROM tags WHERE name = ?", (tag_name_to_remove,))
             plugin_path = tag_sandbox._PLUGINS_DIR / f"{tag_name_to_remove}.py"
-            if tag_name_to_remove not in SYSTEM_TAGS and plugin_path.exists():
+            # 不运行插件的连接（远程接口）完全不碰插件文件：Tag 名可以带 ../，按名字拼出的路径
+            # 能指到 tag_plugins 外面的任意 .py。
+            if self.plugins_enabled and tag_name_to_remove not in SYSTEM_TAGS and plugin_path.exists():
 
                 def _delete_plugin_hook(path=plugin_path, tname=tag_name_to_remove, res=result):
                     try:

@@ -22,6 +22,13 @@ def _check_tool_regex(tool: str) -> None:
 
 _logger = logging.getLogger(__name__)
 
+_UNSET = object()
+
+
+class ConcurrentUpdateError(ValueError):
+    """update(expected_old=...) 写入时发现正文已不是调用方读到的那份（读和写之间被别的连接改过）。
+    什么都没写（整个事务回滚）。调用方重新读一遍、重新算新值再试。"""
+
 
 class MutationMixin:
     """All graph-mutating operations: add, delete, set, update."""
@@ -1257,7 +1264,9 @@ class MutationMixin:
         plugin_renamed = False
         old_plugin_path = tag_sandbox._PLUGINS_DIR / f"{old_name}.py"
         new_plugin_path = tag_sandbox._PLUGINS_DIR / f"{new_name}.py"
-        if is_tag_source and old_plugin_path.exists():
+        # 不运行插件的连接（远程接口）完全不碰插件文件：Tag 名可以带 ../，按名字拼出的路径
+        # 能指到 tag_plugins 外面的任意 .py。
+        if self.plugins_enabled and is_tag_source and old_plugin_path.exists():
             if new_plugin_path.exists() and not os.path.samefile(
                     str(old_plugin_path), str(new_plugin_path)):
                 raise ValueError(
@@ -1343,8 +1352,12 @@ class MutationMixin:
         return cid, cname, row[field] if row else None
 
     @transactional
-    def update(self, concept, field: str, value: str) -> MutationResult:
-        """更新概念正文 content。"""
+    def update(self, concept, field: str, value: str, expected_old: Any = _UNSET) -> MutationResult:
+        """把概念正文 content 整个换成 value。
+
+        expected_old：不传 = 无条件覆盖。传了（可以是 None）= 只在库里当前正文仍等于它时才写，
+        比较和写入是同一条 UPDATE，跨连接、跨进程都是原子的；不等就抛 ConcurrentUpdateError，
+        什么都不写。CLI 的 --append / --old/--new 用它，免得两个并发追加互相覆盖。"""
         valid_fields = ("content",)
         if field not in valid_fields:
             raise ValueError(
@@ -1362,10 +1375,20 @@ class MutationMixin:
         if getattr(self, "snapshot_mode", False) and field == "content":
             self.capture_snapshot(cid, "content")
 
-        self.conn.execute(
-            f"UPDATE concepts SET {field}=?, updated_at=? WHERE id=?",
-            (value, _now(), cid),
-        )
+        if expected_old is _UNSET:
+            self.conn.execute(
+                f"UPDATE concepts SET {field}=?, updated_at=? WHERE id=?",
+                (value, _now(), cid),
+            )
+        else:
+            cur = self.conn.execute(
+                f"UPDATE concepts SET {field}=?, updated_at=? WHERE id=? AND {field} IS ?",
+                (value, _now(), cid, expected_old),
+            )
+            if cur.rowcount == 0:
+                raise ConcurrentUpdateError(
+                    f"Content of {label} was changed by another writer after it was read; nothing was written.")
+            old_val = expected_old
 
         diff = {"content": {"concept_id": cid, "old": old_val, "new": value}}
         infos = self._run_mutation_hooks(cid, diff)

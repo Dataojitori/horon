@@ -1,21 +1,12 @@
 """节点起名与检查小助手：根据节点类型（plain / sensor·logic / guard / Tag）和正文，
-请 gpt-6-luna 检查当前名字是否符合起名规则；若现名已合适则维持现名，否则给出候选新名字。
+请起名模型（backend/llm.py 的 NAMER_MODEL）检查当前名字是否符合起名规则；若现名已合适则维持现名，否则给出候选新名字。
 
 候选只供参考，最终名字由调用方挑选或修改；本模块只读不写库。
 """
 
 from __future__ import annotations
 
-import json
-import os
-import urllib.request
-import uuid
-
-MODEL = "gpt-6-luna"
-# 有 OPENCODE_GO_API_KEY 走 OpenCode Go；没有就用 OPENROUTER_API_KEY 走 OpenRouter 上的同一个模型
-GO_URL = "https://opencode.ai/zen/go/v1/responses"
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "openai/gpt-6-luna"
+from .llm import NAMER_MODEL, complete_text
 
 
 def _type_rules(
@@ -129,35 +120,13 @@ def build_prompt(
 
 
 def ask_name(prompt: str) -> str:
-    """Send `prompt` to gpt-6-luna once and extract the suggested name.
+    """Send `prompt` to NAMER_MODEL once (via backend.llm.complete_text) and extract the suggested name.
 
-    Uses OPENCODE_GO_API_KEY (OpenCode Go) if set, otherwise OPENROUTER_API_KEY
-    (OpenRouter); thinking is turned off either way.
     The model sometimes leaks English reasoning before `name:` or omits the prefix,
     so take the text after the last `name:` if present, otherwise the last non-empty line.
-    Raises KeyError if neither key is set; raises on HTTP/network errors.
+    Raises if no API key is set, or on HTTP/network errors.
     """
-    if go_key := os.environ.get("OPENCODE_GO_API_KEY"):
-        req = urllib.request.Request(
-            GO_URL,
-            data=json.dumps({"model": MODEL, "input": prompt,
-                             "reasoning": {"effort": "none"}}).encode(),
-            # OpenCode Go 要求自定 User-Agent 和每段对话一个 x-opencode-session
-            headers={"Authorization": "Bearer " + go_key, "Content-Type": "application/json",
-                     "User-Agent": "horon-namer/1.0", "x-opencode-session": str(uuid.uuid4())})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            data = json.load(r)
-        text = "".join(c.get("text", "") for o in data.get("output", []) if o.get("type") == "message"
-                       for c in o.get("content", []))
-    else:
-        req = urllib.request.Request(
-            OPENROUTER_URL,
-            data=json.dumps({"model": OPENROUTER_MODEL, "reasoning": {"effort": "none"},
-                             "messages": [{"role": "user", "content": prompt}]}).encode(),
-            headers={"Authorization": "Bearer " + os.environ["OPENROUTER_API_KEY"],
-                     "Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            text = json.load(r)["choices"][0]["message"]["content"] or ""
+    text = complete_text(prompt, kind="suggest_name")
     if "name:" in text:
         return text.rsplit("name:", 1)[1].strip()
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -195,6 +164,6 @@ def suggest_names(db, concept) -> str:
     return (
         f"现名：{node.name}\n"
         f"类型：{type_label}\n"
-        f"{MODEL} 的检查与候选（只供参考，挑之前核对是否符合该类型起名规则）：\n"
+        f"{NAMER_MODEL} 的检查与候选（只供参考，挑之前核对是否符合该类型起名规则）：\n"
         f"  1. {candidate}"
     )
