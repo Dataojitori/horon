@@ -36,6 +36,64 @@ JEV_STATE = {
     "tool_call": "AI 调用工具 {tool}，传的参数是：「{text}」",
     "tool_result": "AI 调用工具 {tool} 后，工具 {tool} 返回：「{text}」",
 }
+# Message events with the other side's previous message as context. Questions say "这段话",
+# so the last line tells Jev which message is being judged.
+JEV_STATE_WITH_PREV = {
+    "user_message": "AI 先对用户说：「{prev}」\n用户接着对 AI 说：「{text}」\n"
+                    "（要判断的是用户接着说的这一条，AI 那条只是上文。）",
+    "model_message": "用户先对 AI 说：「{prev}」\nAI 接着对用户说：「{text}」\n"
+                     "（要判断的是 AI 接着说的这一条，用户那条只是上文。）",
+}
+# Which sessions column stores each message event, and which column holds the other side.
+_LAST_MESSAGE_COLUMNS = {
+    "user_message": ("last_user_message", "last_model_message"),
+    "model_message": ("last_model_message", "last_user_message"),
+}
+# Only the tail of a long previous message goes to Jev; the end is what the reply answers.
+PREV_MESSAGE_MAX_CHARS = 1500
+
+
+def _remember_message(db: HoronDB, event_type: str, text: str) -> str | None:
+    """记下本会话这条消息，并取出对方的上一条。
+
+    输入：事件类型（只处理 user_message / model_message，其他类型直接返回 None）、消息正文。
+    行为：读 sessions 表里对方最近一条消息，再把这条写进本方那一列（会话还没登记就不写）。
+    输出：对方上一条消息的末尾至多 PREV_MESSAGE_MAX_CHARS 个字；没有就返回 None。
+    """
+    cols = _LAST_MESSAGE_COLUMNS.get(event_type)
+    if not cols or not text:
+        return None
+    own, other = cols
+    row = db.conn.execute(
+        f"SELECT {other} FROM sessions WHERE session_id = ?", (db.session_id,)).fetchone()
+    db.conn.execute(
+        f"UPDATE sessions SET {own} = ? WHERE session_id = ?", (text, db.session_id))
+    db.conn.commit()
+    prev = row[0] if row else None
+    return prev[-PREV_MESSAGE_MAX_CHARS:] if prev else None
+
+
+def _jev_state(event_type: str, text: str, tool_name: str | None, prev: str | None) -> str:
+    """拼出送给 Jev 的情境：消息事件有对方上一条时一起送，否则只送这一条。"""
+    if prev and event_type in JEV_STATE_WITH_PREV:
+        return JEV_STATE_WITH_PREV[event_type].format(prev=prev, text=text)
+    return JEV_STATE[event_type].format(tool=tool_name, text=text)
+
+
+def _false_alarm_hint(db: HoronDB, concept_id: int) -> str:
+    """接在提醒末尾的一句：误报时去哪看、改哪条 hook。
+
+    输入：发出提醒的节点 ID。输出：传感器指向它自己的 read_hook；logic/guard 列出它的直接输入
+    （名字和 ID），因为 hook 挂在输入传感器上。
+    """
+    row = db.conn.execute("SELECT role FROM concepts WHERE id = ?", (concept_id,)).fetchone()
+    if row and row["role"] == "sensor":
+        return f"（如果你觉得这是误报，可以 read_hook {concept_id} 看规则，考虑改它的 hook）"
+    members = db.conn.execute(
+        "SELECT c.id, c.name FROM compose_members cm JOIN concepts c ON cm.member_concept_id = c.id "
+        "WHERE cm.parent_concept_id = ? ORDER BY cm.order_index, c.id", (concept_id,)).fetchall()
+    inputs = "、".join(f"{m['name']}（{m['id']}）" for m in members) or "（没有输入）"
+    return f"（如果你觉得这是误报，考虑改它的输入的 hook：{inputs}）"
 
 
 def wrap_harness_message(items: list[str]) -> str:
@@ -119,15 +177,19 @@ def sense(
       1. 正则初筛：每条钩子按 match_pattern 对 text 做 re.search（忽略大小写）。
       2. 命中且没有 jev_question 的钩子，直接点火。
       3. 命中且有 jev_question、本会话里还没亮的钩子，把它们的问题合成一次请求问 Jev
-         （state 按 JEV_STATE 写成“谁对谁说：「text」”），
+         （state 按 JEV_STATE 写成“谁对谁说：「text」”；用户消息和 AI 回复会带上对方的
+         上一条当上文，见 _remember_message），
          “是”的概率 >= jev_threshold 的才点火。Jev 调用失败时这些钩子按正则结果点火，
          并多返回一条说明失败原因的消息。
       4. 每问一次 Jev，在 cli_audit_log 记一行 jev_check，sub_action 形如 jev=0.08（“是”的概率）。
-    输出：本次点火产生的 notify 消息列表，每条开头写着来源节点“notify from <id> <名字>：”
+    输出：本次点火产生的 notify 消息列表，每条开头写着来源节点“notify from <id> <名字>：”，
+      末尾跟一句误报时该去改哪条 hook
       （不往通知队列里放东西）。
     """
     if not text and not tool_name:
         return []
+
+    prev = _remember_message(db, event_type, text)
 
     query = (
         "SELECT sh.id AS hook_id, sh.sensor_concept_id, sh.event_type, sh.tool, "
@@ -167,7 +229,7 @@ def sense(
         try:
             answers = openrouter_post(DECISIONS_ENDPOINT, {
                 "model": JEV_MODEL,
-                "state": JEV_STATE[event_type].format(tool=tool_name, text=text),
+                "state": _jev_state(event_type, text, tool_name, prev),
                 "questions": {
                     str(r["hook_id"]): {
                         "type": "choice",
@@ -201,7 +263,8 @@ def sense(
             for act in actions:
                 if isinstance(act, dict) and "notify" in act and act["notify"]:
                     # Name the node so a wrong alarm can be written back to it.
-                    messages.append(f"notify from {fa.concept_id} {fa.concept}：{act['notify']}")
+                    messages.append(f"notify from {fa.concept_id} {fa.concept}：{act['notify']}"
+                                    f"{_false_alarm_hint(db, fa.concept_id)}")
 
     return messages
 

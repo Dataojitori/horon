@@ -61,7 +61,7 @@ ALLOWED_COMMANDS = frozenset({
     "login", "read_concept", "search_keyword", "search_semantic", "list_concepts", "recent",
     "create_concept", "update", "set", "add", "delete", "place", "cut",
     "list_tags", "create_tag", "delete_tag", "remind", "inbox", "compile",
-    "suggest_name", "audit", "batch",
+    "suggest_name", "audit", "batch", "read_hook",
 })
 
 # argparse 解析后的 dest → 命令行上的写法。这些参数会让服务器读写文件，一律拒绝。

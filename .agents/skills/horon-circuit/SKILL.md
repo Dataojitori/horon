@@ -113,7 +113,7 @@ python frontend/cli.py set <传感器名> sensor_hook <event_type> \
 
 ### 误报与漏报的调优
 
-平时遇到传感器误报或漏报时，先在传感器节点追加原始样本（见 `horon-cli` 第 3 节），不要凭单条样本立刻改正则或问题。积累了真实样本后，对照样本集一起调整 `--match-pattern` 或 `--jev` 问法。
+改完实测两句：这次的原文，和一句按书腰该响的话。
 
 ## on_fire 动作
 
@@ -183,7 +183,7 @@ set <守卫名> tool_guard <实际工具名> [--args-pattern "参数匹配正则
 
 工具名和正则按要管的那个宿主自己的叫法写（各宿主的叫法见第 3 节「配置命令」的 `--tool`），一条守卫只管一个宿主的工具。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
 
-配置后用 `read_concept` 查看守卫的 Tool Guard 和 Circuit，核对匹配范围及当前放行条件。
+配置后用 `read_hook` 核对匹配范围，用 `read_concept` 看 Circuit 和当前放行条件。
 
 ## 副本库验证（上线前必做）
 
@@ -225,6 +225,7 @@ delete <抑制源名> inhibition <目标名>
 | 配置发火动作 | `set <名称或ID> on_fire '<动作JSON>'` |
 | 添加/解除抑制 | `add <源名称或ID> inhibition <目标名称或ID>` / `delete <源名称或ID> inhibition <目标名称或ID>` |
 | 清除规则并退回 plain | `delete <名称或ID> activation-rule` |
+| 查看 Hook / 守卫规则 | `read_hook <名称或ID> [...]` |
 | 解绑感知或守卫 | `delete <名称或ID> sensor_hook` / `delete <名称或ID> tool_guard` |
 | 逆向求解与诊断 | `compile --target <目标名称或ID> [--assume <传感器1> <传感器2> ...]` |
 | 临时状态复位 | `reset` |

@@ -374,7 +374,8 @@ class CompileMixin:
         if hook is None:
             return f"[配置错误] {row['lifespan']} 传感器没有 sensor_hook，永远无法点亮"
         tool = f"[{hook['tool']}]" if hook["tool"] else ""
-        return f"等待 {hook['event_type']}{tool} 匹配 /{hook['match_pattern']}/"
+        # 不印正则：看得见规则就会想着绕开它。要看规则用 read_hook。
+        return f"等待 {hook['event_type']}{tool} 事件（规则用 read_hook {cid} 查看）"
 
     def _render_tree(
         self,

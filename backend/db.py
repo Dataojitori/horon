@@ -234,8 +234,12 @@ class HoronDB(
         return GraphEvaluator(self.conn, session_id=self.session_id)
 
     def session_reset(self) -> EvaluationResult:
-        """重置本连接的会话：清空它的 CHAIN 进度、待发通知与已激活的 turn/session 传感器。"""
+        """重置本连接的会话：清空它的 CHAIN 进度、待发通知、已激活的 turn/session 传感器，
+        以及给 Jev 当上文用的最近一条用户消息和 AI 回复。"""
         res = self._evaluator().reset_session()
+        self.conn.execute(
+            "UPDATE sessions SET last_user_message = NULL, last_model_message = NULL "
+            "WHERE session_id = ?", (self.session_id,))
         self.conn.commit()
         return res
 

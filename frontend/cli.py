@@ -197,21 +197,19 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
 
         if result.role == "guard":
             if result.tool_guards:
+                # 不印 args 正则：看得见规则就会想着绕开它。完整规则用 read_hook 看。
                 for tg in result.tool_guards:
-                    adapter_flag = f" --adapter {tg.adapter}" if tg.adapter else ""
-                    args_flag = f" --args-pattern '{tg.args_pattern}'" if tg.args_pattern else ""
-                    lines.append(f"Tool Guard: {tg.tool}{args_flag}{adapter_flag}")
+                    hidden = f" (args hidden; read_hook {result.id} to view)" if tg.args_pattern else ""
+                    lines.append(f"Tool Guard: {tg.tool}{hidden}")
             else:
                 lines.append("Tool Guard: (none)")
 
     elif result.role == "sensor":
         lines.append(f"Sensor: {result.lifespan or 'unknown'}")
+        # 不印正则和 Jev 问法：看得见规则就会对着它检查、绕开自己的输出。完整规则用 read_hook 看。
         if result.sensor_hooks:
-            for sh in result.sensor_hooks:
-                tool_flag = f" --tool '{sh.tool}'" if sh.tool else ""
-                adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
-                jev_flag = f" --jev '{sh.jev_question}' --jev-threshold {sh.jev_threshold}" if sh.jev_question else ""
-                lines.append(f"Hook: {sh.event_type}{tool_flag} --match-pattern '{sh.match_pattern}'{adapter_flag}{jev_flag}")
+            events = ", ".join(sh.event_type for sh in result.sensor_hooks)
+            lines.append(f"Hook: {events} (rule hidden; read_hook {result.id} to view)")
         else:
             lines.append("Hook: (none)")
 
@@ -729,6 +727,11 @@ def _build_parser():
     p.add_argument("concept", nargs="+",
                    help="一个或多个节点名/别名/ID。一次读多个时整批算一次读取，批内顺序不记注意力转移。")
 
+    # read_hook — 查看 read_concept 隐藏的 sensor_hook / tool_guard 完整规则
+    p = sub.add_parser("read_hook", allow_abbrev=False,
+                       help="Show full sensor_hook / tool_guard rules hidden by read_concept.")
+    p.add_argument("concept", nargs="+", help="一个或多个节点名/别名/ID")
+
     # place — 把一条推荐边放到起点推荐列表的指定名次
     p = sub.add_parser("place", allow_abbrev=False,
                        help="place <suggested> --in <list owner> --at <rank>: put a concept at the given "
@@ -960,6 +963,31 @@ def _dispatch(args, db):
             logging.getLogger(__name__).debug(
                 "record_transition failed", exc_info=True)
         return results[0] if len(results) == 1 else BatchReadOutput(results)
+
+    elif args.command == "read_hook":
+        # 输入：节点名/别名/ID 列表。输出：每个节点一段，列出 sensor_hook 与 tool_guard 完整规则
+        # （写法与 set 命令参数一致）。不记注意力转移，不算读节点。
+        blocks = []
+        for c in args.concept:
+            r = db.read_concept(c)
+            head = f"[{r.id}] {r.name} ({r.role.upper()})"
+            hook_lines = []
+            for tg in r.tool_guards:
+                args_flag = f" --args-pattern {shlex.quote(tg.args_pattern)}" if tg.args_pattern else ""
+                adapter_flag = f" --adapter {tg.adapter}" if tg.adapter else ""
+                hook_lines.append(f"  Tool Guard: {tg.tool}{args_flag}{adapter_flag}")
+            if not r.sensor_hooks and not r.tool_guards:
+                blocks.append(f"{head}\n  (no hook or tool guard)")
+                continue
+            for sh in r.sensor_hooks:
+                tool_flag = f" --tool {shlex.quote(sh.tool)}" if sh.tool else ""
+                adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
+                jev_flag = (f" --jev {shlex.quote(sh.jev_question)} --jev-threshold {sh.jev_threshold}"
+                            if sh.jev_question else "")
+                hook_lines.append(f"  Hook: {sh.event_type}{tool_flag} --match-pattern "
+                                  f"{shlex.quote(sh.match_pattern)}{adapter_flag}{jev_flag}")
+            blocks.append(head + "\n" + "\n".join(hook_lines))
+        return RawOutput("\n\n".join(blocks))
 
     elif args.command == "place":
         return db.place_transition(args.from_concept, args.to_concept, args.rank)
