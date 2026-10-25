@@ -103,17 +103,33 @@ python frontend/cli.py set <传感器名> sensor_hook <event_type> \
 匹配分两步：先用正则筛；挂了 `--jev` 的传感器，正则命中后再由 Jev 按意思复筛。重新执行会覆盖原有 Hook。
 
 - `--match-pattern`：必填 Python 正则，按 `re.search(..., re.IGNORECASE)` 匹配：全文任意位置命中即可，不区分大小写。要匹配某个工具的全部调用而不限制参数或结果，传入 `".*"`。
-- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，消息类事件不能指定。它是正则，与工具名整串匹配、区分大小写：`Bash` 只管 `Bash`，`Bash|bash` 同时管 Claude Code 和 opencode 的 shell。`--tool` 和参数正则按要管的那个宿主自己的工具名和参数名写（Claude Code 是 `Bash`、`"file_path"`；opencode 是 `bash`、`"filePath"`；dsh 是 `pwsh`、`horon` 的 `{"args": [...]}`），并加 `--adapter` 限定宿主。MCP 工具例外：各宿主统一叫 `mcp__<服务器>__<工具>`（如 `mcp__bluesky__send_post`），一条规则所有宿主通用，不加 `--adapter`。
+- `--tool`：只在 `tool_call` 与 `tool_result` 下有效，消息类事件不能指定。它是正则，与工具名整串匹配、区分大小写：`Bash` 只管 `Bash`，`Bash|bash` 同时管 Claude Code 和 opencode 的 shell。`--tool` 和参数正则按要管的那个宿主自己的工具名和参数名写，并加 `--adapter` 限定宿主。MCP 工具例外：各宿主统一叫 `mcp__<服务器>__<工具>`（如 `mcp__bluesky__send_post`），一条规则所有宿主通用，不加 `--adapter`。
+
+  | 宿主 (`--adapter`) | shell 工具名 | 参数里的路径字段 |
+  | :--- | :--- | :--- |
+  | `claude-code` | `Bash` | `"file_path"` |
+  | `opencode` | `bash` | `"filePath"` |
+  | `dsh` | `pwsh` | 没有单独的路径字段：`pwsh`、`read`、`edit`、`horon` 的参数都是 `{"args": [...]}`，路径在 `args` 里 |
+  | `codex`、`antigravity` | 以宿主实际上报的为准 | 见 `backend/harness/adapters/<宿主>.py`；拿不准就先在该宿主里触发一次，用 `read_hook` 和实际输出核对 |
 - `--adapter`：可选，只在该宿主的会话里匹配。省略则所有宿主都匹配；宿主未知的会话（如终端手敲）只匹配省略了它的 Hook。重新绑定时省略 `--adapter` 会恢复为所有宿主。
-- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 `backend/embedding.py` 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
+- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 `backend/llm.py` 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
   - 判定机制：Jev 判定为“是”的概率不低于 `--jev-threshold`（默认 0.5）才点火；调用失败（超时、无 Key 等）时降级按正则结果点火。
-  - 输入边界：Jev 只看到当条事件文本，前面标明是谁说的，如 `用户对 AI 说：「……」`、`AI 对用户说：「……」`，看不到上下文历史。`tool_result` 在 Jev 那里是 `AI 调用工具 Bash 后，工具 Bash 返回：「……」`，只精确到工具名，Jev 不知道你敲的具体命令。
-  - 出题规范：写一道单凭当条文本就能判断的是非题，写清这段文本是谁对谁说的、要判断的是它在表明什么；想排除的情形也写进问题里。如 `--jev "用户对 AI 说的这句话，是在表明用户自己同意 AI 把内容发出去吗？（转述别人的话、否定、提问都不算）"`。
+  - 输入边界：
+    - 消息类事件（`user_message` / `model_message`）：Jev 看到当前消息，且**会附带对方上一条消息（截取末尾最多 1500 字符）作为上下文前置**（如 `用户先对 AI 说：「……」\nAI 接着对用户说：「……」\n（要判断的是 AI 接着说的这一条，用户那条只是上文。）`），出题时可以利用上一轮语境。
+    - 工具类事件（`tool_call` / `tool_result`）：Jev 只看到当条事件文本与工具名，看不到历史上下文。`tool_result` 在 Jev 那里是 `AI 调用工具 Bash 后，工具 Bash 返回：「……」`，只精确到工具名，Jev 不知道前文敲的具体命令。
+  - 出题规范：写一道单凭当条文本（及上下文）就能判断的是非题，写清这段文本是谁对谁说的、要判断的是它在表明什么；想排除的情形也写进问题里。如 `--jev "用户对 AI 说的这句话，是在表明用户自己同意 AI 把内容发出去吗？（转述别人的话、否定、提问都不算）"`。
   - 正则配合：仍需配置针对性初筛正则，避免使用 `".*"` 导致每条事件全量请求 Jev 产生延迟与费用。
 
 ### 误报与漏报的调优
 
-改完实测两句：这次的原文，和一句按书腰该响的话。
+CLI 没有 sensor_hook 的试跑命令，只能在在线会话里用真实输入验证。改完实测两句：这次出错的原文，和一句按书腰该响的话；用 `read_hook <名称或ID>` 核对当前正则、`--tool`、`--adapter`、Jev 是否是自己要的，再看提醒有没有按预期出现。
+
+| 现象 | 先怎么调 |
+| :--- | :--- |
+| 引用、举例、否定里出现同样的字也响了（误报） | 在正则前后加上下文收紧；仍分不开就加 `--jev`，把要排除的情形写进是非题 |
+| 该响没响（漏报） | 先看 `event_type` 对不对（用户话是 `user_message`，自己的话是 `model_message`）；再看正则是否太窄、`--tool` 和 `--adapter` 是否写成了别的宿主的叫法 |
+| 加了 Jev 后漏报 | 调低 `--jev-threshold`，或换一道更单刀直入的是非题；先拿几条已知答案的句子试过再上线 |
+| 工具类传感器只在某个宿主不响 | 工具名和参数名按该宿主的叫法写，见上一节 `--tool` 的宿主对照 |
 
 ## on_fire 动作
 
@@ -150,7 +166,7 @@ logic 与 guard 使用 `activation-rule` 连接已经存在的输入节点。下
 | `A → B` | 输入事件依次发生 | 收到 A 后等待 B；顺序推进到终点时成立（使用 Unicode `→`，不接受 `->`） |
 
 - **单前置简写**：logic 与 guard 都可以只绑一个前置（`--activation-rule "A"`），系统归一化为单输入 `AND`，即 A 通电且未被抑制即成立。
-- **单前置要配抑制**：`A UNLESS B` 表达「A 发生了而 B 没发生」，是监督与报警条件的常用形状。若单前置不带任何抑制源，它只是把 A 的电位原样转发一遍，这种情况直接用 A 本身，不要建节点。
+- **单前置要配抑制**：「A 发生了而 B 没发生」是监督与报警条件的常用形状，做法是 logic 节点规则写 `"A"`，再用 `add B inhibition <该节点>`（见第 5 节）把 B 接成抑制源。`UNLESS` 不是 `--activation-rule` 的语法，只是 `read_concept` 题头里对这种结构的显示写法，写进规则会报错。若单前置不带任何抑制源，它只是把 A 的电位原样转发一遍，这种情况直接用 A 本身，不要建节点。
 
 ```text
 create_concept <组合状态名> --role logic --activation-rule "A & B" --content "为什么需要这两个条件，以及它们共同成立表示什么"
@@ -179,9 +195,9 @@ create_concept <守卫名> --role guard --activation-rule "<前置状态名>" --
 set <守卫名> tool_guard <实际工具名> [--args-pattern "参数匹配正则"] [--adapter claude-code|codex|antigravity|opencode|dsh]
 ```
 
-工具名是正则，整串匹配、区分大小写（同上文 `--tool`）；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
+工具名是正则，整串匹配、区分大小写（同上文 `--tool`）；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。注意跨平台与 JSON 转义：Windows 路径在 JSON 里为双反斜杠 `\\`，正则建议用通用通配（如 `path.*target`）以规避斜杠差异，同时注意各宿主参数名区别（如 `"file_path"` 与 `"filePath"`）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
 
-工具名和正则按要管的那个宿主自己的叫法写（各宿主的叫法见第 3 节「配置命令」的 `--tool`），一条守卫只管一个宿主的工具。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
+工具名和正则按要管的那个宿主自己的叫法写（各宿主的叫法见第 3 节 `--tool` 下的宿主对照表），一条守卫只管一个宿主的工具。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
 
 配置后用 `read_hook` 核对匹配范围，用 `read_concept` 看 Circuit 和当前放行条件。
 
