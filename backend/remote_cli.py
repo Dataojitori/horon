@@ -60,7 +60,7 @@ REMOTE_ADAPTER = "remote-api"
 ALLOWED_COMMANDS = frozenset({
     "login", "read_concept", "search_keyword", "search_semantic", "list_concepts", "recent",
     "create_concept", "update", "set", "add", "delete", "place", "cut",
-    "list_tags", "create_tag", "delete_tag", "remind", "inbox", "compile",
+    "list_tags", "create_tag", "delete_tag", "compile",
     "suggest_name", "audit", "batch", "read_hook",
 })
 

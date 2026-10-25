@@ -196,7 +196,6 @@ CREATE INDEX IF NOT EXISTS idx_pn_session ON pending_notifications(session_id);
 > - `concepts.when_to_read` — 1:1 纯文本书腰触发场景（直接挂在 concepts 表，极轻量标量）
 > - `concept_embeddings` — 1:1 书腰嵌入向量表（冷热分离，`intent` 语义搜索专用附加表，1024 维 voyage-4-large）
 > - `concept_transitions` — 注意力路由 `suggest` 数据源
-> - `reminders` — 提醒系统（`remind` / `inbox` 命令依赖）
 > - `schema_migrations` — 迁移版本记录
 > - `v_compose` & `v_concept_tags` — GUI 可读视图保留并适配扁平概念模型
 >

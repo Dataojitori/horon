@@ -363,29 +363,6 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
           </div>
         )}
 
-        {/* ── Reminders ── */}
-        {concept.reminders && concept.reminders.length > 0 && (
-          <div className="inspector-section">
-            <h3 className="section-label">Reminders</h3>
-            <div className="reminder-list">
-              {concept.reminders.map((r) => (
-                <div key={r.id} className="reminder-card">
-                  <div className="reminder-msg">#{r.id}: {r.message}</div>
-                  <div className="reminder-condition">
-                    <span className="field-label">When</span>
-                    <code>{r.condition}</code>
-                  </div>
-                  {r.last_fired_at && (
-                    <div className="reminder-fired">
-                      Last fired: {r.last_fired_at}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
         {/* ── Suggested Next (Attention Routing) ── */}
         {concept.suggested_next && concept.suggested_next.length > 0 && (
           <div className="inspector-section">

@@ -129,15 +129,6 @@ class MutationResult(BaseModel):
     fired_actions: list[FiredAction] = []
 
 
-class ReminderDetail(BaseModel):
-    """read_concept 时附带的 reminder 摘要。"""
-    id: int
-    condition: str
-    message: str
-    created_at: str
-    last_fired_at: str | None = None
-
-
 class ReadResult(BaseModel):
     """read_concept 的完整返回。"""
     id: int
@@ -154,7 +145,6 @@ class ReadResult(BaseModel):
     aliases: list[str] = []
     tags: list[str] = []
     tag_source_info: str | None = None
-    reminders: list[ReminderDetail] = []
     members: list[ComposeMemberDetail] = []
     sensor_hooks: list[SensorHookDetail] = []
     tool_guards: list[ToolGuardDetail] = []

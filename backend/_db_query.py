@@ -12,7 +12,7 @@ from .embedding import embed_texts
 from .llm import EMBEDDING_DIMENSIONS
 from .models import (
     Concept, ComposeMemberDetail, MutationResult, ReadResult,
-    ReminderDetail, TransitionSuggestion,
+    TransitionSuggestion,
     SearchMatch, ConceptSearchResult, SensorHookDetail, ToolGuardDetail, InhibitionDetail,
 )
 
@@ -519,21 +519,6 @@ class QueryMixin:
                 f"Currently used by {ts_row['cnt']} other concept(s)."
             )
 
-        reminders = [
-            ReminderDetail(
-                id=r["id"],
-                condition=r["condition"],
-                message=r["message"],
-                created_at=r["created_at"],
-                last_fired_at=r["last_fired_at"],
-            )
-            for r in self.conn.execute(
-                "SELECT id, condition, message, created_at, last_fired_at "
-                "FROM reminders WHERE concept_id = ? ORDER BY id",
-                (cid,),
-            ).fetchall()
-        ]
-
         suggested_next = self._get_suggested_transitions(cid)
         content_val = row["content"]
         byte_size = len(content_val.encode("utf-8")) if content_val else 0
@@ -553,7 +538,6 @@ class QueryMixin:
             aliases=aliases,
             tags=tags,
             tag_source_info=tag_source_info,
-            reminders=reminders,
             members=members,
             sensor_hooks=sensor_hooks,
             tool_guards=tool_guards,

@@ -46,7 +46,7 @@ WHEN_TO_READ_SIMILAR_THRESHOLD = 0.75
 # 输出：SESSION_ID 取第一个非空的变量值，ADAPTER 是宿主程序名称
 #   （例如 claude-code、codex、antigravity）；
 #   都没有 = 用户在终端手敲，记在离线会话 devonly，ADAPTER 为 None。
-# 读取记录、审计日志、激活状态显示、compile、inbox 都按这个会话算。
+# 读取记录、审计日志、激活状态显示、compile 都按这个会话算。
 # 嵌套启动（在一个宿主里启动另一个宿主）时可能同时存在多个变量，暂不处理。
 _ADAPTER_SESSION_VARS = {
     # dsh 的变量由 Horon 的 dsh 插件只设给它自己起的 cli.py 进程（horon 工具），不进任何 shell，
@@ -232,16 +232,8 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
     # ── 正文内容 ──
     lines.append(result.content if result.content else "(empty)")
 
-    # ── 页脚（仅包含运行时附着物：Reminders 与 联想推荐） ──
+    # ── 页脚（仅包含运行时附着物：联想推荐） ──
     footer_blocks: list[list[str]] = []
-
-    if result.reminders:
-        block = ["[ Reminders ]"]
-        for rem in result.reminders:
-            fired = rem.last_fired_at or "(never)"
-            block.append(f"  #{rem.id}: {rem.message}")
-            block.append(f"    when: {rem.condition} | last fired: {fired}")
-        footer_blocks.append(block)
 
     if result.suggested_next:
         block = [f"[ YOU MAY ALSO NEED ] (move: place <id> --in {result.id} --at <rank> "
@@ -771,26 +763,6 @@ def _build_parser():
     p.add_argument("--out", default=None,
         help="Write content to file instead of stdout")
 
-    # remind (create / list / delete)
-    p = sub.add_parser("remind", allow_abbrev=False,
-        help="Manage reminder rules on concepts.")
-    p.add_argument("concept", nargs="?", default=None,
-        help="Concept to attach reminder to (for create mode)")
-    p.add_argument("--when", default=None,
-        help="Sandbox Python expression as trigger condition")
-    p.add_argument("--msg", default=None,
-        help="Message shown when condition fires")
-    p.add_argument("--list", action="store_true",
-        help="List all reminder rules")
-    p.add_argument("--limit", type=int, default=50)
-    p.add_argument("--offset", type=int, default=0)
-    p.add_argument("--del", type=int, default=None, dest="del_id",
-        help="Delete a reminder by ID")
-
-    # inbox
-    sub.add_parser("inbox", allow_abbrev=False,
-        help="Evaluate all reminder conditions and show triggered ones.")
-
     # search_semantic (semantic search by when_to_read embedding)
     p = sub.add_parser("search_semantic", allow_abbrev=False,
         help="Search concepts by semantic intent (vector similarity on when_to_read).")
@@ -1001,75 +973,6 @@ def _dispatch(args, db):
             Path(args.out).write_text(content, encoding="utf-8")
             return f"Success. Wrote {len(content)} chars to {args.out}"
         return RawOutput(content)
-
-    elif args.command == "remind":
-        if args.list:
-            reminders = db.list_reminders(args.limit, args.offset)
-            if not reminders:
-                return RawOutput("(no reminders)")
-            lines = []
-            for r in reminders:
-                fired = r.get("last_fired_at") or "(never)"
-                lines.append(
-                    f"#{r['id']} [{r['concept_name']} "
-                    f"(id={r['concept_id']})] {r['message']}")
-                lines.append(f"   when: {r['condition']}")
-                lines.append(
-                    f"   created: {r['created_at']} "
-                    f"| last fired: {fired}")
-            total = db.conn.execute(
-                "SELECT COUNT(*) AS cnt FROM reminders"
-            ).fetchone()["cnt"]
-            shown = len(reminders)
-            if total > args.offset + shown:
-                lines.append(
-                    f"\n(showing {args.offset+1}-{args.offset+shown} "
-                    f"of {total} — use --offset {args.offset+shown} "
-                    f"to see more)")
-            return RawOutput("\n".join(lines))
-
-        elif args.del_id is not None:
-            return db.delete_reminder(args.del_id)
-
-        elif args.concept is not None and args.when is not None and args.msg is not None:
-            return db.add_reminder(args.concept, args.when, args.msg)
-
-        else:
-            raise ValueError(
-                "Usage:\n"
-                '  remind <concept> --when <condition> --msg <message>\n'
-                "  remind --list [--limit N] [--offset M]\n"
-                "  remind --del <id>")
-
-    elif args.command == "inbox":
-        result = db.evaluate_inbox()
-        triggered = result["triggered"]
-        errors = result["errors"]
-        quiet = result["quiet_count"]
-
-        if not triggered and not errors:
-            return RawOutput(
-                f"(empty inbox — {quiet} reminder(s) quiet)")
-
-        lines = []
-        if triggered:
-            for r in triggered:
-                lines.append(
-                    f"#{r['id']} [{r['concept_name']} "
-                    f"(id={r['concept_id']})] {r['message']}")
-                lines.append(f"   condition: {r['condition']}")
-        if errors:
-            lines.append("")
-            lines.append("[Errors]")
-            for r in errors:
-                lines.append(
-                    f"#{r['id']} [{r['concept_name']} "
-                    f"(id={r['concept_id']})] {r['message']}")
-                lines.append(f"   condition: {r['condition']}")
-                lines.append(f"   error: {r['error']}")
-        if quiet > 0:
-            lines.append(f"\n--- {quiet} reminder(s) quiet ---")
-        return RawOutput("\n".join(lines))
 
     elif args.command == "compile":
         return db.compile(

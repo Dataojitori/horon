@@ -136,16 +136,6 @@ CREATE TABLE IF NOT EXISTS concept_transitions (
     PRIMARY KEY (from_concept_id, to_concept_id)
 );
 
--- 11. Reminder 系统（轻量级提醒与收件箱）
-CREATE TABLE IF NOT EXISTS reminders (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    concept_id    INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,
-    condition     TEXT NOT NULL,
-    message       TEXT NOT NULL,
-    created_at    TEXT NOT NULL,
-    last_fired_at TEXT
-);
-
 -- 12. 迁移版本记录
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version    TEXT PRIMARY KEY,
@@ -222,7 +212,6 @@ CREATE INDEX IF NOT EXISTS idx_aci_session        ON active_chain_instances(sess
 CREATE INDEX IF NOT EXISTS idx_audit_session      ON cli_audit_log(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_al_concept         ON aliases(concept_id);
 CREATE INDEX IF NOT EXISTS idx_concept_tags_tag   ON concept_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_reminders_concept  ON reminders(concept_id);
 CREATE INDEX IF NOT EXISTS idx_pn_session         ON pending_notifications(session_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_concept  ON snapshots(concept_id);
 

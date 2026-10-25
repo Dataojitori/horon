@@ -6,7 +6,6 @@ duplicating definitions.
 """
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import re
@@ -29,16 +28,6 @@ SYSTEM_TAGS = {"result", "exit", "state", "action", "boot"}
 VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
 OFFLINE_DEV_SESSION_ID = "devonly"
 
-_SANDBOX_ALLOWED_CALLS = frozenset({"exists", "status", "tags"})
-_SANDBOX_ALLOWED_NODES = frozenset({
-    ast.Expression, ast.BoolOp, ast.UnaryOp, ast.Not, ast.And, ast.Or,
-    ast.Compare,
-    ast.Eq, ast.NotEq, ast.Lt, ast.Gt, ast.LtE, ast.GtE,
-    ast.In, ast.NotIn, ast.Is, ast.IsNot,
-    ast.Call, ast.Constant, ast.Name, ast.Load,
-    ast.Tuple, ast.List, ast.Set,
-})
-
 # ── Path / env ───────────────────────────────────────────────────────────────
 
 _PROJECT_DIR = Path(__file__).parent.parent
@@ -53,52 +42,6 @@ def _now():
 
 
 # ── Validators ───────────────────────────────────────────────────────────────
-
-def _validate_condition_ast(expr: str) -> None:
-    """Validate a reminder condition expression for sandbox safety.
-
-    Whitelist approach: only comparison / boolean / whitelisted-call nodes
-    are permitted.  Everything else (imports, attribute access, assignments,
-    lambdas, comprehensions, subscript, …) is rejected outright.
-    """
-    try:
-        tree = ast.parse(expr, mode="eval")
-    except SyntaxError as e:
-        raise ValueError(f"Condition syntax error: {e}") from e
-
-    for node in ast.walk(tree):
-        ntype = type(node)
-        if ntype not in _SANDBOX_ALLOWED_NODES:
-            raise ValueError(
-                f"Forbidden construct in condition: {ntype.__name__}. "
-                f"Only comparisons, boolean logic (and/or/not), and calls "
-                f"to exists/status/tags are allowed.")
-        if ntype is ast.Call:
-            if not isinstance(node.func, ast.Name):
-                raise ValueError(
-                    "Only direct function calls are allowed "
-                    "(exists, status, tags).")
-            if node.func.id not in _SANDBOX_ALLOWED_CALLS:
-                raise ValueError(
-                    f"Function '{node.func.id}' is not allowed. "
-                    f"Allowed: {', '.join(sorted(_SANDBOX_ALLOWED_CALLS))}.")
-            if node.keywords:
-                raise ValueError(
-                    f"Function '{node.func.id}' does not accept keyword arguments.")
-            if len(node.args) != 1:
-                raise ValueError(
-                    f"Function '{node.func.id}' requires exactly 1 argument ({len(node.args)} given).")
-            arg = node.args[0]
-            if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
-                raise ValueError(
-                    f"Function '{node.func.id}' argument must be a string literal.")
-        if ntype is ast.Name and isinstance(node.ctx, ast.Load):
-            allowed_names = _SANDBOX_ALLOWED_CALLS | {"TODAY", "NOW"}
-            if node.id not in allowed_names:
-                raise ValueError(
-                    f"Name '{node.id}' is not available in condition scope. "
-                    f"Available: {', '.join(sorted(allowed_names))}.")
-
 
 def _validate_name(name: str) -> str:
     """校验并清理名字（concept 名或 alias）。返回 strip 后的名字，不合法则 raise。"""

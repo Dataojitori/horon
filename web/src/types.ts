@@ -73,14 +73,6 @@ export interface TransitionSuggestion {
   when_to_read?: string | null;
 }
 
-export interface ReminderDetail {
-  id: number;
-  condition: string;
-  message: string;
-  created_at: string;
-  last_fired_at: string | null;
-}
-
 export interface ConceptDetail {
   id: number;
   name: string;
@@ -96,7 +88,6 @@ export interface ConceptDetail {
   aliases: string[];
   tags: string[];
   tag_source_info: string | null;
-  reminders?: ReminderDetail[];
   members: ComposeMemberDetail[];
   sensor_hooks: SensorHookDetail[];
   tool_guards: ToolGuardDetail[];

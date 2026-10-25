@@ -8,7 +8,6 @@ Module layout:
   _db_concepts.py  — ConceptMixin (create/delete concepts & tags)
   _db_mutations.py — MutationMixin (add / delete / set / update, role/lifespan/hooks/guards)
   _db_query.py     — QueryMixin   (search, read, expressions, relations)
-  _db_reminders.py — ReminderMixin (reminder CRUD, sandbox eval, inbox)
   _db_compile.py   — CompileMixin (backward solver, compile)
   db.py  (this file) — HoronDB assembly + core infrastructure
 """
@@ -20,14 +19,13 @@ import time
 from pathlib import Path
 
 from ._db_common import (
-    _now, _validate_condition_ast, SYSTEM_TAGS, transactional,  # noqa: F401  re-exported
+    _now, SYSTEM_TAGS, transactional,  # noqa: F401  re-exported
     _SCHEMA_PATH, _MIGRATIONS_DIR, OFFLINE_DEV_SESSION_ID,
 )
 from ._db_plugins import PluginMixin
 from ._db_concepts import ConceptMixin
 from ._db_mutations import MutationMixin
 from ._db_query import QueryMixin
-from ._db_reminders import ReminderMixin
 from ._db_compile import CompileMixin
 from ._db_snapshots import SnapshotMixin
 from .evaluator import GraphEvaluator
@@ -64,7 +62,6 @@ class HoronDB(
     ConceptMixin,
     MutationMixin,
     QueryMixin,
-    ReminderMixin,
     CompileMixin,
     SnapshotMixin,
 ):

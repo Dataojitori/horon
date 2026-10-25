@@ -244,7 +244,7 @@ class ConceptMixin:
         if getattr(self, "snapshot_mode", False):
             self.capture_deletion_snapshot(cid)
 
-        # 执行删除（外键约束自动清理 compose_members, aliases, when_to_read, reminders, sensor_hooks, tool_guards, inhibitions 等）
+        # 执行删除（外键约束自动清理 compose_members, aliases, when_to_read, sensor_hooks, tool_guards, inhibitions 等）
         self.conn.execute("DELETE FROM concepts WHERE id = ?", (cid,))
 
         eval_res = self._evaluator().evaluate()
