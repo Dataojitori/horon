@@ -153,11 +153,11 @@
 }
 
 .review-card-deleted {
-  border-left: 4px solid rgb(var(--c-danger) / 0.8);
+  border-left: 3px solid rgb(var(--c-danger) / 0.55);
 }
 
 .review-card-created {
-  border-left: 4px solid rgb(var(--c-ok) / 0.8);
+  border-left: 3px solid rgb(var(--c-ok) / 0.55);
 }
 
 .review-card-header {
@@ -302,14 +302,16 @@
 
 /* ── Diff Viewer ────────────────────────────── */
 
+/* 记忆内容多半是中文叙述，用无衬线正文字体读起来像文章而不是终端输出；
+   只有行号和 +/- 保留等宽，列才对得齐。 */
 .diff-container {
   background: var(--bg-sunken);
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-md);
   overflow-x: auto;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1.6;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.7;
 }
 
 .diff-table {
@@ -332,7 +334,9 @@
   text-align: right;
   padding: 0 8px 0 4px;
   color: var(--text-dim);
+  font-family: var(--font-mono);
   font-size: 11px;
+  line-height: 1.7;
   user-select: none;
   border-right: 1px solid var(--border-glass);
   background: rgb(var(--ink-rgb) / 0.03);
@@ -343,7 +347,8 @@
   text-align: center;
   flex-shrink: 0;
   user-select: none;
-  font-weight: bold;
+  font-family: var(--font-mono);
+  font-weight: 600;
 }
 
 .diff-content {
@@ -357,10 +362,12 @@
   color: var(--text-secondary);
 }
 
+/* 增删只用“淡底色 + 左边一条细色条 + 行首符号”表达，正文字色不变。
+   整行染成绿字/红字是终端 diff 的做法，对比一强就显得像在看日志。 */
 .diff-added {
-  background: rgb(var(--c-ok) / 0.13);
-  color: var(--t-ok);
-  box-shadow: inset 3px 0 0 rgb(var(--c-ok) / 0.75);
+  background: rgb(var(--c-ok) / 0.1);
+  color: var(--text-primary);
+  box-shadow: inset 3px 0 0 rgb(var(--c-ok) / 0.55);
 }
 
 .diff-added .diff-prefix {
@@ -368,11 +375,11 @@
 }
 
 .diff-removed {
-  background: rgb(var(--c-danger) / 0.11);
-  color: var(--t-danger);
+  background: rgb(var(--c-danger) / 0.09);
+  color: var(--text-secondary);
   text-decoration: line-through;
-  text-decoration-color: rgb(var(--c-danger) / 0.45);
-  box-shadow: inset 3px 0 0 rgb(var(--c-danger) / 0.65);
+  text-decoration-color: rgb(var(--c-danger) / 0.4);
+  box-shadow: inset 3px 0 0 rgb(var(--c-danger) / 0.5);
 }
 
 .diff-removed .diff-prefix {

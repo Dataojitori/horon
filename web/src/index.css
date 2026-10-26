@@ -105,53 +105,56 @@
   --selection: rgb(var(--c-accent) / 0.22);
 }
 
-/* ── 暗色：保持原来的深空配色，强调色统一成同一套珊瑚 ───────── */
+/* ── 暗色：夜灯。和亮色同一套暖调——梅炭色的底、奶油色的字、柔和的珊瑚 ─────
+   不用接近纯黑的底、纯白的字和荧光的红绿：那套高对比配色放在终端里很顺眼，
+   放在面向普通用户的产品里就是“黑客风”。
+   原则：底不要比 #1a1519 更黑；字不要比 #ece3dd 更白；语义色全部压低饱和。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --ink-rgb: 255 255 255;
-  --shadow-rgb: 0 0 0;
+  --ink-rgb: 255 236 228; /* 暖白，不是纯白：边框、悬停底、滚动条都带一点暖 */
+  --shadow-rgb: 12 6 10;
 
-  --bg-primary: #0a0a0f;
-  --bg-canvas-glow: #12111b;
-  --bg-secondary: #12121a;
-  --bg-elevated: #191924;
-  --bg-sunken: rgb(var(--ink-rgb) / 0.04);
-  --bg-glass: rgb(18 18 26 / 0.72);
-  --bg-glass-hover: rgb(26 26 38 / 0.9);
+  --bg-primary: #1a1519;
+  --bg-canvas-glow: #271e26;
+  --bg-secondary: #241c23;
+  --bg-elevated: #2e242d;
+  --bg-sunken: rgb(var(--ink-rgb) / 0.045);
+  --bg-glass: rgb(36 28 35 / 0.78);
+  --bg-glass-hover: rgb(46 36 45 / 0.92);
   --bg-hover: rgb(var(--ink-rgb) / 0.06);
 
-  --border-glass: rgb(var(--ink-rgb) / 0.07);
-  --border-glass-hover: rgb(var(--ink-rgb) / 0.15);
+  --border-glass: rgb(var(--ink-rgb) / 0.08);
+  --border-glass-hover: rgb(var(--ink-rgb) / 0.17);
 
-  --text-primary: #e6e3ec;
-  --text-secondary: #9a97ad;
-  --text-dim: #6a6779;
+  --text-primary: #ece3dd;
+  --text-secondary: #b3a4ab;
+  --text-dim: #95858f;
 
-  --c-accent: 244 133 112;
-  --t-accent: #ff9d85;
-  --c-logic: 74 158 255;
-  --t-logic: #6aaeff;
-  --c-or: 168 85 247;
-  --t-or: #c58bff;
-  --c-chain: 0 214 160;
-  --t-chain: #1fe5ac;
-  --c-ok: 34 197 94;
-  --t-ok: #4ade80;
-  --c-warn: 255 176 64;
-  --t-warn: #ffbe53;
-  --c-danger: 239 68 68;
-  --t-danger: #f87171;
+  --c-accent: 240 140 118;
+  --t-accent: #f2a38f;
+  --c-logic: 128 160 232;
+  --t-logic: #9db6ee;
+  --c-or: 178 142 226;
+  --t-or: #c4a6ec;
+  --c-chain: 104 196 170;
+  --t-chain: #86d2b8;
+  --c-ok: 112 190 146; /* 鼠尾草绿 */
+  --t-ok: #9ad4b0;
+  --c-warn: 232 184 108;
+  --t-warn: #ecc27f;
+  --c-danger: 226 116 124; /* 玫瑰红 */
+  --t-danger: #eba0a6;
 
   --accent: rgb(var(--c-accent));
-  --on-accent: #1a0e0b;
+  --on-accent: #2a130e;
 
-  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35), 0 3px 10px -3px rgb(0 0 0 / 0.45);
-  --shadow-md: 0 2px 4px rgb(0 0 0 / 0.3), 0 12px 28px -10px rgb(0 0 0 / 0.6);
-  --shadow-lg: 0 4px 10px rgb(0 0 0 / 0.3), 0 30px 64px -18px rgb(0 0 0 / 0.75);
+  --shadow-xs: 0 1px 2px rgb(var(--shadow-rgb) / 0.4);
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.35), 0 3px 10px -3px rgb(var(--shadow-rgb) / 0.45);
+  --shadow-md: 0 2px 4px rgb(var(--shadow-rgb) / 0.3), 0 12px 28px -10px rgb(var(--shadow-rgb) / 0.6);
+  --shadow-lg: 0 4px 10px rgb(var(--shadow-rgb) / 0.3), 0 30px 64px -18px rgb(var(--shadow-rgb) / 0.7);
 
-  --scrim: rgb(0 0 0 / 0.4);
+  --scrim: rgb(var(--shadow-rgb) / 0.45);
   --selection: rgb(var(--c-accent) / 0.3);
 }
 

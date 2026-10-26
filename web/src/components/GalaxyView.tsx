@@ -56,37 +56,52 @@ interface Palette {
   hoverRing: string;
 }
 
+/**
+ * 远景徽章的淡入：传进来的 a 随缩放在 0.1~0.85 之间变化，
+ * 直接拿它当文字透明度，缩放到 0.5~0.7 时字会被压到看不清（暗色上合成出锈红色，对比度不足 4:1）。
+ * 这里把它压成 0.25~1：刚出现时仍是淡入，到常用缩放区间就接近不透明。
+ */
+function badgeFade(a: number): number {
+  return 0.25 + 0.75 * Math.min(1, a / 0.85);
+}
+
 const PALETTES: Record<Theme, Palette> = {
   dark: {
     pearl: false,
     nodeScale: 1,
+    // 夜灯配色：薰衣草灰 → 暖奶油 → 柔和珊瑚 → 玫瑰红，不用荧光蓝和纯红。
+    // 偏暖的一端比之前提亮：这些点只有 2~4px，颜色太沉会和梅紫底糊成一片锈色。
     stops: [
-      [0, [74, 158, 255]],
-      [1.5, [90, 180, 255]],
-      [3.2, [220, 235, 255]],
-      [4.8, [251, 146, 60]],
-      [8, [239, 68, 68]],
+      [0, [160, 150, 214]],
+      [1.5, [138, 164, 226]],
+      [3.2, [238, 214, 178]],
+      [4.8, [248, 168, 128]],
+      [8, [240, 128, 142]],
     ],
     label: (a) => ({
-      fill: `rgba(220, 230, 250, ${a})`,
-      stroke: `rgba(10, 10, 15, ${a + 0.1})`,
+      fill: `rgba(236, 227, 221, ${Math.min(1, a + 0.2)})`,
+      stroke: `rgba(26, 21, 25, ${Math.min(1, a + 0.2)})`,
     }),
-    badge: (a) => ({
-      bg: `rgba(16, 20, 36, ${a * 0.85})`,
-      border: `rgba(90, 130, 230, ${a * 0.5})`,
-      text: `rgba(200, 225, 255, ${a})`,
-    }),
-    card: {
-      bg: "rgba(8, 12, 24, 0.94)",
-      border: "rgba(100, 160, 255, 0.7)",
-      borderWarn: "rgba(239, 68, 68, 0.85)",
-      title: "#ffffff",
-      sub: "rgba(140, 190, 255, 0.85)",
-      subWarn: "rgba(248, 113, 113, 0.95)",
-      shadow: null,
+    badge: (a) => {
+      const f = badgeFade(a);
+      return {
+        bg: `rgba(52, 40, 50, ${0.6 + 0.35 * f})`,
+        border: `rgba(240, 140, 118, ${0.25 + 0.45 * f})`,
+        // 奶油白而不是珊瑚色：周围满是珊瑚色的点，同色系的字会和它们混在一起
+        text: `rgba(246, 236, 229, ${f})`,
+      };
     },
-    overweightRing: "rgba(239, 68, 68, 0.8)",
-    hoverRing: "#ffffff",
+    card: {
+      bg: "rgba(46, 36, 45, 0.96)",
+      border: "rgba(240, 140, 118, 0.5)",
+      borderWarn: "rgba(226, 116, 124, 0.75)",
+      title: "#ece3dd",
+      sub: "rgba(179, 164, 171, 0.95)",
+      subWarn: "rgba(235, 160, 166, 0.95)",
+      shadow: "rgba(12, 6, 10, 0.5)",
+    },
+    overweightRing: "rgba(240, 128, 142, 0.9)",
+    hoverRing: "rgb(236, 227, 221)",
   },
   light: {
     pearl: true,
@@ -103,11 +118,14 @@ const PALETTES: Record<Theme, Palette> = {
       fill: `rgba(58, 42, 52, ${Math.min(1, a + 0.15)})`,
       stroke: "rgba(250, 243, 235, 0.92)",
     }),
-    badge: (a) => ({
-      bg: `rgba(255, 252, 248, ${a * 0.95})`,
-      border: `rgba(226, 99, 76, ${a * 0.45})`,
-      text: `rgba(150, 56, 38, ${a})`,
-    }),
+    badge: (a) => {
+      const f = badgeFade(a);
+      return {
+        bg: `rgba(255, 252, 248, ${0.6 + 0.35 * f})`,
+        border: `rgba(226, 99, 76, ${0.25 + 0.4 * f})`,
+        text: `rgba(140, 48, 32, ${f})`,
+      };
+    },
     card: {
       bg: "rgba(255, 255, 255, 0.97)",
       border: "rgba(226, 99, 76, 0.6)",
