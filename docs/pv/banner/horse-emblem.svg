@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" width="100%" height="100%">
+  <defs>
+    <linearGradient id="silhouette" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#24292F" />
+      <stop offset="100%" stop-color="#0D1117" />
+    </linearGradient>
+    <linearGradient id="amber" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F59E0B" />
+      <stop offset="50%" stop-color="#FBBF24" />
+      <stop offset="100%" stop-color="#D97706" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#F59E0B" flood-opacity="0.35" />
+    </filter>
+  </defs>
+
+  <g transform="translate(5, 12)">
+    <!-- 远端耳与刀锋鬃毛剪影 -->
+    <path d="M 192 65 C 192 42, 204 24, 216 18 C 218 35, 212 52, 202 68 Z" fill="#3B434D" />
+    <path d="M 168 65 C 132 58, 98 76, 78 102 C 102 92, 124 94, 140 104 
+             C 98 108, 64 136, 48 172 C 78 156, 106 156, 126 166 
+             C 86 180, 56 214, 46 250 C 76 234, 102 232, 120 240 L 165 120 Z" fill="#3B434D" />
+
+    <!-- 远端背景缰绳 -->
+    <path d="M 278 195 C 242 235, 182 258, 105 250" fill="none" stroke="#B45309" stroke-width="6" stroke-linecap="round" opacity="0.6" />
+
+    <!-- 马匹纯黑主剪影 -->
+    <path d="M 66 295 C 58 205, 92 112, 152 72 C 168 42, 185 24, 198 55 
+             C 195 60, 212 66, 225 80 C 242 98, 260 122, 278 145 
+             C 290 160, 304 174, 310 184 C 316 192, 314 202, 306 206 
+             C 298 210, 288 207, 280 200 L 266 190 L 262 195 L 280 208 
+             C 286 213, 287 221, 281 226 C 274 233, 262 232, 250 224 
+             C 238 216, 222 206, 204 201 C 186 197, 168 196, 157 188 
+             C 151 183, 149 178, 150 176 C 146 200, 152 236, 166 262 C 174 276, 183 288, 192 295 
+             C 150 312, 104 312, 66 295 Z" fill="url(#silhouette)" />
+    <path d="M 176 68 C 172 44, 182 22, 196 14 C 201 32, 197 54, 189 70 Z" fill="url(#silhouette)" />
+
+    <!-- 负空间锐利白眼 -->
+    <path d="M 212 114 C 218 108, 228 109, 233 116 C 227 121, 217 121, 212 114 Z" fill="#FFFFFF" />
+
+    <!-- 高亮琥珀金挽具与自我驾驭缰绳 -->
+    <g filter="url(#glow)">
+      <g stroke="url(#amber)" stroke-linecap="round" fill="none">
+        <line x1="184" y1="78" x2="258" y2="182" stroke-width="5" />
+        <line x1="236" y1="200" x2="284" y2="146" stroke-width="5" />
+        <path d="M 180 82 Q 202 92 224 86" stroke-width="4.5" />
+        <path d="M 180 82 Q 150 126 151 178" stroke-width="4" />
+      </g>
+
+      <!-- 主回环 -->
+      <path d="M 250 198 C 232 255, 172 296, 122 274 C 84 257, 90 204, 144 200 C 188 197, 236 200, 280 198" fill="none" stroke="url(#amber)" stroke-width="9" stroke-linecap="round" />
+      <path d="M 250 198 C 232 255, 172 296, 122 274 C 84 257, 90 204, 144 200 C 188 197, 236 200, 280 198" fill="none" stroke="#FEF3C7" stroke-width="1.6" stroke-dasharray="4 5" />
+
+      <!-- 垂尾 -->
+      <path d="M 280 198 C 308 202, 328 224, 324 256 C 321 282, 308 298, 314 320" fill="none" stroke="url(#amber)" stroke-width="8" stroke-linecap="round" />
+      <circle cx="314" cy="320" r="5.5" fill="#EF4444" stroke="#FEF3C7" stroke-width="1.5" />
+
+      <!-- 咬合遮挡与白牙几何块 -->
+      <path d="M 264 185 L 288 196 L 284 203 L 260 192 Z" fill="#0D1117" />
+      <polygon points="274,190 284,195 281,200 271,195" fill="#FFFFFF" />
+      <polygon points="271,201 281,206 278,210 268,205" fill="#FFFFFF" />
+
+      <!-- 节点圆环 -->
+      <circle cx="258" cy="182" r="12" fill="#0D1117" stroke="#FBBF24" stroke-width="5" />
+      <circle cx="258" cy="182" r="4.5" fill="#EF4444" />
+      <circle cx="182" cy="80" r="6" fill="#FBBF24" stroke="#0D1117" stroke-width="2" />
+    </g>
+  </g>
+</svg>

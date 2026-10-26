@@ -1,4 +1,4 @@
-# Horon
+<h1 align="center"><img src="docs/pv/banner/horon-banner.svg" alt="Horon: self-improving harness" width="100%"></h1>
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
