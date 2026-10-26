@@ -55,7 +55,7 @@
 请帮我安装 Horon：阅读 https://github.com/Dataojitori/horon/blob/master/docs/INSTALL.md 并照做。
 ```
 
-支持 **Claude Code**、**Codex**、**Antigravity**。
+支持 **Claude Code**、**Codex**、**Antigravity**、**OpenCode**、**DeepSeek Harness**。
 
 ## 更多
 

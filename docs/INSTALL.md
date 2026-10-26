@@ -4,7 +4,7 @@
 
 ## 0. 先问清楚
 
-- 你是哪种 Agent：Claude Code、Codex，还是 Antigravity？
+- 你是哪种 Agent：Claude Code、Codex、Antigravity、OpenCode，还是 DeepSeek Harness（dsh）？
 - 用户想把 Horon 放在哪个目录（默认 `~/horon`）？
 - 用户有没有 OpenRouter API key？没有也能装，只是 `search_semantic`（按场景语义检索）不可用。
 - 钩子想全局生效（所有项目都用 Horon），还是只在某一个项目里生效？
@@ -49,6 +49,36 @@ cd <HORON_DIR>
 
 **合并，不要覆盖**：用户原有的钩子要保留，把 Horon 的条目加进去。改之前先把原文件给用户看一眼。如果你不确定自己这个版本的配置文件在哪，请查阅你自己的官方文档，不要猜。
 
+### OpenCode 和 DeepSeek Harness：装插件
+
+这两种 Agent 不读上面的钩子配置，而是加载 JS 插件，插件随仓库提供，跳过上面那条生成命令。
+
+**OpenCode**：
+
+1. 新建 `~/.config/opencode/plugin/horon-harness.js`，内容只有一行（路径用正斜杠）：
+
+   ```js
+   export { HoronHarness } from "<HORON_DIR>/backend/harness/opencode-plugin.js"
+   ```
+
+2. 插件默认用 `PATH` 里的 `python` 跑 Horon。你按第 1 步装在 venv 里的话，请用户把用户级环境变量 `HORON_PYTHON` 设成 `<PYTHON>`，否则钩子会因为缺依赖而报错。
+3. 重启 OpenCode。开着 `opencode serve` 或网页版的，也要一起重启。
+
+**DeepSeek Harness（dsh）**：
+
+1. 打开用户所用 profile 的补丁文件 `~/.dsh/profiles/<profile>/cordis.patch.yml`（profile 一般是 `web`），在用户平时用的那个 agent preset 的 `plugins` 列表里加一项。`name` 写 `<HORON_DIR>/backend/harness/dsh-plugin/index.js` 的 file URL（Windows 如 `file:///C:/Users/me/horon/...`，macOS/Linux 如 `file:///home/me/horon/...`）：
+
+   ```yaml
+   - id: horon
+     name: '<index.js 的 file URL>'
+     config:
+       python: <PYTHON>
+   ```
+
+   怎么在补丁文件里给 preset 加插件，以你这个版本 dsh 的文档为准。改之前先把原文件给用户看一眼。
+2. 这个插件同时给你一个 `horon` 工具。dsh 的终端被沙箱限制在工作目录里，写不了 Horon 的数据库，所以在 dsh 里读写记忆都用 `horon` 工具，参数 `args` 就是 `cli.py` 后面那串参数，一项一个，例如 `["login"]`、`["read_concept", "<名称或ID>"]`。
+3. 重启 dsh。
+
 ## 3. 装上说明书（skill）
 
 `<HORON_DIR>/.agents/skills/horon-cli/` 是 Horon 的日常使用说明书（`SKILL.md`），`horon-circuit/` 讲的是怎么搭传感器、电路与工具守卫，`horon-plugin/` 讲的是怎么写 Tag 插件。把它们复制或链接到你的 skill 目录（例如 Claude Code 的 `~/.claude/skills/`）。不确定目录在哪，就查你自己的文档。
@@ -60,9 +90,11 @@ cd <HORON_DIR>
 每次新会话开始时，先运行 login 并读完输出，再读 horon-cli 说明书（login 只给路径，不输出正文）。
 ```
 
+dsh 里把第一行换成：「我的长期记忆是 Horon，位于 <HORON_DIR>，读写都用 `horon` 工具，参数是 cli.py 后面的参数列表。」
+
 ## 4. 验证
 
-请用户重启 Agent，开一个新会话。会话开头应当能看到 `【Horon Harness】` 开头的广播。看到了，就说明钩子接通了。
+请用户重启 Agent，开一个新会话。会话开头应当能看到 `【Horon Harness】` 开头的广播（OpenCode 和 dsh 里，它会跟着用户的第一条消息出现）。看到了，就说明钩子接通了。
 
 然后向用户报告装好了，并问一句：最近有没有哪条规矩，是用户反复提醒你、你却还是会忘的？有的话，你可以当场照着 `horon-circuit` 说明书把它搭成你的第一条电路。
 
