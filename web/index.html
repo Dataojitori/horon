@@ -1,9 +1,32 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#F7EDE2" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <title>Horon</title>
+    <!--
+      首屏绘制前先把主题定下来，避免先闪一下默认色再切换。
+      默认亮色；用户切换过就读 localStorage。键名与取值要和 src/theme.tsx 保持一致。
+    -->
+    <script>
+      (function () {
+        var theme = "light";
+        try {
+          var saved = localStorage.getItem("horon:theme");
+          if (saved === "dark" || saved === "light") theme = saved;
+        } catch (e) {}
+        var root = document.documentElement;
+        root.setAttribute("data-theme", theme);
+        root.style.colorScheme = theme;
+        if (theme === "dark") {
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", "#0a0a0f");
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

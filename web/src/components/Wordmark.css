@@ -1,0 +1,45 @@
+.wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-display);
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: 0.005em;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 句点：随字号缩放（em），落在基线上 */
+.wordmark-dot {
+  flex-shrink: 0;
+  width: 0.17em;
+  height: 0.17em;
+  margin-left: 0.09em;
+  border-radius: 50%;
+  background: rgb(var(--c-accent));
+}
+
+.wordmark.is-loading .wordmark-dot {
+  animation: wordmark-dot-pulse 1.8s ease-in-out infinite;
+}
+
+.wordmark.is-error .wordmark-dot {
+  background: var(--text-dim);
+  opacity: 0.6;
+}
+
+@keyframes wordmark-dot-pulse {
+  0%,
+  100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wordmark.is-loading .wordmark-dot {
+    animation: none;
+  }
+}

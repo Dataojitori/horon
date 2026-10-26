@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type CSSProperties } from "react";
 import { api } from "./api";
 import type { GraphData, ViewMode, ConceptDetail, SessionInfo } from "./types";
 import GalaxyView from "./components/GalaxyView";
@@ -6,7 +6,12 @@ import DissectionView from "./components/DissectionView";
 import InspectorSidebar from "./components/InspectorSidebar";
 import SearchBar from "./components/SearchBar";
 import ReviewView from "./components/ReviewView";
+import ThemeToggle from "./components/ThemeToggle";
+import Wordmark from "./components/Wordmark";
 import "./App.css";
+
+// 顶栏三个模式按钮的顺序；滑块位置按它算
+const MODE_ORDER: ViewMode[] = ["galaxy", "dissection", "review"];
 
 // 下拉菜单里一个会话的显示文字，例如 "claude-code · 3m ago · 99bc279f"
 function sessionLabel(s: SessionInfo): string {
@@ -20,8 +25,8 @@ function sessionLabel(s: SessionInfo): string {
 function LoadingScreen() {
   return (
     <div className="loading-screen">
-      <div className="loading-spinner" />
-      <p>Loading graph...</p>
+      <Wordmark size={56} state="loading" />
+      <p className="loading-text">Loading graph…</p>
     </div>
   );
 }
@@ -29,7 +34,8 @@ function LoadingScreen() {
 function ErrorScreen({ error }: { error: string }) {
   return (
     <div className="loading-screen error">
-      <p>Failed to connect to Horon API</p>
+      <Wordmark size={56} state="error" />
+      <p className="error-title">Failed to connect to Horon API</p>
       <p className="error-detail">{error}</p>
       <p className="error-hint">
         Make sure the API server is running on port 8710
@@ -160,9 +166,13 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
       <header className="topbar">
         <div className="topbar-left">
           <h1 className="logo">
-            <span className="logo-glyph">&#x25C9;</span> Horon
+            <Wordmark />
           </h1>
-          <div className="mode-switcher">
+          <div
+            className="mode-switcher"
+            style={{ "--i": MODE_ORDER.indexOf(mode) } as CSSProperties}
+          >
+            <span className="mode-thumb" aria-hidden="true" />
             <button
               className={`mode-btn ${mode === "galaxy" ? "active" : ""}`}
               onClick={() => {
@@ -201,46 +211,53 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
           <SearchBar onSelect={handleSearchSelect} />
         </div>
         <div className="topbar-right">
-          {/* 获得焦点时刷新列表，让「几分钟前」和最近的会话保持最新 */}
-          <select
-            className="session-select"
-            title="节点的激活状态按这个会话显示"
-            value={session}
-            onFocus={() =>
-              api
-                .getSessions()
-                .then((freshSessions) => {
-                  const selectedSessionId = sessionRef.current;
-                  setSessions((currentSessions) => {
-                    if (freshSessions.some((item) => item.session_id === selectedSessionId)) {
-                      return freshSessions;
-                    }
-                    const selected = currentSessions.find(
-                      (item) => item.session_id === selectedSessionId,
-                    );
-                    return selected ? [selected, ...freshSessions] : freshSessions;
-                  });
-                })
-                .catch((e) => console.error("Failed to fetch sessions", e))
-            }
-            onChange={(e) => {
-              // 切换会话时立刻废弃尚未完成的详情请求，避免旧会话的结果随后打开侧栏。
-              inspectRequestId.current += 1;
-              setSession(e.target.value);
-            }}
-          >
-            {sessions.map((s) => (
-              <option key={s.session_id} value={s.session_id}>
-                {sessionLabel(s)}
-              </option>
-            ))}
-          </select>
           {graphData && (
             <span className="stat">
-              {graphData.nodes.length} concepts &middot;{" "}
-              {graphData.links.length} links
+              <strong>{graphData.nodes.length}</strong> concepts
+              <span className="stat-dot" aria-hidden="true" />
+              <strong>{graphData.links.length}</strong> links
             </span>
           )}
+          {/* 获得焦点时刷新列表，让「几分钟前」和最近的会话保持最新 */}
+          <div className="session-select-wrap">
+            <select
+              className="session-select"
+              title="节点的激活状态按这个会话显示"
+              value={session}
+              onFocus={() =>
+                api
+                  .getSessions()
+                  .then((freshSessions) => {
+                    const selectedSessionId = sessionRef.current;
+                    setSessions((currentSessions) => {
+                      if (freshSessions.some((item) => item.session_id === selectedSessionId)) {
+                        return freshSessions;
+                      }
+                      const selected = currentSessions.find(
+                        (item) => item.session_id === selectedSessionId,
+                      );
+                      return selected ? [selected, ...freshSessions] : freshSessions;
+                    });
+                  })
+                  .catch((e) => console.error("Failed to fetch sessions", e))
+              }
+              onChange={(e) => {
+                // 切换会话时立刻废弃尚未完成的详情请求，避免旧会话的结果随后打开侧栏。
+                inspectRequestId.current += 1;
+                setSession(e.target.value);
+              }}
+            >
+              {sessions.map((s) => (
+                <option key={s.session_id} value={s.session_id}>
+                  {sessionLabel(s)}
+                </option>
+              ))}
+            </select>
+            <svg className="session-chevron" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
+              <path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+          <ThemeToggle />
         </div>
       </header>
 

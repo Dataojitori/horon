@@ -3,8 +3,29 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary);
   cursor: grab;
+  /* 点阵底：像一张摊开的工作台。背景位置和间距由 DissectionView.tsx 跟随平移/缩放写入 */
+  background-color: var(--bg-primary);
+  background-image: radial-gradient(
+    circle,
+    rgb(var(--ink-rgb) / 0.16) 1.2px,
+    transparent 1.5px
+  );
+  background-size: 28px 28px;
+}
+
+/* 中心略亮的柔光，盖在点阵之上、卡片之下 */
+.dissection-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse 70% 60% at 50% 48%,
+    var(--bg-canvas-glow) 0%,
+    transparent 100%
+  );
+  opacity: 0.7;
+  pointer-events: none;
 }
 
 .dissection-container:active {
@@ -17,7 +38,7 @@
   left: 0;
   width: 100%;
   height: 100%;
-  will-change: transform;
+  /* 不加 will-change: transform：它会把文字按初始倍率栅格化一次，之后缩放就是在拉伸一张位图，文字会糊 */
 }
 
 .dissection-loading {
@@ -37,38 +58,47 @@
 
 .dissection-error-title {
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
 }
 
 .dissection-error-detail {
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 12.5px;
   max-width: 480px;
   word-break: break-word;
 }
 
 .back-btn {
   position: absolute;
-  top: 12px;
-  left: 12px;
+  top: 16px;
+  left: 16px;
   z-index: 20;
-  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px 7px 13px;
   border: 1px solid var(--border-glass);
   background: var(--bg-glass);
-  backdrop-filter: blur(12px);
   color: var(--text-secondary);
   font-family: var(--font-sans);
-  font-size: 12px;
-  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
-  transition: all 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    background-color 0.15s,
+    box-shadow 0.2s;
 }
 
 .back-btn:hover {
   color: var(--text-primary);
   border-color: var(--border-glass-hover);
   background: var(--bg-glass-hover);
+  box-shadow: var(--shadow-md);
 }
 
 /* ── SVG link layer ────────────────── */
@@ -104,8 +134,10 @@
 }
 
 .link-label-group.clickable:hover .link-label-bg {
-  fill: var(--border-focus);
-  opacity: 0.98 !important;
+  fill: var(--bg-elevated);
+  stroke: rgb(var(--c-accent) / 0.5);
+  stroke-width: 1px;
+  opacity: 1 !important;
 }
 
 .link-label-group.clickable:hover .link-label {
@@ -121,9 +153,9 @@
   user-select: none;
   pointer-events: none;
   fill: var(--bg-primary);
-  opacity: 0.85;
-  rx: 4;
-  ry: 4;
+  opacity: 0.9;
+  rx: 8;
+  ry: 8;
 }
 
 .negated-badge-circle {
@@ -140,66 +172,73 @@
 
 /* ── Geofence Container ──────────────── */
 
+/* --geo 是这个容器的“模式色”（三元组）：默认中性，AND/OR/CHAIN 各一个色 */
 .geofence-circle {
+  --geo: var(--ink-rgb);
+  --geo-a: 0.2;
   transition: border-color 0.3s, box-shadow 0.3s, background 0.3s;
-  border: 2px dashed rgba(74, 158, 255, 0.25);
-  background: radial-gradient(circle, rgba(74, 158, 255, 0.03) 0%, rgba(0, 0, 0, 0.25) 100%);
-  box-shadow: inset 0 0 40px rgba(74, 158, 255, 0.05), 0 0 30px rgba(74, 158, 255, 0.02);
+  border: 2px dashed rgb(var(--geo) / var(--geo-a));
+  background: radial-gradient(
+    circle,
+    rgb(var(--geo) / 0.015) 0%,
+    rgb(var(--geo) / 0.06) 100%
+  );
+  box-shadow: inset 0 0 50px rgb(var(--geo) / 0.05);
 }
 
 .geofence-circle.mode-and {
-  border: 2px solid rgba(74, 158, 255, 0.38);
-  background: radial-gradient(circle, rgba(74, 158, 255, 0.05) 0%, rgba(0, 0, 0, 0.3) 100%);
-  box-shadow: inset 0 0 50px rgba(74, 158, 255, 0.08), 0 0 30px rgba(74, 158, 255, 0.04);
+  --geo: var(--c-logic);
+  --geo-a: 0.45;
+  border-style: solid;
 }
 
 .geofence-circle.mode-or {
-  border: 2px dashed rgba(192, 132, 252, 0.45);
-  background: radial-gradient(circle, rgba(168, 85, 247, 0.05) 0%, rgba(0, 0, 0, 0.3) 100%);
-  box-shadow: inset 0 0 50px rgba(168, 85, 247, 0.08), 0 0 30px rgba(168, 85, 247, 0.04);
+  --geo: var(--c-or);
+  --geo-a: 0.5;
 }
 
 .geofence-circle.mode-chain {
-  border: 2px solid rgba(0, 229, 163, 0.4);
-  background: radial-gradient(circle, rgba(0, 229, 163, 0.04) 0%, rgba(0, 0, 0, 0.3) 100%);
-  box-shadow: inset 0 0 50px rgba(0, 229, 163, 0.08), 0 0 30px rgba(0, 229, 163, 0.04);
+  --geo: var(--c-chain);
+  --geo-a: 0.5;
+  border-style: solid;
 }
 
 .geofence-header {
   position: absolute;
-  top: -46px;
-  left: 50%;
-  transform: translateX(-50%);
+  top: -52px;
+  /* 用 auto 边距居中，不用 left:50% + translateX(-50%)：后者在宽度为奇数时会让文字落在半个像素上 */
+  left: 0;
+  right: 0;
+  width: max-content;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  background: var(--bg-glass);
-  backdrop-filter: blur(14px);
-  padding: 6px 16px;
-  border-radius: 16px;
-  border: 1px solid rgba(74, 158, 255, 0.3);
-  box-shadow: 
-    0 4px 16px rgba(0, 0, 0, 0.3),
-    0 0 20px rgba(74, 158, 255, 0.12);
-  transition: all 0.2s ease-in-out;
+  gap: 6px;
+  background: var(--bg-elevated);
+  padding: 9px 20px 10px;
+  border-radius: var(--radius-lg);
+  border: 1px solid rgb(var(--geo) / 0.35);
+  box-shadow: var(--shadow-md);
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s,
+    transform 0.25s var(--ease-out);
   user-select: none;
   white-space: nowrap;
 }
 
 .geofence-header:hover {
-  border-color: var(--accent-blue);
-  box-shadow: 
-    0 4px 20px rgba(0, 0, 0, 0.4),
-    0 0 25px rgba(74, 158, 255, 0.25);
-  transform: translateX(-50%) scale(1.02);
+  border-color: rgb(var(--geo) / 0.7);
+  box-shadow: var(--shadow-lg);
+  transform: translateY(-1px);
 }
 
 .geofence-title {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
   color: var(--text-primary);
-  text-shadow: 0 0 10px rgba(74, 158, 255, 0.3);
   font-family: var(--font-sans);
 }
 
@@ -210,48 +249,49 @@
 }
 
 .geofence-badge {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   font-family: var(--font-mono);
-  padding: 1px 6px;
-  border-radius: 4px;
-  letter-spacing: 0.5px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  letter-spacing: 0.04em;
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
 }
 
 .geofence-badge.mode-and {
-  background: rgba(74, 158, 255, 0.18);
-  color: #60a5fa;
-  border: 1px solid rgba(96, 165, 250, 0.35);
+  background: rgb(var(--c-logic) / 0.13);
+  color: var(--t-logic);
 }
 
 .geofence-badge.mode-or {
-  background: rgba(168, 85, 247, 0.18);
-  color: #c084fc;
-  border: 1px solid rgba(192, 132, 252, 0.35);
+  background: rgb(var(--c-or) / 0.13);
+  color: var(--t-or);
 }
 
 .geofence-badge.mode-chain {
-  background: rgba(0, 200, 150, 0.18);
-  color: #00e5a3;
-  border: 1px solid rgba(0, 229, 163, 0.35);
+  background: rgb(var(--c-chain) / 0.14);
+  color: var(--t-chain);
 }
 
 .geofence-badge.status-active {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-  border: 1px solid rgba(74, 222, 128, 0.35);
+  background: rgb(var(--c-ok) / 0.14);
+  color: var(--t-ok);
 }
 
 .geofence-badge.status-inactive {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-sunken);
   color: var(--text-dim);
-  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .geofence-badge.members-count {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-sunken);
   color: var(--text-secondary);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.geofence-badge.size-warning {
+  background: rgb(var(--c-danger) / 0.13);
+  color: var(--t-danger);
 }
 
 /* ── Node cards ────────────────────── */
@@ -262,8 +302,7 @@
   left: 0;
   z-index: 10;
   cursor: grab;
-  transition: box-shadow 0.2s, border-color 0.2s;
-  will-change: transform;
+  transition: box-shadow 0.2s, border-color 0.2s, background-color 0.2s;
   user-select: none;
 }
 
@@ -274,53 +313,45 @@
 /* ── Internal sub-elements ──────────── */
 
 .dissection-node.internal {
-  padding: 8px 14px;
-  background: rgba(22, 26, 40, 0.85);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(74, 158, 255, 0.25);
-  border-radius: 6px;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+  padding: 10px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid rgb(var(--c-accent) / 0.28);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
 }
 
 .dissection-node.internal:hover {
-  border-color: var(--accent-blue);
-  background: rgba(74, 158, 255, 0.12);
-  box-shadow: 
-    0 0 14px rgba(74, 158, 255, 0.25),
-    0 4px 14px rgba(0, 0, 0, 0.25);
+  border-color: rgb(var(--c-accent) / 0.7);
+  box-shadow: var(--shadow-md), 0 0 0 4px rgb(var(--c-accent) / 0.1);
 }
 
 .dissection-node.internal .node-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.dissection-node.internal:hover .node-name {
-  color: #fff;
-}
-
 .dissection-node.internal .node-when-to-read {
-  font-size: 10px;
-  margin-top: 2px;
-  max-width: 160px;
+  font-size: 11px;
+  margin-top: 3px;
+  max-width: 180px;
   color: var(--text-secondary);
 }
 
 /* ── External neighbors ─────────────── */
 
 .dissection-node.neighbor {
-  padding: 8px 14px;
+  padding: 9px 15px;
   background: var(--bg-glass);
-  backdrop-filter: blur(12px);
   border: 1px solid var(--border-glass);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-xs);
 }
 
 .dissection-node.neighbor:hover {
   border-color: var(--border-glass-hover);
   background: var(--bg-glass-hover);
-  box-shadow: 0 0 16px rgba(155, 109, 255, 0.1);
+  box-shadow: var(--shadow-md);
 }
 
 .node-name {
@@ -333,10 +364,10 @@
 
 .node-when-to-read {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   margin-top: 2px;
-  max-width: 140px;
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

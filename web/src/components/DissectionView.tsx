@@ -14,6 +14,9 @@ import { api } from "../api";
 import { formatBytes, type NeighborhoodData, type ConceptDetail } from "../types";
 import "./DissectionView.css";
 
+// 背景点阵的间距（px，缩放为 1 时）
+const GRID_SIZE = 28;
+
 interface Props {
   focalId: number;
   session: string; // 激活状态按这个会话显示
@@ -494,11 +497,18 @@ export default function DissectionView({
         }
 
         // 3. Update DOM node positions
+        // 仿真算出来的坐标是小数，再配上 translate(-50%, -50%)（奇数宽度会落在半个像素上），
+        // 每张卡片的文字都落在不同的亚像素位置，于是有的清楚有的发虚。
+        // 这里把左上角吸附到物理像素（按 devicePixelRatio，125% 缩放下 1 个 CSS 像素 = 1.25 个物理像素），
+        // 卡片尺寸用已缓存的整数宽高，自己算居中，不再用百分比平移。
+        const dpr = window.devicePixelRatio || 1;
+        const snap = (v: number) => Math.round(v * dpr) / dpr;
         nodes.forEach((node) => {
           if (node.isFocal) return;
           const el = nodesRef.current.get(node.id);
           if (el) {
-            el.style.transform = `translate(${node.x ?? 0}px, ${node.y ?? 0}px) translate(-50%, -50%)`;
+            const { w, h } = getNodeDimensions(node);
+            el.style.transform = `translate(${snap((node.x ?? 0) - w / 2)}px, ${snap((node.y ?? 0) - h / 2)}px)`;
           }
         });
 
@@ -826,11 +836,18 @@ export default function DissectionView({
   const internalMembersList = getInternalMembers(focal);
   const cx = dimensions.width / 2;
   const cy = dimensions.height / 2;
+  const dpr = window.devicePixelRatio || 1;
+  const snapPx = (v: number) => Math.round(v * dpr) / dpr;
 
   return (
     <div
       ref={containerRef}
       className="dissection-container"
+      // 点阵底跟着平移/缩放走，画布才像一整张可以推拉的桌面
+      style={{
+        backgroundPosition: `${pan.x + dimensions.width / 2}px ${pan.y + dimensions.height / 2}px`,
+        backgroundSize: `${GRID_SIZE * zoom}px ${GRID_SIZE * zoom}px`,
+      }}
       onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
@@ -844,7 +861,8 @@ export default function DissectionView({
       <div
         className="dissection-canvas"
         style={{
-          transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+          // 平移也吸附到物理像素，缩放为 1 时文字才不会落在半像素上
+          transform: `translate(${Math.round(pan.x * dpr) / dpr}px, ${Math.round(pan.y * dpr) / dpr}px) scale(${zoom})`,
           transformOrigin: `${dimensions.width / 2}px ${dimensions.height / 2}px`,
         }}
       >
@@ -939,7 +957,7 @@ export default function DissectionView({
                     <rect className="link-label-bg" style={!isInternal ? { opacity: 0.92 } : undefined} />
                     <text
                       className="link-label"
-                      fill={isInternal ? "var(--accent-blue)" : "var(--text-secondary)"}
+                      fill={isInternal ? "var(--t-accent)" : "var(--text-secondary)"}
                       fontSize="10px"
                       fontFamily={isInternal ? "var(--font-mono)" : "var(--font-sans)"}
                       fontWeight={isInternal ? "600" : "500"}
@@ -967,11 +985,11 @@ export default function DissectionView({
           className={`geofence-circle ${focal.activation_type ? `mode-${focal.activation_type.toLowerCase()}` : ""}`}
           style={{
             position: "absolute",
-            left: cx,
-            top: cy,
+            // 不用 translate(-50%, -50%) 居中：容器宽度是奇数时圆心会落在半个像素上，里面的标题文字就虚了
+            left: snapPx(cx - CONTAINER_RADIUS),
+            top: snapPx(cy - CONTAINER_RADIUS),
             width: CONTAINER_RADIUS * 2,
             height: CONTAINER_RADIUS * 2,
-            transform: "translate(-50%, -50%)",
             borderRadius: "50%",
             pointerEvents: "none",
             zIndex: 1,
@@ -1003,12 +1021,7 @@ export default function DissectionView({
               </span>
               {focal.byte_size !== undefined && focal.byte_size > 0 && (
                 <span
-                  className="geofence-badge"
-                  style={
-                    focal.byte_size >= 4800
-                      ? { color: "#f87171", borderColor: "rgba(239, 68, 68, 0.4)", background: "rgba(239, 68, 68, 0.15)" }
-                      : { color: "#94a3b8", borderColor: "rgba(255, 255, 255, 0.12)", background: "rgba(255, 255, 255, 0.04)" }
-                  }
+                  className={`geofence-badge size-badge ${focal.byte_size >= 4800 ? "size-warning" : ""}`}
                   title={`正文大小: ${formatBytes(focal.byte_size)}`}
                 >
                   {focal.byte_size >= 4800 ? `⚠ ${formatBytes(focal.byte_size)}` : formatBytes(focal.byte_size)}

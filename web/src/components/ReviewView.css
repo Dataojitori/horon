@@ -10,56 +10,64 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 24px;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-glass);
+  gap: 16px;
+  padding: 18px 32px;
   flex-shrink: 0;
 }
 
 .review-toolbar-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  flex-wrap: wrap;
+  gap: 12px 14px;
+  min-width: 0;
 }
 
 .review-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
   color: var(--text-primary);
   margin: 0;
 }
 
 .review-badge-count {
   font-size: 12px;
-  font-family: var(--font-mono);
-  padding: 2px 8px;
-  border-radius: 12px;
-  background: rgba(74, 158, 255, 0.15);
-  color: var(--accent-blue);
-  border: 1px solid rgba(74, 158, 255, 0.25);
+  font-weight: 600;
+  padding: 3px 12px;
+  border-radius: var(--radius-pill);
+  background: rgb(var(--c-accent) / 0.12);
+  color: var(--t-accent);
+  white-space: nowrap;
 }
 
 .review-btn-secondary {
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 500;
   font-family: var(--font-sans);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-glass);
   color: var(--text-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-xs);
   cursor: pointer;
-  transition: all 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s,
+    box-shadow 0.2s;
 }
 
 .review-btn-secondary:hover {
-  background: rgba(255, 255, 255, 0.1);
+  border-color: var(--border-glass-hover);
   color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
 }
 
 .review-content {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 8px 32px 32px;
 }
 
 .review-loading {
@@ -73,10 +81,12 @@
 }
 
 .review-error-banner {
-  padding: 12px 24px;
-  background: rgba(255, 85, 102, 0.15);
-  border-bottom: 1px solid rgba(255, 85, 102, 0.3);
-  color: var(--accent-red);
+  margin: 0 32px 8px;
+  padding: 12px 18px;
+  background: rgb(var(--c-danger) / 0.09);
+  border: 1px solid rgb(var(--c-danger) / 0.22);
+  border-radius: var(--radius-md);
+  color: var(--t-danger);
   font-size: 13px;
 }
 
@@ -91,27 +101,28 @@
 }
 
 .review-empty-icon {
-  width: 56px;
-  height: 56px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
-  background: rgba(0, 212, 170, 0.1);
-  color: var(--accent-cyan);
+  background: rgb(var(--c-ok) / 0.12);
+  color: var(--t-ok);
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 28px;
-  margin-bottom: 16px;
-  border: 1px solid rgba(0, 212, 170, 0.2);
+  margin-bottom: 20px;
+  box-shadow: 0 0 0 8px rgb(var(--c-ok) / 0.06);
 }
 
 .review-empty-state h3 {
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 650;
   color: var(--text-primary);
   margin-bottom: 6px;
 }
 
 .review-empty-state p {
-  font-size: 13px;
+  font-size: 13.5px;
   color: var(--text-dim);
 }
 
@@ -128,29 +139,32 @@
 .review-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border-glass);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
-  transition: border-color 0.15s;
+  transition:
+    border-color 0.15s,
+    box-shadow 0.25s;
 }
 
 .review-card:hover {
   border-color: var(--border-glass-hover);
+  box-shadow: var(--shadow-md);
 }
 
 .review-card-deleted {
-  border-left: 3px solid var(--accent-red);
+  border-left: 4px solid rgb(var(--c-danger) / 0.8);
 }
 
 .review-card-created {
-  border-left: 3px solid var(--accent-cyan);
+  border-left: 4px solid rgb(var(--c-ok) / 0.8);
 }
 
 .review-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.02);
+  padding: 16px 22px;
   border-bottom: 1px solid var(--border-glass);
   flex-wrap: wrap;
   gap: 12px;
@@ -161,6 +175,7 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .concept-id-tag {
@@ -170,61 +185,41 @@
 }
 
 .concept-name-link {
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
   color: var(--text-primary);
   cursor: pointer;
   transition: color 0.15s;
 }
 
 .concept-name-link:hover {
-  color: var(--accent-blue);
+  color: var(--t-accent);
   text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .badge {
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding: 2px 7px;
-  border-radius: 4px;
+  letter-spacing: 0.05em;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
 }
 
 .badge-deleted {
-  background: rgba(255, 85, 102, 0.2);
-  color: var(--accent-red);
-  border: 1px solid rgba(255, 85, 102, 0.3);
+  background: rgb(var(--c-danger) / 0.12);
+  color: var(--t-danger);
 }
 
 .badge-created {
-  background: rgba(0, 212, 170, 0.2);
-  color: var(--accent-cyan);
-  border: 1px solid rgba(0, 212, 170, 0.3);
-}
-
-.role-plain {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-secondary);
-}
-
-.role-sensor {
-  background: rgba(0, 200, 150, 0.15);
-  color: var(--accent-cyan);
-}
-
-.role-logic {
-  background: rgba(155, 109, 255, 0.15);
-  color: var(--accent-purple);
-}
-
-.role-guard {
-  background: rgba(255, 176, 64, 0.15);
-  color: var(--accent-amber);
+  background: rgb(var(--c-ok) / 0.14);
+  color: var(--t-ok);
 }
 
 .snapshot-timestamp {
-  font-size: 11px;
+  font-size: 12px;
   font-family: var(--font-mono);
   color: var(--text-dim);
   margin-left: 4px;
@@ -237,14 +232,21 @@
 }
 
 .review-btn {
-  padding: 6px 14px;
-  font-size: 12px;
+  padding: 7px 16px;
+  font-size: 13px;
   font-family: var(--font-sans);
-  font-weight: 500;
-  border-radius: 5px;
+  font-weight: 600;
+  border-radius: var(--radius-pill);
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all 0.15s;
+  transition:
+    background-color 0.15s,
+    border-color 0.15s,
+    transform 0.15s var(--ease-out);
+}
+
+.review-btn:active:not(:disabled) {
+  transform: scale(0.97);
 }
 
 .review-btn:disabled {
@@ -253,61 +255,61 @@
 }
 
 .review-btn-approve {
-  background: rgba(0, 212, 170, 0.15);
-  border-color: rgba(0, 212, 170, 0.3);
-  color: var(--accent-cyan);
+  background: rgb(var(--c-ok) / 0.14);
+  border-color: rgb(var(--c-ok) / 0.28);
+  color: var(--t-ok);
 }
 
 .review-btn-approve:hover:not(:disabled) {
-  background: rgba(0, 212, 170, 0.25);
-  border-color: var(--accent-cyan);
+  background: rgb(var(--c-ok) / 0.24);
+  border-color: rgb(var(--c-ok) / 0.55);
 }
 
 .review-btn-rollback {
-  background: rgba(255, 85, 102, 0.12);
-  border-color: rgba(255, 85, 102, 0.25);
-  color: var(--accent-red);
+  background: rgb(var(--c-danger) / 0.1);
+  border-color: rgb(var(--c-danger) / 0.24);
+  color: var(--t-danger);
 }
 
 .review-btn-rollback:hover:not(:disabled) {
-  background: rgba(255, 85, 102, 0.22);
-  border-color: var(--accent-red);
+  background: rgb(var(--c-danger) / 0.18);
+  border-color: rgb(var(--c-danger) / 0.5);
 }
 
 .review-card-body {
-  padding: 16px 18px;
+  padding: 18px 22px 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 18px;
 }
 
 .change-section-title {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--text-secondary);
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 
 .field-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--accent-blue);
+  background: var(--accent);
 }
 
 /* ── Diff Viewer ────────────────────────────── */
 
 .diff-container {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--bg-sunken);
   border: 1px solid var(--border-glass);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow-x: auto;
   font-family: var(--font-mono);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
 .diff-table {
@@ -322,23 +324,22 @@
   padding: 1px 0;
 }
 
+/* 行号只有一列，数的是“现在这一版”的行号（旧版行号不显示）。
+   改动靠行首的色条、+/- 符号和整行底色来认。 */
 .diff-gutter {
-  width: 34px;
+  width: 44px;
   flex-shrink: 0;
   text-align: right;
-  padding: 0 6px;
+  padding: 0 8px 0 4px;
   color: var(--text-dim);
-  user-select: none;
   font-size: 11px;
-  background: rgba(0, 0, 0, 0.15);
-}
-
-.diff-gutter-new {
+  user-select: none;
   border-right: 1px solid var(--border-glass);
+  background: rgb(var(--ink-rgb) / 0.03);
 }
 
 .diff-prefix {
-  width: 20px;
+  width: 24px;
   text-align: center;
   flex-shrink: 0;
   user-select: none;
@@ -347,7 +348,7 @@
 
 .diff-content {
   flex: 1;
-  padding: 0 8px;
+  padding: 0 10px;
   white-space: pre-wrap;
   word-break: break-all;
 }
@@ -357,27 +358,29 @@
 }
 
 .diff-added {
-  background: rgba(0, 212, 170, 0.1);
-  color: #a7f3d0;
+  background: rgb(var(--c-ok) / 0.13);
+  color: var(--t-ok);
+  box-shadow: inset 3px 0 0 rgb(var(--c-ok) / 0.75);
 }
 
 .diff-added .diff-prefix {
-  color: var(--accent-cyan);
+  color: var(--t-ok);
 }
 
 .diff-removed {
-  background: rgba(255, 85, 102, 0.12);
-  color: #fca5a5;
+  background: rgb(var(--c-danger) / 0.11);
+  color: var(--t-danger);
   text-decoration: line-through;
-  text-decoration-color: rgba(255, 85, 102, 0.5);
+  text-decoration-color: rgb(var(--c-danger) / 0.45);
+  box-shadow: inset 3px 0 0 rgb(var(--c-danger) / 0.65);
 }
 
 .diff-removed .diff-prefix {
-  color: var(--accent-red);
+  color: var(--t-danger);
 }
 
 .diff-empty {
-  padding: 8px 12px;
+  padding: 10px 14px;
   color: var(--text-dim);
   font-style: italic;
 }
@@ -385,21 +388,21 @@
 /* ── Deletion specific ───────────────────────── */
 
 .deletion-banner {
-  padding: 10px 14px;
-  background: rgba(255, 85, 102, 0.1);
-  border: 1px solid rgba(255, 85, 102, 0.25);
-  border-radius: 6px;
-  color: #fca5a5;
+  padding: 11px 16px;
+  background: rgb(var(--c-danger) / 0.08);
+  border: 1px solid rgb(var(--c-danger) / 0.2);
+  border-radius: var(--radius-md);
+  color: var(--t-danger);
   font-size: 13px;
   margin-bottom: 12px;
 }
 
 .creation-banner {
-  padding: 10px 14px;
-  background: rgba(0, 212, 170, 0.1);
-  border: 1px solid rgba(0, 212, 170, 0.25);
-  border-radius: 6px;
-  color: #a7f3d0;
+  padding: 11px 16px;
+  background: rgb(var(--c-ok) / 0.09);
+  border: 1px solid rgb(var(--c-ok) / 0.22);
+  border-radius: var(--radius-md);
+  color: var(--t-ok);
   font-size: 13px;
   margin-bottom: 12px;
 }
@@ -414,44 +417,84 @@
 
 .review-mode-switch {
   display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--bg-sunken);
   border: 1px solid var(--border-glass);
-  border-radius: 6px;
-  overflow: hidden;
+  border-radius: var(--radius-pill);
 }
 
 .review-mode-switch button {
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
   font-family: var(--font-sans);
   background: transparent;
   border: none;
-  color: var(--text-dim);
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.15s;
-}
-
-.review-mode-switch button + button {
-  border-left: 1px solid var(--border-glass);
+  transition:
+    color 0.15s,
+    background-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .review-mode-switch button:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .review-mode-switch button.active {
-  color: var(--accent-blue);
-  background: rgba(74, 158, 255, 0.15);
+  color: var(--text-primary);
+  font-weight: 600;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
 }
 
 /* "仅改动"模式下被折起来的连续未改动行 */
 .diff-skip {
   justify-content: center;
-  padding: 3px 0;
+  padding: 4px 0;
   color: var(--text-dim);
   font-size: 11px;
-  background: rgba(74, 158, 255, 0.06);
+  background: rgb(var(--c-accent) / 0.06);
   user-select: none;
+}
+
+/* ── 窄屏 ───────────────────────────────────── */
+
+.review-mode-switch button,
+.review-btn-secondary,
+.review-btn,
+.review-badge-count {
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .review-toolbar {
+    flex-wrap: wrap;
+    padding: 14px 16px;
+  }
+
+  .review-title {
+    font-size: 16px;
+  }
+
+  .review-content {
+    padding: 4px 16px 24px;
+  }
+
+  .review-error-banner {
+    margin: 0 16px 8px;
+  }
+
+  .review-card-header {
+    padding: 14px 16px;
+  }
+
+  .review-card-body {
+    padding: 14px 16px 16px;
+  }
 }
 
 /* ── 分页条 ─────────────────────────────────── */
@@ -465,8 +508,8 @@
 }
 
 .review-pager-label {
-  font-size: 12px;
-  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
 

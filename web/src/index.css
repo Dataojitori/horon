@@ -6,29 +6,156 @@
   padding: 0;
 }
 
+/* ════════════════════════════════════════════════════════════
+   设计变量
+   - 颜色只在这里定义，组件里一律引用变量，不写死色值。
+   - 带 -rgb / --c-* 的是「R G B」三元组，用法：rgb(var(--c-ok) / 0.12)
+   - --t-* 是放在对应淡色底（--c-* 的 12% 左右）上的文字色，亮暗两套各自保证对比度。
+   - 亮色是默认主题；暗色靠 <html data-theme="dark"> 覆盖。
+   ════════════════════════════════════════════════════════════ */
+
 :root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #12121a;
-  --bg-glass: rgba(18, 18, 26, 0.7);
-  --bg-glass-hover: rgba(24, 24, 36, 0.85);
-  --border-glass: rgba(255, 255, 255, 0.06);
-  --border-glass-hover: rgba(255, 255, 255, 0.12);
-  --text-primary: #e0e0e8;
-  --text-secondary: #8888a0;
-  --text-dim: #555568;
-  --accent-blue: #4a9eff;
-  --accent-purple: #9b6dff;
-  --accent-cyan: #00d4aa;
-  --accent-amber: #ffb040;
-  --accent-red: #ff5566;
-  --glow-blue: rgba(74, 158, 255, 0.3);
-  --glow-purple: rgba(155, 109, 255, 0.3);
-  --status-confirmed: #00d4aa;
-  --status-hypothesis: #ffb040;
-  --status-negated: #ff5566;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  /* 字体 */
+  /* 正文、按钮、代码都用系统自带字体，不打包网络字体：
+     系统字体带屏幕点阵优化，中英文同一套，在 125% 这类小数缩放的 Windows 屏上也清晰；
+     打包进来的 Inter 没有这层优化，英文会比旁边的中文发虚（实测过）。
+     只有字标（--font-display）用打包的字体，它字号大，不受这个影响。 */
+  --font-sans:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
+    "Noto Sans CJK SC", "Noto Sans SC", "Yu Gothic UI", Roboto, "Helvetica Neue", Arial,
+    sans-serif;
+  --font-mono:
+    ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Cascadia Mono",
+    "Liberation Mono", "Microsoft YaHei UI", "PingFang SC", monospace;
+  --font-display: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+
+  /* 形状 */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  /* 动效 */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 布局 */
+  --topbar-h: 60px;
 }
+
+/* ── 亮色（默认）：傍晚台灯。奶油底、梅褐字、珊瑚强调 ───────── */
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --ink-rgb: 74 52 64; /* 叠在底色上的半透明层（边框、悬停底）用 */
+  --shadow-rgb: 74 52 64; /* 阴影用带一点暖紫的梅褐，比纯黑柔和 */
+
+  /* 表面：画布 < 面板 < 浮层 */
+  --bg-primary: #f7ede2;
+  --bg-canvas-glow: #fdf8f1;
+  --bg-secondary: #fffcf8;
+  --bg-elevated: #ffffff;
+  --bg-sunken: rgb(var(--ink-rgb) / 0.045);
+  --bg-glass: rgb(255 252 248 / 0.78);
+  --bg-glass-hover: rgb(255 253 250 / 0.96);
+  --bg-hover: rgb(var(--ink-rgb) / 0.05);
+
+  --border-glass: rgb(var(--ink-rgb) / 0.09);
+  --border-glass-hover: rgb(var(--ink-rgb) / 0.2);
+
+  /* 文字 */
+  --text-primary: #3a2a34;
+  --text-secondary: #6f5c67;
+  --text-dim: #85737e;
+
+  /* 强调与语义色（背景/描边用 --c-*，文字用 --t-*） */
+  --c-accent: 226 99 76;
+  --t-accent: #b53b25;
+  --c-logic: 96 112 214;
+  --t-logic: #4a5bc4;
+  --c-or: 150 94 200;
+  --t-or: #7b45b0;
+  --c-chain: 66 160 128;
+  --t-chain: #276e51;
+  --c-ok: 52 160 100;
+  --t-ok: #25704a;
+  --c-warn: 232 160 50;
+  --t-warn: #8f5a0c;
+  --c-danger: 214 69 80;
+  --t-danger: #bc323d;
+
+  --accent: rgb(var(--c-accent));
+  --on-accent: #ffffff;
+
+  --status-confirmed: rgb(var(--c-ok));
+  --status-hypothesis: rgb(var(--c-warn));
+  --status-negated: rgb(var(--c-danger));
+
+  /* 阴影 */
+  --shadow-xs: 0 1px 2px rgb(var(--shadow-rgb) / 0.07);
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.05), 0 3px 10px -3px rgb(var(--shadow-rgb) / 0.1);
+  --shadow-md: 0 2px 4px rgb(var(--shadow-rgb) / 0.04), 0 12px 28px -10px rgb(var(--shadow-rgb) / 0.18);
+  --shadow-lg: 0 4px 10px rgb(var(--shadow-rgb) / 0.05), 0 30px 64px -18px rgb(var(--shadow-rgb) / 0.32);
+
+  --scrim: rgb(58 42 52 / 0.18);
+  --selection: rgb(var(--c-accent) / 0.22);
+}
+
+/* ── 暗色：保持原来的深空配色，强调色统一成同一套珊瑚 ───────── */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --ink-rgb: 255 255 255;
+  --shadow-rgb: 0 0 0;
+
+  --bg-primary: #0a0a0f;
+  --bg-canvas-glow: #12111b;
+  --bg-secondary: #12121a;
+  --bg-elevated: #191924;
+  --bg-sunken: rgb(var(--ink-rgb) / 0.04);
+  --bg-glass: rgb(18 18 26 / 0.72);
+  --bg-glass-hover: rgb(26 26 38 / 0.9);
+  --bg-hover: rgb(var(--ink-rgb) / 0.06);
+
+  --border-glass: rgb(var(--ink-rgb) / 0.07);
+  --border-glass-hover: rgb(var(--ink-rgb) / 0.15);
+
+  --text-primary: #e6e3ec;
+  --text-secondary: #9a97ad;
+  --text-dim: #6a6779;
+
+  --c-accent: 244 133 112;
+  --t-accent: #ff9d85;
+  --c-logic: 74 158 255;
+  --t-logic: #6aaeff;
+  --c-or: 168 85 247;
+  --t-or: #c58bff;
+  --c-chain: 0 214 160;
+  --t-chain: #1fe5ac;
+  --c-ok: 34 197 94;
+  --t-ok: #4ade80;
+  --c-warn: 255 176 64;
+  --t-warn: #ffbe53;
+  --c-danger: 239 68 68;
+  --t-danger: #f87171;
+
+  --accent: rgb(var(--c-accent));
+  --on-accent: #1a0e0b;
+
+  --shadow-xs: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.35), 0 3px 10px -3px rgb(0 0 0 / 0.45);
+  --shadow-md: 0 2px 4px rgb(0 0 0 / 0.3), 0 12px 28px -10px rgb(0 0 0 / 0.6);
+  --shadow-lg: 0 4px 10px rgb(0 0 0 / 0.3), 0 30px 64px -18px rgb(0 0 0 / 0.75);
+
+  --scrim: rgb(0 0 0 / 0.4);
+  --selection: rgb(var(--c-accent) / 0.3);
+}
+
+/* ── 基础 ────────────────────────────────────────────────── */
 
 html,
 body,
@@ -42,19 +169,98 @@ body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+:focus-visible {
+  outline: 2px solid rgb(var(--c-accent) / 0.65);
+  outline-offset: 2px;
+}
+
+/* 鼠标点击不出焦点环，键盘 Tab 才出 */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ── 共享：节点角色徽章的配色（详情面板、审核页都用同一份） ───── */
+
+.role-plain {
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+}
+
+.role-sensor {
+  background: rgb(var(--c-chain) / 0.14);
+  color: var(--t-chain);
+}
+
+.role-logic {
+  background: rgb(var(--c-logic) / 0.13);
+  color: var(--t-logic);
+}
+
+.role-guard {
+  background: rgb(var(--c-danger) / 0.12);
+  color: var(--t-danger);
+}
+
+/* ── 滚动条 ──────────────────────────────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--ink-rgb) / 0.22) transparent;
+}
+
 ::-webkit-scrollbar {
-  width: 5px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--text-dim);
-  border-radius: 3px;
+  background: rgb(var(--ink-rgb) / 0.2);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-secondary);
+  background: rgb(var(--ink-rgb) / 0.34);
+  background-clip: content-box;
+}
+
+/* ── 切换主题时的柔和过渡（theme.tsx 临时挂/摘这个类） ─────────
+   只过渡颜色类属性；transform / left / top 不在其中，拖拽和缩放不受影响。 */
+html.theme-transition,
+html.theme-transition *,
+html.theme-transition *::before,
+html.theme-transition *::after {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow !important;
+  transition-duration: 0.4s !important;
+  transition-timing-function: var(--ease-inout) !important;
+  transition-delay: 0s !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

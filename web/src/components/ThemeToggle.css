@@ -1,0 +1,78 @@
+/* 亮/暗主题开关：胶囊轨道 + 圆形滑块，太阳在左、月亮在右。
+   滑块盖住的那一边是当前主题，图标颜色随之加深。 */
+
+.theme-toggle {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 56px;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  cursor: pointer;
+  transition:
+    background-color 0.25s var(--ease-inout),
+    border-color 0.15s;
+}
+
+.theme-toggle:hover {
+  border-color: var(--border-glass-hover);
+}
+
+.theme-toggle:active .theme-toggle-thumb {
+  width: 28px;
+}
+
+.theme-toggle .theme-icon {
+  position: relative;
+  z-index: 1;
+  color: var(--text-dim);
+  transition:
+    color 0.25s var(--ease-inout),
+    transform 0.4s var(--ease-out);
+}
+
+/* 滑块所在一侧的图标：用强调色，另一侧淡掉 */
+.theme-toggle:not(.is-dark) .theme-icon-sun {
+  color: var(--t-accent);
+  transform: rotate(0deg);
+}
+.theme-toggle:not(.is-dark) .theme-icon-moon {
+  transform: rotate(-30deg) scale(0.9);
+}
+
+.theme-toggle.is-dark .theme-icon-moon {
+  color: var(--t-accent);
+  transform: rotate(0deg);
+}
+.theme-toggle.is-dark .theme-icon-sun {
+  transform: rotate(30deg) scale(0.9);
+}
+
+.theme-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+  transition:
+    transform 0.38s var(--ease-out),
+    width 0.15s var(--ease-out),
+    background-color 0.25s;
+}
+
+.theme-toggle.is-dark .theme-toggle-thumb {
+  transform: translateX(26px);
+}
+
+/* 按下时滑块拉长一点，右侧状态下保持贴边 */
+.theme-toggle.is-dark:active .theme-toggle-thumb {
+  transform: translateX(20px);
+}

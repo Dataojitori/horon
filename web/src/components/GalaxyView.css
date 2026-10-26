@@ -1,0 +1,10 @@
+/* 星图底：画布本身透明，背景由这里的 CSS 提供，主题切换时才能跟着柔和过渡。
+   中心略亮、四周略沉，让视线自然落在图的中央。 */
+
+.galaxy-stage {
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(ellipse 75% 65% at 50% 46%, var(--bg-canvas-glow) 0%, transparent 100%),
+    var(--bg-primary);
+}

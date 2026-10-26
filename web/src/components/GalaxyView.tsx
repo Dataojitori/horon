@@ -2,6 +2,8 @@ import { useCallback, useRef, useEffect, useState } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import { forceCollide } from "d3-force";
 import { formatBytes, type GraphData, type GraphNode } from "../types";
+import { useTheme, type Theme } from "../theme";
+import "./GalaxyView.css";
 
 interface Props {
   data: GraphData;
@@ -15,14 +17,116 @@ interface TagCentroid {
   count: number;
 }
 
+type RGB = readonly [number, number, number];
+
+// 与 index.css 里的 --font-sans 同一套（canvas 读不到变量）。
+// 中日文走系统字体，所以后面要带上各平台的 CJK 回退，否则中文节点名会掉到无衬线默认字体。
+const CANVAS_FONT =
+  'system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Yu Gothic UI", sans-serif';
+
 /**
- * 恒星色温光谱平滑映射：
- * 0 ~ 1.5 KB: 静谧冷蓝 (rgb(74, 158, 255))
- * 1.5 ~ 3.2 KB: 冰青至星白 (rgb(120, 205, 255) -> rgb(220, 235, 255))
- * 3.2 ~ 4.8 KB: 暖金至琥珀橙 (rgb(245, 190, 85) -> rgb(251, 146, 60))
- * >= 4.8 KB: 炽热珊瑚红至赤红 (rgb(248, 113, 113) -> rgb(239, 68, 68))
+ * 画布调色板。canvas 读不到 CSS 变量，所以两套主题的颜色在这里各写一份。
+ *
+ * 节点按正文体积着色，色阶是 [KB, 颜色] 的锚点，相邻锚点之间线性插值：
+ * - 暗色（恒星色温）：冷蓝 → 冰青 → 星白 → 琥珀橙 → 赤红
+ * - 亮色（同一方向，换成奶油底上看得清的柔和色）：薰衣草蓝 → 雾蓝 → 鼠尾草绿 → 琥珀 → 珊瑚红
+ * 体积 ≥ 4.8 KB 视为超重，两套主题都会加一圈红色描边。
  */
-function getStarColor(byteSize: number = 0): {
+interface Palette {
+  /** 亮底：不用叠加发光，改画接触阴影 + 高光的“珍珠”质感 */
+  pearl: boolean;
+  /** 节点视觉半径倍数。亮底上没有发光撑场面，小点要略放大才有存在感 */
+  nodeScale: number;
+  stops: ReadonlyArray<readonly [number, RGB]>;
+  /** 节点名：文字色与描边色 */
+  label: (alpha: number) => { fill: string; stroke: string };
+  /** 远景 Tag 星团徽章 */
+  badge: (alpha: number) => { bg: string; border: string; text: string };
+  /** 悬停卡片 */
+  card: {
+    bg: string;
+    border: string;
+    borderWarn: string;
+    title: string;
+    sub: string;
+    subWarn: string;
+    shadow: string | null;
+  };
+  overweightRing: string;
+  hoverRing: string;
+}
+
+const PALETTES: Record<Theme, Palette> = {
+  dark: {
+    pearl: false,
+    nodeScale: 1,
+    stops: [
+      [0, [74, 158, 255]],
+      [1.5, [90, 180, 255]],
+      [3.2, [220, 235, 255]],
+      [4.8, [251, 146, 60]],
+      [8, [239, 68, 68]],
+    ],
+    label: (a) => ({
+      fill: `rgba(220, 230, 250, ${a})`,
+      stroke: `rgba(10, 10, 15, ${a + 0.1})`,
+    }),
+    badge: (a) => ({
+      bg: `rgba(16, 20, 36, ${a * 0.85})`,
+      border: `rgba(90, 130, 230, ${a * 0.5})`,
+      text: `rgba(200, 225, 255, ${a})`,
+    }),
+    card: {
+      bg: "rgba(8, 12, 24, 0.94)",
+      border: "rgba(100, 160, 255, 0.7)",
+      borderWarn: "rgba(239, 68, 68, 0.85)",
+      title: "#ffffff",
+      sub: "rgba(140, 190, 255, 0.85)",
+      subWarn: "rgba(248, 113, 113, 0.95)",
+      shadow: null,
+    },
+    overweightRing: "rgba(239, 68, 68, 0.8)",
+    hoverRing: "#ffffff",
+  },
+  light: {
+    pearl: true,
+    nodeScale: 1.3,
+    // 大多数节点是体积小的，用安静的薰衣草灰；越“重”越暖，红色只留给超重的，一眼能找到
+    stops: [
+      [0, [160, 144, 198]],
+      [1.5, [132, 152, 208]],
+      [3.2, [226, 178, 106]],
+      [4.8, [232, 124, 88]],
+      [8, [204, 58, 72]],
+    ],
+    label: (a) => ({
+      fill: `rgba(58, 42, 52, ${Math.min(1, a + 0.15)})`,
+      stroke: "rgba(250, 243, 235, 0.92)",
+    }),
+    badge: (a) => ({
+      bg: `rgba(255, 252, 248, ${a * 0.95})`,
+      border: `rgba(226, 99, 76, ${a * 0.45})`,
+      text: `rgba(150, 56, 38, ${a})`,
+    }),
+    card: {
+      bg: "rgba(255, 255, 255, 0.97)",
+      border: "rgba(226, 99, 76, 0.6)",
+      borderWarn: "rgba(214, 69, 80, 0.75)",
+      title: "#3a2a34",
+      sub: "#6f5c67",
+      subWarn: "#bc323d",
+      shadow: "rgba(74, 52, 64, 0.28)",
+    },
+    overweightRing: "rgba(214, 69, 80, 0.85)",
+    hoverRing: "rgb(226, 99, 76)",
+  },
+};
+
+/** 按体积在色阶锚点间插值；heatRatio（0~1）决定节点光晕的强弱，和主题无关。 */
+function getStarColor(
+  byteSize: number = 0,
+  stops: Palette["stops"],
+): {
   r: number;
   g: number;
   b: number;
@@ -30,36 +134,31 @@ function getStarColor(byteSize: number = 0): {
   heatRatio: number;
 } {
   const kb = byteSize / 1024;
-  let r = 74;
-  let g = 158;
-  let b = 255;
   const isOverweight = byteSize >= 4800; // >= 4.8 KB 视为超重
-  let heatRatio = 0;
 
-  if (kb <= 1.5) {
-    const p = Math.max(0, kb / 1.5);
-    r = Math.round(74 + p * 16);
-    g = Math.round(158 + p * 22);
-    b = 255;
-    heatRatio = 0;
-  } else if (kb <= 3.2) {
-    const p = (kb - 1.5) / 1.7;
-    r = Math.round(90 + p * 130);
-    g = Math.round(180 + p * 55);
-    b = 255;
-    heatRatio = p * 0.25;
-  } else if (kb <= 4.8) {
-    const p = (kb - 3.2) / 1.6;
-    r = Math.round(220 + p * 31);
-    g = Math.round(235 - p * 89);
-    b = Math.round(255 - p * 195);
-    heatRatio = 0.25 + p * 0.5;
-  } else {
-    const p = Math.min(1, (kb - 4.8) / 3.2);
-    r = Math.round(251 - p * 12);
-    g = Math.round(146 - p * 78);
-    b = Math.round(60 + p * 8);
-    heatRatio = 0.75 + p * 0.25;
+  // 光晕强弱：1.5KB 以下无；1.5~3.2 升到 0.25；3.2~4.8 升到 0.75；之后升到 1
+  let heatRatio = 0;
+  if (kb > 4.8) heatRatio = 0.75 + Math.min(1, (kb - 4.8) / 3.2) * 0.25;
+  else if (kb > 3.2) heatRatio = 0.25 + ((kb - 3.2) / 1.6) * 0.5;
+  else if (kb > 1.5) heatRatio = ((kb - 1.5) / 1.7) * 0.25;
+
+  let r: number = stops[0][1][0];
+  let g: number = stops[0][1][1];
+  let b: number = stops[0][1][2];
+  if (kb >= stops[stops.length - 1][0]) {
+    [r, g, b] = stops[stops.length - 1][1];
+  } else if (kb > 0) {
+    for (let i = 1; i < stops.length; i++) {
+      const [k1, c1] = stops[i];
+      if (kb <= k1) {
+        const [k0, c0] = stops[i - 1];
+        const p = (kb - k0) / (k1 - k0);
+        r = Math.round(c0[0] + (c1[0] - c0[0]) * p);
+        g = Math.round(c0[1] + (c1[1] - c0[1]) * p);
+        b = Math.round(c0[2] + (c1[2] - c0[2]) * p);
+        break;
+      }
+    }
   }
 
   return { r, g, b, isOverweight, heatRatio };
@@ -186,6 +285,8 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tagForceRef = useRef<ReturnType<typeof createTagClusterForce> | null>(null);
+  const { theme } = useTheme();
+  const palette = PALETTES[theme];
 
   useEffect(() => {
     const el = containerRef.current;
@@ -244,9 +345,12 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
       const x = node.x ?? 0;
       const y = node.y ?? 0;
       const t = node.degree / maxDegree;
-      const radius = 2 + t * 10;
+      const radius = (2 + t * 10) * palette.nodeScale;
       const isHovered = hoveredNode?.id === node.id;
-      const { r, g, b, isOverweight, heatRatio } = getStarColor(node.byte_size || 0);
+      const { r, g, b, isOverweight, heatRatio } = getStarColor(
+        node.byte_size || 0,
+        palette.stops,
+      );
 
       // 节点外围光晕 (Hover、大连接度骨干节点、或升温发热的大记忆)
       if (isHovered || t > 0.25 || isOverweight || heatRatio > 0.5) {
@@ -261,10 +365,21 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
           y,
           radius * glowMult,
         );
-        const alpha = isHovered ? 0.38 : (0.08 + heatRatio * 0.18);
+        // 亮底上光晕要更淡，否则像一团脏污
+        const k = palette.pearl ? 0.7 : 1;
+        const alpha = (isHovered ? 0.38 : (0.08 + heatRatio * 0.18)) * k;
         grad.addColorStop(0, `rgba(${r},${g},${b},${alpha})`);
-        grad.addColorStop(1, "rgba(0,0,0,0)");
+        // 终点用同色透明：渐变在非预乘空间插值，用黑色透明会在亮底上洇出一圈灰
+        grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
         ctx.fillStyle = grad;
+        ctx.fill();
+      }
+
+      // 亮底：先垫一层很淡的接触阴影，节点才像“放在纸上”而不是“浮在黑里”
+      if (palette.pearl) {
+        ctx.beginPath();
+        ctx.arc(x, y + radius * 0.22, radius * 1.04, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(74, 52, 64, 0.16)";
         ctx.fill();
       }
 
@@ -275,15 +390,23 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
       ctx.fill();
 
       if (isOverweight) {
-        ctx.strokeStyle = "rgba(239, 68, 68, 0.8)";
+        ctx.strokeStyle = palette.overweightRing;
         ctx.lineWidth = 1.2 / globalScale;
         ctx.stroke();
       }
 
       if (isHovered) {
-        ctx.strokeStyle = "#ffffff";
+        ctx.strokeStyle = palette.hoverRing;
         ctx.lineWidth = 1.5 / globalScale;
         ctx.stroke();
+      }
+
+      // 亮底：较大的节点左上角点一小块高光
+      if (palette.pearl && radius >= 4) {
+        ctx.beginPath();
+        ctx.arc(x - radius * 0.32, y - radius * 0.36, radius * 0.26, 0, 2 * Math.PI);
+        ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+        ctx.fill();
       }
 
       // LOD 分级渲染文字（Hover 节点的名字交由 onRenderFramePost 全局置顶渲染）
@@ -319,24 +442,25 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         if (showLabel && labelToShow) {
           const screenFontSize = 10;
           const fontSize = Math.max(screenFontSize / globalScale, 2.5);
-          ctx.font = `400 ${fontSize}px Inter, -apple-system, sans-serif`;
+          ctx.font = `400 ${fontSize}px ${CANVAS_FONT}`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
 
           const textY = y + radius + 3 / globalScale;
 
-          // 微弱深色文字轮廓
-          ctx.strokeStyle = `rgba(10, 10, 15, ${alpha + 0.1})`;
+          // 文字外轮廓：压住背后的星点，保证可读
+          const { fill, stroke } = palette.label(alpha);
+          ctx.strokeStyle = stroke;
           ctx.lineWidth = 2.2 / globalScale;
           ctx.lineJoin = "round";
           ctx.strokeText(labelToShow, x, textY);
 
-          ctx.fillStyle = `rgba(220, 230, 250, ${alpha})`;
+          ctx.fillStyle = fill;
           ctx.fillText(labelToShow, x, textY);
         }
       }
     },
-    [maxDegree, hoveredNode],
+    [maxDegree, hoveredNode, palette],
   );
 
   // 全局置顶渲染：远景 Tag 星团名称 + Hover 焦点卡片
@@ -350,38 +474,55 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
           Math.max(0.1, (0.85 - globalScale) * 1.8),
         );
 
+        const screenFontSize = 11;
+        const fontSize = Math.max(screenFontSize / globalScale, 3);
+        ctx.font = `600 ${fontSize}px ${CANVAS_FONT}`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        const paddingX = 8 / globalScale;
+        const paddingY = 4 / globalScale;
+        const boxH = fontSize * 1.4 + paddingY * 2;
+
+        // 仅对成员数 >= 3 的有意义聚合星团显示标题；成员多的优先
+        const candidates: { tag: string; c: TagCentroid }[] = [];
         centroids.forEach((c, tag) => {
-          // 仅对成员数 >= 3 的有意义聚合星团显示标题
-          if (c.count < 3) return;
+          if (c.count >= 3) candidates.push({ tag, c });
+        });
+        candidates.sort((a, b) => b.c.count - a.c.count);
 
+        // 徽章互相压住时只留成员更多的那个，缩放后空间变大，被省掉的会自己出现
+        const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
+        const gap = 4 / globalScale;
+
+        for (const { tag, c } of candidates) {
           const text = `◈ ${tag} · ${c.count}`;
-          const screenFontSize = 11;
-          const fontSize = Math.max(screenFontSize / globalScale, 3);
-          ctx.font = `600 ${fontSize}px Inter, -apple-system, sans-serif`;
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
+          const boxW = ctx.measureText(text).width + paddingX * 2;
+          const x0 = c.x - boxW / 2;
+          const y0 = c.y - boxH / 2;
+          const x1 = x0 + boxW;
+          const y1 = y0 + boxH;
 
-          const metrics = ctx.measureText(text);
-          const paddingX = 8 / globalScale;
-          const paddingY = 4 / globalScale;
-          const boxW = metrics.width + paddingX * 2;
-          const boxH = fontSize * 1.4 + paddingY * 2;
-          const boxX = c.x - boxW / 2;
-          const boxY = c.y - boxH / 2;
+          const overlaps = placed.some(
+            (p) => x0 < p.x1 + gap && x1 > p.x0 - gap && y0 < p.y1 + gap && y1 > p.y0 - gap,
+          );
+          if (overlaps) continue;
+          placed.push({ x0, y0, x1, y1 });
 
           // 绘制半透明星云徽章背景
-          ctx.fillStyle = `rgba(16, 20, 36, ${tagAlpha * 0.85})`;
-          drawRoundRect(ctx, boxX, boxY, boxW, boxH, 4 / globalScale);
+          const badge = palette.badge(tagAlpha);
+          ctx.fillStyle = badge.bg;
+          drawRoundRect(ctx, x0, y0, boxW, boxH, boxH / 2);
           ctx.fill();
 
-          ctx.strokeStyle = `rgba(90, 130, 230, ${tagAlpha * 0.5})`;
+          ctx.strokeStyle = badge.border;
           ctx.lineWidth = 1 / globalScale;
           ctx.stroke();
 
           // 绘制文字
-          ctx.fillStyle = `rgba(200, 225, 255, ${tagAlpha})`;
+          ctx.fillStyle = badge.text;
           ctx.fillText(text, c.x, c.y);
-        });
+        }
       }
 
       // 2. 悬停（Hover）节点置顶高亮卡片（保证不被任何其他节点/连线遮挡）
@@ -390,7 +531,7 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         const x = node.x ?? 0;
         const y = node.y ?? 0;
         const t = (node.degree || 0) / maxDegree;
-        const radius = 2 + t * 10;
+        const radius = (2 + t * 10) * palette.nodeScale;
 
         const mainText = node.name;
         const isOverweight = Boolean(node.byte_size && node.byte_size >= 4800);
@@ -406,12 +547,12 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         const titleFontSize = Math.max(12 / globalScale, 3.5);
         const subFontSize = Math.max(9.5 / globalScale, 2.8);
 
-        ctx.font = `600 ${titleFontSize}px Inter, -apple-system, sans-serif`;
+        ctx.font = `600 ${titleFontSize}px ${CANVAS_FONT}`;
         const mainWidth = ctx.measureText(mainText).width;
 
         let subWidth = 0;
         if (subText) {
-          ctx.font = `400 ${subFontSize}px Inter, -apple-system, sans-serif`;
+          ctx.font = `400 ${subFontSize}px ${CANVAS_FONT}`;
           subWidth = ctx.measureText(subText).width;
         }
 
@@ -427,25 +568,33 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         const cardY = y - radius - cardH - 6 / globalScale;
 
         // 卡片阴影与背景
-        ctx.fillStyle = "rgba(8, 12, 24, 0.94)";
+        const card = palette.card;
+        ctx.save();
+        if (card.shadow) {
+          ctx.shadowColor = card.shadow;
+          ctx.shadowBlur = 14;
+          ctx.shadowOffsetY = 4;
+        }
+        ctx.fillStyle = card.bg;
         drawRoundRect(ctx, cardX, cardY, cardW, cardH, 5 / globalScale);
         ctx.fill();
+        ctx.restore();
 
-        ctx.strokeStyle = isOverweight ? "rgba(239, 68, 68, 0.85)" : "rgba(100, 160, 255, 0.7)";
+        ctx.strokeStyle = isOverweight ? card.borderWarn : card.border;
         ctx.lineWidth = 1.2 / globalScale;
         ctx.stroke();
 
         // 卡片内标题文字
-        ctx.font = `600 ${titleFontSize}px Inter, -apple-system, sans-serif`;
+        ctx.font = `600 ${titleFontSize}px ${CANVAS_FONT}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = "#ffffff";
+        ctx.fillStyle = card.title;
         ctx.fillText(mainText, x, cardY + padY);
 
         // 卡片内副标题（体积 / 标签）
         if (subText) {
-          ctx.font = `400 ${subFontSize}px Inter, -apple-system, sans-serif`;
-          ctx.fillStyle = isOverweight ? "rgba(248, 113, 113, 0.95)" : "rgba(140, 190, 255, 0.85)";
+          ctx.font = `400 ${subFontSize}px ${CANVAS_FONT}`;
+          ctx.fillStyle = isOverweight ? card.subWarn : card.sub;
           ctx.fillText(
             subText,
             x,
@@ -454,8 +603,23 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         }
       }
     },
-    [hoveredNode, maxDegree],
+    [hoveredNode, maxDegree, palette],
   );
+
+  // 主题切换、字体加载完成后，静止的画布不会自己重画，手动刷一帧
+  useEffect(() => {
+    fgRef.current?.refresh?.();
+  }, [palette]);
+
+  useEffect(() => {
+    let cancelled = false;
+    document.fonts?.ready.then(() => {
+      if (!cancelled) fgRef.current?.refresh?.();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleNodeHover = useCallback(
     (node: GraphNode | null) => {
@@ -471,7 +635,7 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
   );
 
   return (
-    <div ref={containerRef} style={{ width: "100%", height: "100%" }}>
+    <div ref={containerRef} className="galaxy-stage">
       <ForceGraph2D
         ref={fgRef}
         width={dimensions.width}
@@ -481,7 +645,7 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         nodeCanvasObject={nodeCanvasObject as any}
         onRenderFramePost={onRenderFramePost as any}
         nodePointerAreaPaint={((node: any, color: string, ctx: CanvasRenderingContext2D) => {
-          const r = 2 + ((node as GraphNode).degree / maxDegree) * 10;
+          const r = (2 + ((node as GraphNode).degree / maxDegree) * 10) * palette.nodeScale;
           ctx.fillStyle = color;
           ctx.beginPath();
           ctx.arc(node.x ?? 0, node.y ?? 0, r + 6, 0, 2 * Math.PI);
@@ -491,7 +655,7 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         nodeLabel={() => ""}
         onNodeClick={(node: any) => onNodeClick((node as GraphNode).id)}
         onNodeHover={handleNodeHover as any}
-        backgroundColor="#0a0a0f"
+        backgroundColor="rgba(0,0,0,0)"
         cooldownTicks={280}
         warmupTicks={70}
       />

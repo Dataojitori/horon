@@ -167,12 +167,8 @@ function DiffViewer({
             </div>
           ) : (
           <div key={idx} className={`diff-row diff-${dl.type}`}>
-            <div className="diff-gutter diff-gutter-old">
-              {dl.oldLineNum ?? ""}
-            </div>
-            <div className="diff-gutter diff-gutter-new">
-              {dl.newLineNum ?? ""}
-            </div>
+            {/* 只放一列：现在这一版的行号。被删掉的行在现在这一版里不存在，所以留空。 */}
+            <div className="diff-gutter">{dl.newLineNum ?? ""}</div>
             <div className="diff-prefix">
               {dl.type === "added" ? "+" : dl.type === "removed" ? "-" : " "}
             </div>
