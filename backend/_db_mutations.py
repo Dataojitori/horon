@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from . import tag_sandbox
-from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_and_normalize_on_fire, transactional
+from ._db_common import SYSTEM_TAGS, dump_jev_questions, _now, _validate_name, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
 from .models import MutationResult
 
@@ -180,14 +180,14 @@ class MutationMixin:
     @transactional
     def _set_sensor_hook(
         self, concept, event_type: str, match_pattern: str, tool: str | None = None,
-        adapter: str | None = None, jev_question: str | None = None,
+        adapter: str | None = None, jev_questions: list[str] | None = None,
         jev_threshold: float | None = None,
     ) -> MutationResult:
         """给传感器绑定被动感知钩子 (1:1 覆盖)。
 
-        jev_question：正则命中后再问 Jev 的是非题（问“是不是”，答“是”时点火）；
-        省略则只看正则。jev_threshold：“是”的概率达到多少才点火，默认 0.5，
-        只在有 jev_question 时有意义。
+        jev_questions：正则命中后再问 Jev 的是非题，可以多道（问“是不是”，答“是”算命中）；
+        任一道命中，传感器就点火。省略则只看正则。
+        jev_threshold：“是”的概率达到多少算命中，所有题共用，默认 0.5。
         """
         cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
@@ -223,10 +223,10 @@ class MutationMixin:
         if clean_tool:
             _check_tool_regex(clean_tool)
 
-        jev_question = (jev_question or "").strip() or None
-        if jev_question is None and jev_threshold is not None:
+        questions = [q.strip() for q in (jev_questions or []) if q and q.strip()]
+        if not questions and jev_threshold is not None:
             raise ValueError("--jev-threshold needs --jev (the question to ask Jev).")
-        if jev_question is not None:
+        if questions:
             jev_threshold = 0.5 if jev_threshold is None else jev_threshold
             if not 0 < jev_threshold < 1:
                 raise ValueError(f"jev_threshold must be between 0 and 1, got {jev_threshold}.")
@@ -256,7 +256,7 @@ class MutationMixin:
             "INSERT INTO sensor_hooks (sensor_concept_id, event_type, tool, match_pattern, adapter, "
             "jev_question, jev_threshold, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (cid, event_type, clean_tool, match_pattern.strip(), adapter,
-             jev_question, jev_threshold, now),
+             dump_jev_questions(questions), jev_threshold if questions else None, now),
         )
         hook_id = cursor.lastrowid
         tool_info = f", tool: '{clean_tool}'" if clean_tool else ""
@@ -707,7 +707,7 @@ class MutationMixin:
                 match_pattern=kwargs.get("match_pattern", ""),
                 tool=kwargs.get("tool"),
                 adapter=kwargs.get("adapter"),
-                jev_question=kwargs.get("jev_question"),
+                jev_questions=kwargs.get("jev_questions"),
                 jev_threshold=kwargs.get("jev_threshold"),
             )
         elif prop in ("tool_guard", "tool-guard"):

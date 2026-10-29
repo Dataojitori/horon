@@ -65,8 +65,8 @@ class SensorHookDetail(BaseModel):
     tool: str | None = None
     match_pattern: str
     adapter: str | None = None
-    jev_question: str | None = None
-    jev_threshold: float | None = None
+    jev_questions: list[str] = []   # 空：只看正则。多道：任一道命中就点火（存在 jev_question 列）
+    jev_threshold: float | None = None       # 所有题共用：“是”的概率达到它算命中
     created_at: str
 
 

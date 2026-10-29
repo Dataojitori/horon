@@ -17,6 +17,7 @@ from typing import Any
 
 from backend.db import HoronDB
 from backend.llm import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
+from backend._db_common import parse_jev_questions
 from backend.evaluator import load_active_states
 from backend.integrity import check_at_session_start
 
@@ -88,12 +89,12 @@ def _false_alarm_hint(db: HoronDB, concept_id: int) -> str:
     """
     row = db.conn.execute("SELECT role FROM concepts WHERE id = ?", (concept_id,)).fetchone()
     if row and row["role"] == "sensor":
-        return f"（如果你觉得这是误报，可以 read_hook {concept_id} 看规则，考虑改它的 hook）"
+        return f" (If you think this is a false alarm, run read_hook {concept_id} to see its rule and consider fixing its hook.)"
     members = db.conn.execute(
         "SELECT c.id, c.name FROM compose_members cm JOIN concepts c ON cm.member_concept_id = c.id "
         "WHERE cm.parent_concept_id = ? ORDER BY cm.order_index, c.id", (concept_id,)).fetchall()
-    inputs = "、".join(f"{m['name']}（{m['id']}）" for m in members) or "（没有输入）"
-    return f"（如果你觉得这是误报，考虑改它的输入的 hook：{inputs}）"
+    inputs = ", ".join(f"{m['name']} ({m['id']})" for m in members) or "(no inputs)"
+    return f" (If you think this is a false alarm, consider fixing the hooks of its inputs: {inputs})"
 
 
 def wrap_harness_message(items: list[str]) -> str:
@@ -133,13 +134,13 @@ def sync_session(db: HoronDB, adapter: str | None = None, *, reset: bool = False
     if reset:
         db.init_session(adapter)
         return (
-            f"当前会话刚刚发生了上下文压缩（Session: `{db.session_id}`），"
-            "Horon 会话临时状态已重置；压缩前的 `login` 输出与 `horon-cli` 说明书已不在上下文中，"
-            "请先重新执行 `python frontend/cli.py login` 并完整读取 `horon-cli` 说明书（SKILL.md）。"
+            f"This session was just compacted (Session: `{db.session_id}`), and Horon's temporary session state "
+            "has been reset. The earlier `login` output and the `horon-cli` manual are no longer in context: "
+            "run `python frontend/cli.py login` again and read the whole `horon-cli` manual (SKILL.md) first."
         )
     if not row:
         db.init_session(adapter)
-        ready = f"Horon 系统已初始化就绪（Session: `{db.session_id}`）。"
+        ready = f"Horon is ready (Session: `{db.session_id}`)."
         problems = check_at_session_start(db)
         return f"{ready}\n- {problems}" if problems else ready
     db.touch_session(adapter)
@@ -175,14 +176,15 @@ def sense(
     输入：事件类型、事件文本（消息正文 / 工具结果 / 序列化的调用参数）、工具名。
     行为：
       1. 正则初筛：每条钩子按 match_pattern 对 text 做 re.search（忽略大小写）。
-      2. 命中且没有 jev_question 的钩子，直接点火。
-      3. 命中且有 jev_question、本会话里还没亮的钩子，把它们的问题合成一次请求问 Jev
-         （state 按 JEV_STATE 写成“谁对谁说：「text」”；用户消息和 AI 回复会带上对方的
-         上一条当上文，见 _remember_message），
-         “是”的概率 >= jev_threshold 的才点火。Jev 调用失败时这些钩子按正则结果点火，
+      2. 命中且没挂 Jev 题的钩子，直接点火。
+      3. 命中且挂了 Jev 题（jev_question 列，可多道，见 parse_jev_questions）、本会话里还没亮的钩子，
+         把所有钩子的所有题合成一次请求问 Jev（state 按 JEV_STATE 写成“谁对谁说：「text」”；用户消息和
+         AI 回复会带上对方的上一条当上文，见 _remember_message）。一道题“是”的概率 >= 钩子的 jev_threshold 算命中；
+         一个钩子任一道命中，它的传感器就点火。Jev 调用失败时这些钩子按正则结果点火，
          并多返回一条说明失败原因的消息。
-      4. 每问一次 Jev，在 cli_audit_log 记一行 jev_check，sub_action 形如 jev=0.08（“是”的概率）。
-    输出：本次点火产生的 notify 消息列表，每条开头写着来源节点“notify from <id> <名字>：”，
+      4. 每道题在 cli_audit_log 记一行 jev_check，sub_action 形如 q0 jev=0.08（第几题、“是”的概率）。
+    输出：本次点火产生的 notify 消息列表，每条开头写着来源节点“notify from <id> <名字>: ”，
+      经 Jev 点火的传感器在提醒后逐行接上命中的每道题：Jev 这次答“是”的概率、阈值、题目原文，
       末尾跟一句误报时该去改哪条 hook
       （不往通知队列里放东西）。
     """
@@ -213,8 +215,11 @@ def sense(
             continue
         if not hit:
             continue
-        if r["jev_question"]:
-            to_ask.append(r)
+        qs = [{"position": i, "question": q,
+               "threshold": r["jev_threshold"] if r["jev_threshold"] is not None else 0.5}
+              for i, q in enumerate(parse_jev_questions(r["jev_question"]))]
+        if qs:
+            to_ask.append((r, qs))
         else:
             activated.append(r["sensor_concept_id"])
 
@@ -222,39 +227,49 @@ def sense(
         # A sensor already on in this session gets no new rising edge, so asking Jev
         # again could not change anything; skip it.
         states = load_active_states(db.conn, db.session_id)
-        to_ask = [r for r in to_ask if not states.get(r["sensor_concept_id"])]
+        to_ask = [(r, qs) for r, qs in to_ask if not states.get(r["sensor_concept_id"])]
 
     messages: list[str] = []
+    jev_hits: dict[int, list[str]] = {}   # sensor_id -> 命中那几道题的说明行（概率、阈值、题目）
     if to_ask:
+        def key(r, q):
+            return f"{r['hook_id']}.{q['position']}"
         try:
             answers = openrouter_post(DECISIONS_ENDPOINT, {
                 "model": JEV_MODEL,
                 "state": _jev_state(event_type, text, tool_name, prev),
                 "questions": {
-                    str(r["hook_id"]): {
+                    key(r, q): {
                         "type": "choice",
-                        "instructions": r["jev_question"],
+                        "instructions": q["question"],
                         "criteria": JEV_CHOICES,
                     }
-                    for r in to_ask
+                    for r, qs in to_ask for q in qs
                 },
             }, timeout=20)["answers"]
-            yes = {r["hook_id"]: answers[str(r["hook_id"])]["probabilities"]["yes"] for r in to_ask}
+            yes = {key(r, q): answers[key(r, q)]["probabilities"]["yes"] for r, qs in to_ask for q in qs}
         except Exception as e:
-            activated += [r["sensor_concept_id"] for r in to_ask]
+            activated += [r["sensor_concept_id"] for r, _ in to_ask]
             messages.append(
-                f"Jev 调用失败：{e}\n"
-                "断网或超时就检查网络；没有 key、HTTP 401/402 就检查 .env 里的 OPENROUTER_API_KEY 和 OpenRouter 余额；"
-                "HTTP 404 No endpoints found 多半是这个版本被新版接替了，去 openrouter.ai/perplexity 看有没有更新的 decider，"
-                "有就改 backend/llm.py 的 JEV_MODEL，再跑 audit --concept 验证（模型详情页显示在线不可信）。\n"
-                f"这次以下传感器没经过 Jev，只按正则点火：{'、'.join(r['name'] for r in to_ask)}")
+                f"Jev call failed: {e}\n"
+                "Offline or timed out: check the network. No key, or HTTP 401/402: check OPENROUTER_API_KEY in .env "
+                "and the OpenRouter balance. HTTP 404 No endpoints found usually means this version was superseded: "
+                "look for a newer decider at openrouter.ai/perplexity; if there is one, update JEV_MODEL in "
+                "backend/llm.py and run audit --concept to verify (the model page saying it is online is not reliable).\n"
+                f"These sensors fired on their regex alone, without Jev: {', '.join(r['name'] for r, _ in to_ask)}")
         else:
-            for r in to_ask:
-                # One jev_check row per question; sub_action reads e.g. "jev=0.08".
-                db.log_action(command="jev_check", concept_id=r["sensor_concept_id"],
-                              concept_name=r["name"], sub_action=f"jev={yes[r['hook_id']]:.2f}")
-                if yes[r["hook_id"]] >= r["jev_threshold"]:
+            for r, qs in to_ask:
+                hits = []
+                for q in qs:
+                    p_yes = yes[key(r, q)]
+                    # One jev_check row per question; sub_action reads e.g. "q0 jev=0.08".
+                    db.log_action(command="jev_check", concept_id=r["sensor_concept_id"],
+                                  concept_name=r["name"], sub_action=f"q{q['position']} jev={p_yes:.2f}")
+                    if p_yes >= q["threshold"]:
+                        hits.append(f"Jev yes {p_yes:.2f} ≥ threshold {q['threshold']}: {q['question']}")
+                if hits:
                     activated.append(r["sensor_concept_id"])
+                    jev_hits[r["sensor_concept_id"]] = hits
 
     if activated:
         eval_res = db.evaluate(activated_sensors=activated)
@@ -263,7 +278,10 @@ def sense(
             for act in actions:
                 if isinstance(act, dict) and "notify" in act and act["notify"]:
                     # Name the node so a wrong alarm can be written back to it.
-                    messages.append(f"notify from {fa.concept_id} {fa.concept}：{act['notify']}"
+                    hits = jev_hits.get(fa.concept_id)
+                    # 误报提示另起一行，免得粘在最后一道题后面像是题目的一部分。
+                    detail = ("\n" + "\n".join(f"- {h}" for h in hits) + "\n") if hits else ""
+                    messages.append(f"notify from {fa.concept_id} {fa.concept}: {act['notify']}{detail}"
                                     f"{_false_alarm_hint(db, fa.concept_id)}")
 
     return messages
@@ -279,19 +297,19 @@ def _deny_reason(db: HoronDB, cid: int, guard_name: str, states: dict[int, int])
       OR    列出未激活成员，注明任一满足即可；
       CHAIN 报告序列进度与正在等待的成员（该成员已激活时，提示需要它重新发生一次）。
       未激活的 logic 成员可能缺前置也可能被抑制，这里不替它下结论，指路给 compile。
-    输出：一句中文理由（不含"工具被拦截"前缀）。
+    输出：一句英文理由（不含 "Tool ... blocked" 前缀）。
     """
     inhs = db._get_inhibitions(cid, states, direction="incoming")
     active_inhs = [i.inhibitor_name for i in inhs if i.inhibitor_is_active == 1]
     if active_inhs:
-        return f"当前被活跃抑制源 ({', '.join(active_inhs)}) 强制锁死"
+        return f"locked by active inhibitor(s): {', '.join(active_inhs)}"
 
     members = db._get_compose_members(cid, states)
     if not members:
-        return "[系统配置错误] 该守卫未配置任何前置条件（孤岛死锁）"
+        return "[config error] this guard has no preconditions, so it can never pass"
 
     target = guard_name.replace('"', '\\"')
-    hint = f"（原因请运行 `python frontend/cli.py compile --target \"{target}\"` 查看）"
+    hint = f" (run `python frontend/cli.py compile --target \"{target}\"` to see why)"
     row = db.conn.execute("SELECT activation_type FROM concepts WHERE id = ?", (cid,)).fetchone()
     act = row["activation_type"] if row else None
 
@@ -309,31 +327,31 @@ def _deny_reason(db: HoronDB, cid: int, guard_name: str, states: dict[int, int])
         waiting = next((m for m in members if m.order_index == k + 1), None)
         if waiting is None:
             if k >= total:
-                return "[系统内部Bug] 序列已走完但守卫电位未同步（求值状态不一致）"
-            return f"[系统配置错误] 序列步骤编号不连续，找不到第 {k + 1}/{total} 步"
+                return "[internal bug] the sequence is complete but the guard state was not updated (inconsistent evaluation)"
+            return f"[config error] sequence step numbers have a gap: step {k + 1}/{total} not found"
         if waiting.is_active == 1:
             return (
-                f"序列进行至第 {k}/{total} 步，等待 '{waiting.name}' 重新发生一次"
-                f"（它当前已处于点亮状态，只有 0→1 的变化才能推进序列）"
+                f"sequence at step {k}/{total}, waiting for '{waiting.name}' to happen again"
+                f" (it is already on; only a 0→1 change advances the sequence)"
             )
-        reason = f"序列进行至第 {k}/{total} 步，等待: {waiting.name}"
+        reason = f"sequence at step {k}/{total}, waiting for: {waiting.name}"
         return reason + (hint if waiting.role != "sensor" else "")
 
     unlit_sensors = [m.name for m in members if m.is_active == 0 and m.role == "sensor"]
     unlit_logic = [m.name for m in members if m.is_active == 0 and m.role != "sensor"]
     if not unlit_sensors and not unlit_logic:
-        return "[系统内部Bug] 前置已全部满足但守卫电位未同步（求值状态不一致）"
+        return "[internal bug] all preconditions are met but the guard state was not updated (inconsistent evaluation)"
 
     if act == "OR":
         names = unlit_sensors + unlit_logic
-        return f"以下前置任一满足即可，目前都未满足: {', '.join(names)}" + (hint if unlit_logic else "")
+        return f"any one of these preconditions is enough, none is met yet: {', '.join(names)}" + (hint if unlit_logic else "")
 
     parts = []
     if unlit_sensors:
-        parts.append(f"传感器未点亮: {', '.join(unlit_sensors)}")
+        parts.append(f"sensors not on: {', '.join(unlit_sensors)}")
     if unlit_logic:
-        parts.append(f"前置节点未通电: {', '.join(unlit_logic)}{hint}")
-    return "；".join(parts)
+        parts.append(f"preconditions not powered: {', '.join(unlit_logic)}{hint}")
+    return "; ".join(parts)
 
 
 def guard(
@@ -387,9 +405,9 @@ def guard(
             try:
                 reason = _deny_reason(db, g["guard_concept_id"], g["name"], states)
             except Exception as e:
-                reason = f"[系统内部异常] 守卫状态校验失败: {e}"
+                reason = f"[internal error] guard state check failed: {e}"
 
-            return False, f"工具 '{tool_name}' 调用已被拦截：受守卫 '{g['name']}' 管辖，{reason}。", fired_msgs
+            return False, f"Tool '{tool_name}' call blocked by guard '{g['name']}': {reason}.", fired_msgs
 
     return True, None, fired_msgs
 

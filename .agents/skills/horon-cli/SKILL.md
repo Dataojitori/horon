@@ -293,7 +293,7 @@ Tag 插件的 `on_mutation` 可以检查变更并拒绝不合要求的写入，`
 | 手动拨动永久传感器电位 | `set <名称或ID> active <0或1>` |
 | 添加/删除别名 | `add <名称或ID> name <别名>` / `delete <名称或ID> name <别名>` |
 | 挂载/摘除 Tag | `add <名称或ID> tag <Tag名>` / `delete <名称或ID> tag <Tag名>` |
-| 查看感知或守卫规则 | `read_hook <名称或ID> [...]` |
+| 查看感知或守卫规则、on_fire 提醒全文 | `read_hook <名称或ID> [...]` |
 | 清除书腰 | `delete <名称或ID> when_to_read` |
 | 删除节点 | `delete <名称或ID>`，删除条件和关联清理见下文 |
 

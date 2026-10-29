@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 import numpy as np
 
-from ._db_common import _now, transactional
+from ._db_common import _now, parse_jev_questions, transactional
 from .evaluator import load_active_states
 from .embedding import embed_texts
 from .llm import EMBEDDING_DIMENSIONS
@@ -413,7 +413,12 @@ class QueryMixin:
             "FROM sensor_hooks WHERE sensor_concept_id = ? ORDER BY id",
             (concept_id,),
         ).fetchall()
-        return [SensorHookDetail(**dict(r)) for r in rows]
+        hooks = []
+        for r in rows:
+            d = dict(r)
+            questions = parse_jev_questions(d.pop("jev_question"))
+            hooks.append(SensorHookDetail(**d, jev_questions=questions))
+        return hooks
 
     def _get_tool_guards(self, concept_id: int) -> list[ToolGuardDetail]:
         rows = self.conn.execute(

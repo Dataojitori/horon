@@ -45,7 +45,7 @@ export interface SensorHookDetail {
   event_type: string;
   tool: string | null;
   match_pattern: string;
-  jev_question: string | null;
+  jev_questions: string[];
   jev_threshold: number | null;
   created_at: string;
 }

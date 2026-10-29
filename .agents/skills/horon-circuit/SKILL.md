@@ -96,7 +96,7 @@ sensor 可以配置 `sensor_hook` 监听运行时事件。事件命中时，系�
 python frontend/cli.py set <传感器名> sensor_hook <event_type> \
   --match-pattern "<正则>" \
   [--tool <工具名>] \
-  [--jev "<是非题>"] [--jev-threshold 0.5] \
+  [--jev "<是非题>"]... [--jev-threshold 0.5] \
   [--adapter claude-code|codex|antigravity|opencode|dsh]
 ```
 
@@ -112,7 +112,9 @@ python frontend/cli.py set <传感器名> sensor_hook <event_type> \
   | `dsh` | `pwsh` | 没有单独的路径字段：`pwsh`、`read`、`edit`、`horon` 的参数都是 `{"args": [...]}`，路径在 `args` 里 |
   | `codex`、`antigravity` | 以宿主实际上报的为准 | 见 `backend/harness/adapters/<宿主>.py`；拿不准就先在该宿主里触发一次，用 `read_hook` 和实际输出核对 |
 - `--adapter`：可选，只在该宿主的会话里匹配。省略则所有宿主都匹配；宿主未知的会话（如终端手敲）只匹配省略了它的 Hook。重新绑定时省略 `--adapter` 会恢复为所有宿主。
-- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 `backend/llm.py` 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。
+- `--jev` 与 `--jev-threshold`：可选，正则命中后由 Jev（OpenRouter 上的判断模型，现在用的是 perplexity/pplx-decider-v1.2，模型名在 `backend/llm.py` 的 `JEV_MODEL`；需 `OPENROUTER_API_KEY`）按意思复筛，用来减少正则的字面误报，比如引用、举例、否定里出现了同样的字。它也能直接当内容检测器用：输出写完后挂在 `tool_call`（如 Write 草稿）上，问“稿子里有没有某类内容”，查到违规才响，提醒只说这一件。
+  - 擅长与不擅长：Jev 擅长模式和内容检测（有没有写出公司名、有没有留着某类条件、有没有写具体日期、有没有写出弱点）；不擅长语气和情商题（“这句是不是像在教对方调用我”这类要读口吻的判断），这类题它几乎全判“是”，不要交给它。
+  - 查多项：同一时刻要查几项，在一个传感器上重复 `--jev`。任一道答“是”就点火，提醒后面逐行列出命中的每道题：Jev 这次答“是”的概率、阈值、题目原文；`--jev-threshold` 所有题共用。同一个事件里所有命中的 Jev 题合在一次请求里发。
   - 判定机制：Jev 判定为“是”的概率不低于 `--jev-threshold`（默认 0.5）才点火；调用失败（超时、无 Key 等）时降级按正则结果点火。
   - 输入边界：
     - 消息类事件（`user_message` / `model_message`）：Jev 看到当前消息，且**会附带对方上一条消息（截取末尾最多 1500 字符）作为上下文前置**（如 `用户先对 AI 说：「……」\nAI 接着对用户说：「……」\n（要判断的是 AI 接着说的这一条，用户那条只是上文。）`），出题时可以利用上一轮语境。
@@ -133,7 +135,7 @@ CLI 没有 sensor_hook 的试跑命令，只能在在线会话里用真实输入
 
 ## on_fire 动作
 
-节点从 0 跃迁到 1 时执行 `on_fire` 配置的动作，目前可用的动作是 `notify`：把提醒文字推给 AI，开头标着来源节点。写法 `{"notify": "提醒文字"}`，再次设置会整体替换原配置。
+节点从 0 跃迁到 1 时执行 `on_fire` 配置的动作，目前可用的动作是 `notify`：把提醒文字推给 AI，开头标着来源节点。写法 `{"notify": "提醒文字"}`，再次设置会整体替换原配置。所有动作的文字加起来最多 900 字节（UTF-8，约中文 300 字、英文 150 词），超了写入被拒：提醒只放那一刻要你判断的一两问，规则写进做法节点正文，能查的交给代码、正则或 Jev。提醒全文用 `read_hook <名称或ID>` 看。
 
 只推提醒的传感器可以直接在真库建，建完用一条会命中的输入实测一次。
 
@@ -236,12 +238,12 @@ delete <抑制源名> inhibition <目标名>
 | 修改激活规则 | `set <名称或ID> activation-rule "规则"` |
 | 修改生命周期 | `set <名称或ID> lifespan turn\|session\|permanent` |
 | 手动拨动电位 | `set <名称或ID> active <0或1>` |
-| 绑定事件感知 | `set <名称或ID> sensor_hook user_message\|model_message\|tool_call\|tool_result --match-pattern "正则" [--tool <工具名>] [--jev "是非题" [--jev-threshold 0.5]] [--adapter ...]` |
+| 绑定事件感知 | `set <名称或ID> sensor_hook user_message\|model_message\|tool_call\|tool_result --match-pattern "正则" [--tool <工具名>] [--jev "是非题"]... [--jev-threshold 0.5] [--adapter ...]` |
 | 绑定工具守卫 | `set <名称或ID> tool_guard <工具名> [--args-pattern "正则"] [--adapter ...]` |
 | 配置发火动作 | `set <名称或ID> on_fire '<动作JSON>'` |
 | 添加/解除抑制 | `add <源名称或ID> inhibition <目标名称或ID>` / `delete <源名称或ID> inhibition <目标名称或ID>` |
 | 清除规则并退回 plain | `delete <名称或ID> activation-rule` |
-| 查看 Hook / 守卫规则 | `read_hook <名称或ID> [...]` |
+| 查看 Hook / 守卫规则 / on_fire 全文 | `read_hook <名称或ID> [...]` |
 | 解绑感知或守卫 | `delete <名称或ID> sensor_hook` / `delete <名称或ID> tool_guard` |
 | 逆向求解与诊断 | `compile --target <目标名称或ID> [--assume <传感器1> <传感器2> ...]` |
 | 临时状态复位 | `reset` |

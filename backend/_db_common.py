@@ -26,6 +26,11 @@ _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 SYSTEM_TAGS = {"exit", "state", "boot"}
 VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
+# on_fire 所有动作文字加起来的大小上限，按 UTF-8 字节算（中日文一字 3 字节、英文字母 1 字节，
+# 同样的信息量大致同价；正文的 8192 B 线也按字节）。900 B 约中文 300 字、英文 150 词。
+# 提醒在那一刻只该推一两问；规则清单写进做法节点正文，能查的交给代码、正则或 Jev。超了写入直接拒绝。
+ON_FIRE_MAX_BYTES = 900
+
 OFFLINE_DEV_SESSION_ID = "devonly"
 
 # ── Path / env ───────────────────────────────────────────────────────────────
@@ -62,6 +67,44 @@ def _validate_name(name: str) -> str:
     else:
         raise ValueError("Name cannot be purely numeric (ambiguous with concept ID).")
     return name
+
+
+def parse_jev_questions(raw: str | None) -> list[str]:
+    """读 sensor_hooks.jev_question 列。输入：列值。输出：题目列表，空列返回 []。
+    列里是纯文本就当一道题；是 JSON 字符串列表就是多道题。"""
+    if not raw or not raw.strip():
+        return []
+    text = raw.strip()
+    if text.startswith("["):
+        try:
+            items = json.loads(text)
+        except ValueError:
+            return [text]
+        if isinstance(items, list):
+            return [it.strip() for it in items if isinstance(it, str) and it.strip()]
+    return [text]
+
+
+def dump_jev_questions(questions: list[str]) -> str | None:
+    """写 sensor_hooks.jev_question 列。输入：题目列表。输出：列值；
+    没有题返回 None，一道题存纯文本，多道存 JSON 字符串列表。"""
+    if not questions:
+        return None
+    if len(questions) == 1:
+        return questions[0]
+    return json.dumps(questions, ensure_ascii=False)
+
+
+def _check_on_fire_length(texts) -> None:
+    """输入：on_fire 各动作的文字。行为：UTF-8 总字节数超过 ON_FIRE_MAX_BYTES 就抛 ValueError，
+    报错里说超了多少、该怎么拆。输出：无。"""
+    total = sum(len(t.encode("utf-8")) for t in texts)
+    if total > ON_FIRE_MAX_BYTES:
+        raise ValueError(
+            f"on_fire text is {total} B, over the {ON_FIRE_MAX_BYTES} B limit (UTF-8; about 300 Chinese characters "
+            f"or 150 English words). Keep only the one or two questions left for your judgment at that moment; put the "
+            f"rules and their reasons in the body of a practice node, and leave whatever can be checked to code, regex "
+            f"or Jev (a sensor that fires only when it finds a violation in the written output).")
 
 
 def _validate_and_normalize_on_fire(raw: Any) -> str | None:
@@ -107,6 +150,7 @@ def _validate_and_normalize_on_fire(raw: Any) -> str | None:
                 )
             if not isinstance(v, str) or not v.strip():
                 raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
+        _check_on_fire_length(parsed.values())
         return json.dumps(parsed, ensure_ascii=False)
 
     # 3. 校验列表格式
@@ -123,6 +167,7 @@ def _validate_and_normalize_on_fire(raw: Any) -> str | None:
                     )
                 if not isinstance(v, str) or not v.strip():
                     raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
+        _check_on_fire_length(v for item in parsed for v in item.values())
         return json.dumps(parsed, ensure_ascii=False)
 
     else:

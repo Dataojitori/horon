@@ -23,6 +23,7 @@ from dotenv import load_dotenv
 from backend.db import HoronDB, create_database, database_exists
 from backend._db_common import OFFLINE_DEV_SESSION_ID
 from backend._db_mutations import ConcurrentUpdateError
+from backend.evaluator import parse_on_fire_action
 from backend.harness.core import sync_session
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
@@ -150,6 +151,23 @@ def _format_circuit_line(result: ReadResult) -> str:
         return f"(none) = {res_str}"
 
 
+def _on_fire_actions(raw: str) -> list[tuple[str, str]]:
+    """把库里存的 on_fire JSON 拆成 (动作种类, 内容) 列表。
+
+    输入：on_fire 原文（单个动作对象或动作列表的 JSON）。输出：按原顺序的 (种类, 内容) 对；
+    解析不了时返回 [("raw", 原文)]，不抛错，好让读节点不因一条坏配置失败。
+    """
+    parsed = parse_on_fire_action(raw)
+    if isinstance(parsed, str):
+        return [("raw", raw)]
+    actions = parsed if isinstance(parsed, list) else [parsed]
+    pairs = []
+    for act in actions:
+        if isinstance(act, dict):
+            pairs.extend((str(k), str(v)) for k, v in act.items())
+    return pairs or [("raw", raw)]
+
+
 def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = frozenset()) -> str:
     """把一次 read_concept 的结果排成终端文本。
 
@@ -166,9 +184,6 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
         lines.append(f"CONCEPT: {result.name} (ID: {result.id}, {role_str}, {status_str})")
     else:
         lines.append(f"CONCEPT: {result.name} (ID: {result.id}, PLAIN)")
-
-    if result.on_fire:
-        lines.append(f"On-Fire: {result.on_fire}")
 
     alt_names = [a for a in result.aliases if a != result.name]
     if alt_names:
@@ -206,12 +221,21 @@ def _format_read_concept(result: ReadResult, listed_above: frozenset[int] = froz
 
     elif result.role == "sensor":
         lines.append(f"Sensor: {result.lifespan or 'unknown'}")
-        # 不印正则和 Jev 问法：看得见规则就会对着它检查、绕开自己的输出。完整规则用 read_hook 看。
+        # 不印事件类型、正则和 Jev 问法：看得见规则就会对着它检查、绕开自己的输出。完整规则用 read_hook 看。
+        # 没绑 hook 就不印这一行，有这一行本身就说明绑了。
         if result.sensor_hooks:
-            events = ", ".join(sh.event_type for sh in result.sensor_hooks)
-            lines.append(f"Hook: {events} (rule hidden; read_hook {result.id} to view)")
-        else:
-            lines.append("Hook: (none)")
+            lines.append(f"Hook: rule hidden; read_hook {result.id} to view")
+
+    # on_fire 不印全文：它会在该响的那一刻推过来，读节点时先看一遍只占地方，也让人对着它改自己的输出。
+    # 上面的 Hook / Tool Guard 行已经指向 read_hook 时（read_hook 会连 on_fire 一起列），不再单印一行；
+    # 只有没有别的 read_hook 指针时（如带 on_fire 的 logic），才印动作种类和指针。
+    # 上面印了指针的条件：传感器绑了 hook，或守卫有带 args 正则的规则。
+    pointer = f"read_hook {result.id} to view"
+    pointer_printed = (result.role == "sensor" and bool(result.sensor_hooks)) or (
+        result.role == "guard" and any(tg.args_pattern for tg in result.tool_guards))
+    if result.on_fire and not pointer_printed:
+        kinds = ", ".join(kind for kind, _ in _on_fire_actions(result.on_fire)) or "?"
+        lines.append(f"On-Fire: {kinds} (text hidden; {pointer})")
 
     # ── 入向抑制（兜底展示：当节点非逻辑/守卫且附带抑制时） ──
     if result.inhibitions and result.role not in ("logic", "guard"):
@@ -696,10 +720,11 @@ def _build_parser():
                    help="Limit sensor_hook/tool_guard to this host; omitted means all hosts")
     p.add_argument("--args-pattern", "--args_pattern", dest="args_pattern", default=None,
                    help="Args regex pattern for tool_guard")
-    p.add_argument("--jev", dest="jev_question", default=None,
-                   help="sensor_hook: yes/no question asked to Jev after the regex hits; fires only on 'yes'")
+    p.add_argument("--jev", dest="jev_questions", action="append", default=None,
+                   help="sensor_hook: yes/no question asked to Jev after the regex hits. Repeat for several "
+                        "questions; the sensor fires if any one is answered 'yes'")
     p.add_argument("--jev-threshold", "--jev_threshold", dest="jev_threshold", type=float, default=None,
-                   help="sensor_hook: minimum probability of Jev's 'yes' to fire (default 0.5)")
+                   help="sensor_hook: minimum probability of Jev's 'yes' for every question (default 0.5)")
 
     # update (content — patch or append)
     p = sub.add_parser("update", allow_abbrev=False)
@@ -719,9 +744,9 @@ def _build_parser():
     p.add_argument("concept", nargs="+",
                    help="一个或多个节点名/别名/ID。一次读多个时整批算一次读取，批内顺序不记注意力转移。")
 
-    # read_hook — 查看 read_concept 隐藏的 sensor_hook / tool_guard 完整规则
+    # read_hook — 查看 read_concept 隐藏的 sensor_hook / tool_guard 完整规则与 on_fire 提醒全文
     p = sub.add_parser("read_hook", allow_abbrev=False,
-                       help="Show full sensor_hook / tool_guard rules hidden by read_concept.")
+                       help="Show full sensor_hook / tool_guard rules and on_fire text hidden by read_concept.")
     p.add_argument("concept", nargs="+", help="一个或多个节点名/别名/ID")
 
     # place — 把一条推荐边放到起点推荐列表的指定名次
@@ -892,7 +917,7 @@ def _dispatch(args, db):
             tool=getattr(args, "tool", None),
             args_pattern=getattr(args, "args_pattern", None),
             adapter=getattr(args, "adapter", None),
-            jev_question=getattr(args, "jev_question", None),
+            jev_questions=getattr(args, "jev_questions", None),
             jev_threshold=getattr(args, "jev_threshold", None),
         )
 
@@ -938,7 +963,9 @@ def _dispatch(args, db):
 
     elif args.command == "read_hook":
         # 输入：节点名/别名/ID 列表。输出：每个节点一段，列出 sensor_hook 与 tool_guard 完整规则
-        # （写法与 set 命令参数一致）。不记注意力转移，不算读节点。
+        # （写法与 set 命令参数一致；Jev 题一题一行，行尾用 \ 续行，和 Hook 行合起来才是完整的一条参数），
+        # 以及 on_fire 每个动作的全文（按真换行展开）。
+        # 不记注意力转移，不算读节点。
         blocks = []
         for c in args.concept:
             r = db.read_concept(c)
@@ -948,16 +975,23 @@ def _dispatch(args, db):
                 args_flag = f" --args-pattern {shlex.quote(tg.args_pattern)}" if tg.args_pattern else ""
                 adapter_flag = f" --adapter {tg.adapter}" if tg.adapter else ""
                 hook_lines.append(f"  Tool Guard: {tg.tool}{args_flag}{adapter_flag}")
-            if not r.sensor_hooks and not r.tool_guards:
-                blocks.append(f"{head}\n  (no hook or tool guard)")
-                continue
             for sh in r.sensor_hooks:
                 tool_flag = f" --tool {shlex.quote(sh.tool)}" if sh.tool else ""
                 adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
-                jev_flag = (f" --jev {shlex.quote(sh.jev_question)} --jev-threshold {sh.jev_threshold}"
-                            if sh.jev_question else "")
-                hook_lines.append(f"  Hook: {sh.event_type}{tool_flag} --match-pattern "
-                                  f"{shlex.quote(sh.match_pattern)}{adapter_flag}{jev_flag}")
+                thr_flag = f" --jev-threshold {sh.jev_threshold}" if sh.jev_questions else ""
+                # 一题一行，前一行末尾加 \ 续行，免得只抄 Hook 那一行把题丢掉；任一题答“是”就点火
+                parts = [f"  Hook: {sh.event_type}{tool_flag} --match-pattern "
+                         f"{shlex.quote(sh.match_pattern)}{adapter_flag}{thr_flag}"]
+                parts += [f"    --jev {shlex.quote(q)}" for q in sh.jev_questions]
+                hook_lines.append(" \\\n".join(parts))
+            if r.on_fire:
+                # 提醒全文按真换行展开（库里存的是 JSON，\n 转义读不了）；改它用 set <节点> on_fire '<JSON>'。
+                for kind, text in _on_fire_actions(r.on_fire):
+                    body = "\n".join("    " + ln for ln in text.splitlines()) or "    "
+                    hook_lines.append(f"  On-Fire {kind}:\n{body}")
+            if not hook_lines:
+                blocks.append(f"{head}\n  (no hook, tool guard or on_fire)")
+                continue
             blocks.append(head + "\n" + "\n".join(hook_lines))
         return RawOutput("\n\n".join(blocks))
 

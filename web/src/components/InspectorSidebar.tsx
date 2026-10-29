@@ -274,12 +274,12 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
                     <span className="field-label">Pattern</span>
                     <code>{h.match_pattern}</code>
                   </div>
-                  {h.jev_question && (
-                    <div className="hook-pattern">
+                  {h.jev_questions?.map((q, i) => (
+                    <div key={i} className="hook-pattern">
                       <span className="field-label">Jev ≥ {h.jev_threshold}</span>
-                      <span>{h.jev_question}</span>
+                      <span>{q}</span>
                     </div>
-                  )}
+                  ))}
                 </div>
               ))}
             </div>
