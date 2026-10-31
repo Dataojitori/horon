@@ -634,48 +634,58 @@ def _build_parser():
                                  allow_abbrev=False)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    def add_command(name, help=None, description=None):
+        """注册子命令。help 显示在总命令列表里，description 显示在 `<命令> --help` 里，不写就用 help。"""
+        return sub.add_parser(name, allow_abbrev=False, help=help, description=description or help,
+                              formatter_class=argparse.RawDescriptionHelpFormatter)
+
     # reset
-    sub.add_parser("reset", allow_abbrev=False,
-                   help="Reset ephemeral sensors (session/turn) and chains for the current session.")
+    add_command("reset", "Reset ephemeral sensors (session/turn) and chains for the current session.")
 
     # create_concept
-    p = sub.add_parser("create_concept", allow_abbrev=False)
+    p = add_command("create_concept", "Create a concept.",
+                    "Create a concept. Non-empty content is required: --content, or --content-file for long "
+                    "or multi-line text (UTF-8; line breaks inside the text are kept).")
     p.add_argument("name")
-    p.add_argument("--when-to-read", default=None)
+    p.add_argument("--when-to-read", default=None,
+                   help="When this concept should be opened. search_semantic matches on this text.")
     p.add_argument("--content", default=None,
                    help="Why this concept exists and what observation prompted it.")
     p.add_argument("--content-file", "--content_file", dest="content_file", default=None,
                    help="Read concept content from file.")
-    p.add_argument("--role", default="plain", choices=["plain", "sensor", "logic", "guard"])
-    p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"])
+    p.add_argument("--role", default="plain", choices=["plain", "sensor", "logic", "guard"],
+                   help="Default: plain")
+    p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"],
+                   help="Sensors only")
     p.add_argument("--activation-rule", "--activation_rule", dest="activation_rule", default=None,
                    help="Activation rule for logic/guard nodes (e.g. 'A & B', 'A → B', 'A | B')")
     p.add_argument("--on-fire", "--on_fire", dest="on_fire", default=None,
                    help="On-fire action JSON config")
 
     # create_tag
-    p = sub.add_parser("create_tag", allow_abbrev=False)
+    p = add_command("create_tag", "Register a tag.",
+                    "Register a tag. NAME must be the official name of an existing concept, not an alias; "
+                    "that concept becomes the tag's source and first member.")
     p.add_argument("name")
 
     # delete_tag
-    p = sub.add_parser("delete_tag", allow_abbrev=False)
+    p = add_command("delete_tag", "Delete a tag.")
     p.add_argument("name")
 
     # list_tags
-    sub.add_parser("list_tags", allow_abbrev=False)
+    add_command("list_tags", "List tags with usage counts and plugin descriptions.")
 
     # audit: the argument only picks the scope; what runs is fixed per scope
-    p = sub.add_parser("audit", allow_abbrev=False,
-                       help="audit = whole graph, audit <tag> = one tag's members: plugin audits plus a node "
-                            "health summary (nodes not yet read for drifting off-topic, nodes over the size line). "
-                            "audit --concept <concept...> = full health reading of those nodes.")
+    p = add_command("audit", "Audit the whole graph, one tag's members, or specific concepts.",
+                    "audit = whole graph, audit <tag> = one tag's members: plugin audits plus a node "
+                    "health summary.\n"
+                    "audit --concept <concept...> = health reading of those nodes.")
     p.add_argument("tag", nargs="?", default=None, help="Limit the audit to this tag's members")
     p.add_argument("--concept", nargs="+", metavar="CONCEPT", default=None,
-                   help=f"Health reading of these nodes: off-topic (Jev, OpenRouter, paid, asks line by line "
-                        f"whether each line belongs under the name) and oversize (content >= {OVERSIZE_BYTES} B)")
+                   help="Health reading of these nodes")
 
     # search_keyword
-    p = sub.add_parser("search_keyword", allow_abbrev=False)
+    p = add_command("search_keyword", "Find concepts by keyword in names, aliases, when_to_read and content.")
     p.add_argument("query", help="Keyword query to search in concepts, aliases, when_to_read, and content")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
@@ -684,25 +694,35 @@ def _build_parser():
 
 
     # list_concepts
-    p = sub.add_parser("list_concepts", allow_abbrev=False)
+    p = add_command("list_concepts", "List all concepts, or the members of a tag expression.")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
 
     # add (name / tag / inhibition)
-    p = sub.add_parser("add", allow_abbrev=False)
+    p = add_command("add", "Add an alias, a tag or an inhibition.",
+                    "add <concept> name <alias>\n"
+                    "add <concept> tag <tag>\n"
+                    "add <inhibitor> inhibition <target>")
     p.add_argument("target")
     p.add_argument("kind", choices=["name", "tag", "inhibition"])
     p.add_argument("value")
 
     # delete (default=concept, or name/activation-rule/tag/when_to_read/sensor_hook/tool_guard/inhibition)
-    p = sub.add_parser("delete", allow_abbrev=False)
+    p = add_command("delete", "Delete a concept, or one part of it.",
+                    "delete <concept> removes the concept.\n"
+                    "delete <concept> <kind> [value] removes only that part.")
     p.add_argument("target")
     p.add_argument("kind", nargs="?", default=None,
                    choices=["name", "activation-rule", "activation_rule", "tag", "when_to_read", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard", "inhibition"])
     p.add_argument("value", nargs="?", default=None)
 
     # set (name, when_to_read, activation-rule, role, lifespan, active, on_fire, sensor_hook, tool_guard)
-    p = sub.add_parser("set", allow_abbrev=False)
+    p = add_command("set", "Set a single-valued property.",
+                    "Set a single-valued property.\n"
+                    "  set <concept> name <new name>\n"
+                    "  set <concept> when_to_read \"when to open it\"\n"
+                    "  set <permanent sensor> active <0|1>\n"
+                    "The circuit properties are covered by the horon-circuit manual.")
     p.add_argument("target")
     p.add_argument("prop", choices=["name", "when_to_read", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
     p.add_argument("value", help="New value. For tool_guard: tool name regex, full match, case-sensitive, e.g. Bash|bash")
@@ -725,7 +745,13 @@ def _build_parser():
                    help="sensor_hook: minimum probability of Jev's 'yes' for every question (default 0.5)")
 
     # update (content — patch or append)
-    p = sub.add_parser("update", allow_abbrev=False)
+    p = add_command("update", "Append to a concept's content or replace part of it.",
+                    "Append to a concept's content or replace part of it.\n"
+                    "  update <node> content --append \"text\"\n"
+                    "  update <node> content --old \"old text\" --new \"replacement\"\n"
+                    "  update <node> content --old \"start...end\" --new \"replacement\"\n\n"
+                    "In --old, \"...\" stands for everything between the two ends.\n"
+                    "Use the -file options for long or multi-line text.")
     p.add_argument("node")
     p.add_argument("field", choices=["content"])
     # patch
@@ -738,30 +764,31 @@ def _build_parser():
     p.add_argument("--append-file", default=None)
 
     # read_concept
-    p = sub.add_parser("read_concept", allow_abbrev=False)
+    p = add_command("read_concept", "Read concepts: content, properties and suggestions.")
     p.add_argument("concept", nargs="+",
-                   help="一个或多个节点名/别名/ID。一次读多个时整批算一次读取，批内顺序不记注意力转移。")
+                   help="One or more names, aliases or IDs. Several at once count as a single read: "
+                        "their order is not recorded as an attention shift.")
 
     # read_hook — 查看 read_concept 隐藏的 sensor_hook / tool_guard 完整规则与 on_fire 提醒全文
-    p = sub.add_parser("read_hook", allow_abbrev=False,
-                       help="Show full sensor_hook / tool_guard rules and on_fire text hidden by read_concept.")
-    p.add_argument("concept", nargs="+", help="一个或多个节点名/别名/ID")
+    p = add_command("read_hook", "Show full sensor_hook / tool_guard rules and on_fire text hidden by read_concept.")
+    p.add_argument("concept", nargs="+", help="One or more names, aliases or IDs")
 
     # place — 把一条推荐边放到起点推荐列表的指定名次
-    p = sub.add_parser("place", allow_abbrev=False,
-                       help="place <suggested> --in <list owner> --at <rank>: put a concept at the given "
-                            "rank of another concept's [ YOU MAY ALSO NEED ] list. Prints the updated list.")
+    p = add_command("place",
+                    "place <suggested> --in <list owner> --at <rank>: put a concept at the given "
+                    "rank of another concept's [ YOU MAY ALSO NEED ] list. Prints the updated list.")
     p.add_argument("to_concept", metavar="suggested",
                    help="The concept to move (name, alias, or ID)")
     p.add_argument("--in", dest="from_concept", metavar="LIST_OWNER", required=True,
                    help="The concept whose suggestion list is being edited")
     p.add_argument("--at", dest="rank", metavar="RANK", type=int, required=True,
-                   help="1 = top. A rank past the end (e.g. 11) moves it out of the top 10 without deleting it.")
+                   help="1 = top. A rank past the end puts it last. Only the top ranks are shown, so a low "
+                        "rank moves it out of view.")
 
     # cut — 删除推荐边
-    p = sub.add_parser("cut", allow_abbrev=False,
-                       help="cut <suggested...> --from <list owner>: remove concept(s) from another "
-                            "concept's [ YOU MAY ALSO NEED ] list (deletes the edges). Prints the updated list.")
+    p = add_command("cut",
+                    "cut <suggested...> --from <list owner>: remove concept(s) from another "
+                    "concept's [ YOU MAY ALSO NEED ] list (deletes the edges). Prints the updated list.")
     p.add_argument("to_concepts", metavar="suggested", nargs="+",
                    help="One or more concepts to remove (name, alias, or ID)")
     p.add_argument("--from", dest="from_concept", metavar="LIST_OWNER", required=True,
@@ -770,50 +797,53 @@ def _build_parser():
                    help="Also remove the list owner from each removed concept's own list")
 
     # compile — backward solver diagnostics for target concept
-    p = sub.add_parser("compile", allow_abbrev=False,
-                       help="Backward solver diagnostics for target concept.")
+    p = add_command("compile", "Backward solver diagnostics for target concept.",
+                    "Walk a circuit node's whole dependency tree and report why it is or is not powered: "
+                    "missing leaf conditions, active inhibitors, what a CHAIN is waiting for.\n"
+                    "With --assume it simulates those sensors firing and changes no real data.")
     p.add_argument("--target", required=True,
-                   help="Target concept to diagnose (why it is active / inactive)")
+                   help="Sensor, logic or guard to diagnose (not plain)")
     p.add_argument("--assume", nargs="*", default=[],
                    help="Sensors to hypothetically light, in the given order (sensor only; logic/guard potentials are derived)")
 
     # read_memory — read from nocturne_memory.db
-    p = sub.add_parser("read_memory", allow_abbrev=False,
-        help="Read content from nocturne memory by URI. "
-             "Prints to stdout or writes to --out file.")
+    p = add_command("read_memory",
+        "Read content from nocturne memory by URI. "
+        "Prints to stdout or writes to --out file, which update --append-file can then merge into a concept.")
     p.add_argument("uri",
         help="Nocturne memory URI (e.g. core://nocturne/bluesky)")
     p.add_argument("--out", default=None,
         help="Write content to file instead of stdout")
 
     # search_semantic (semantic search by when_to_read embedding)
-    p = sub.add_parser("search_semantic", allow_abbrev=False,
-        help="Search concepts by semantic intent (vector similarity on when_to_read).")
+    p = add_command("search_semantic",
+        "Search concepts by semantic intent (vector similarity on when_to_read).")
     p.add_argument("query", help="Natural language intent to search for")
     p.add_argument("--limit", type=int, default=10,
         help="Maximum number of results to return (default: 10)")
 
     # recent — 最近修改过的节点
-    p = sub.add_parser("recent", allow_abbrev=False,
-        help="List the most recently mutated concepts (from the CLI audit log).")
+    p = add_command("recent", "List the most recently mutated concepts (from the CLI audit log).")
     p.add_argument("n", nargs="?", type=int, default=10,
         help="Number of distinct concepts to show (default: 10)")
 
     # suggest_name — 起名与检查小助手
-    p = sub.add_parser("suggest_name", allow_abbrev=False,
-        help="Ask gpt-6-luna to check a concept's name or suggest better names based on its type (plain/circuit/tag) and content. Read-only.")
+    p = add_command("suggest_name",
+        "Ask gpt-6-luna to check a concept's name or suggest better names based on its type (plain/circuit/tag) and content. Read-only.")
     p.add_argument("concept", help="Concept name, alias or ID")
 
     # login — 会话开场：boot 节点 + recent（说明书只给路径）
-    sub.add_parser("login", allow_abbrev=False,
-        help="Session start: print all concepts tagged 'boot' and recent mutations. The manual is NOT printed; only its path."
+    add_command("login",
+        "Session start: print all concepts tagged 'boot' and recent mutations. The manual is NOT printed; only its path."
     ).add_argument("--recent", type=int, default=10, dest="recent_n",
         help="How many recent concepts to show (default: 10, 0 to hide)")
 
     # batch
-    p = sub.add_parser("batch", allow_abbrev=False,
-        help="Run multiple commands. Reads from stdin or --file. "
-             "Only prints last result unless --all is set.")
+    p = add_command("batch",
+        "Run multiple commands. Reads from stdin or --file. "
+        "Only prints last result unless --all is set.",
+        "Run multiple commands, one per line, without the `python frontend/cli.py` prefix. Quoted text may span "
+        "lines. Reads from stdin or --file. Only prints last result unless --all is set.")
     p.add_argument("--file", default=None,
         help="Read commands from file (default: stdin)")
     p.add_argument("--all", action="store_true",
@@ -1161,7 +1191,7 @@ def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[
     输入：parser 是 _build_parser() 的结果；raw_text 是命令文本；print_all 对应 --all；
     check 可选，签名 check(已解析的参数)，在每条命令执行前调用，抛异常就当这一行失败
     （远程接口用它再过一遍白名单）。
-    行为：逐行独立提交，某行出错就停，前面成功的不回滚（与原来一致）。
+    行为：逐行独立提交，某行出错就停，前面成功的不回滚（与原来一致），失败信息里写明这一点。
     输出：(out, err)。out 是成功命令的结果文本（默认只含最后一条，print_all 时含全部）；
     err 是失败信息，成功时为 None。本地 CLI 把 out 和 err 依次写到 stdout，err 非空则退出码 1。
     """
@@ -1172,7 +1202,9 @@ def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[
 
     out: list[str] = []
     last_result = None
-    for start_line, tokens, raw_cmd in commands:
+    for index, (start_line, tokens, raw_cmd) in enumerate(commands):
+        committed = (f"Lines before line {start_line} already ran and their changes stay. "
+                     "Rerunning them appends text twice, or fails on names that now exist.\n") if index else ""
         try:
             cmd_args = parser.parse_args(tokens)
             if cmd_args.command == "batch":
@@ -1188,9 +1220,9 @@ def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[
             last_result = result
         except SystemExit:
             first_line = raw_cmd.splitlines()[0] if raw_cmd else ""
-            return "".join(out), f"Fail. Line {start_line}: invalid command: {first_line}\n"
+            return "".join(out), f"Fail. Line {start_line}: invalid command: {first_line}\n{committed}"
         except Exception as e:
-            return "".join(out), f"Fail. Line {start_line}: {e}\n"
+            return "".join(out), f"Fail. Line {start_line}: {e}\n{committed}"
 
     if not print_all and last_result is not None:
         out.append(_render(last_result))

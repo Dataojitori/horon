@@ -273,6 +273,19 @@ def sense(
     return messages
 
 
+_INHIBITOR_LIFESPAN_TEXT = {
+    "turn": "turn sensor, stays on until this turn ends",
+    "session": "session sensor, stays on until the session resets",
+    "permanent": "permanent sensor, does not clear on its own",
+}
+
+
+def _describe_inhibitor(inhibition) -> str:
+    """抑制源的名字；是传感器就附上它什么时候熄灭。logic 跟随上游，没有自己的寿命。"""
+    lifespan = _INHIBITOR_LIFESPAN_TEXT.get(inhibition.inhibitor_lifespan)
+    return f"{inhibition.inhibitor_name} ({lifespan})" if lifespan else inhibition.inhibitor_name
+
+
 def _deny_reason(db: HoronDB, cid: int, guard_name: str, states: dict[int, int]) -> str:
     """守卫未通电时的拒绝理由（只看守卫的直接成员与抑制源，不下钻）。
 
@@ -286,16 +299,17 @@ def _deny_reason(db: HoronDB, cid: int, guard_name: str, states: dict[int, int])
     输出：一句英文理由（不含 "Tool ... blocked" 前缀）。
     """
     inhs = db._get_inhibitions(cid, states, direction="incoming")
-    active_inhs = [i.inhibitor_name for i in inhs if i.inhibitor_is_active == 1]
-    if active_inhs:
-        return f"locked by active inhibitor(s): {', '.join(active_inhs)}"
+    target = guard_name.replace('"', '\\"')
+    hint = f" (run `python frontend/cli.py compile --target \"{target}\"` to see why)"
+    active = [i for i in inhs if i.inhibitor_is_active == 1]
+    if active:
+        names = ", ".join(_describe_inhibitor(i) for i in active)
+        return f"locked by active inhibitor(s): {names}" + (hint if any(i.inhibitor_role != "sensor" for i in active) else "")
 
     members = db._get_compose_members(cid, states)
     if not members:
         return "[config error] this guard has no preconditions, so it can never pass"
 
-    target = guard_name.replace('"', '\\"')
-    hint = f" (run `python frontend/cli.py compile --target \"{target}\"` to see why)"
     row = db.conn.execute("SELECT activation_type FROM concepts WHERE id = ?", (cid,)).fetchone()
     act = row["activation_type"] if row else None
 

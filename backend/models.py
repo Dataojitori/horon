@@ -83,6 +83,7 @@ class InhibitionDetail(BaseModel):
     target_concept_id: int
     inhibitor_concept_id: int
     inhibitor_name: str | None = None
+    inhibitor_lifespan: str | None = None
     target_name: str | None = None
     inhibitor_is_active: int = 0
     target_is_active: int = 0

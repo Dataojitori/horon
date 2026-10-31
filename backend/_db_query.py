@@ -451,6 +451,7 @@ class QueryMixin:
             f"SELECT i.target_concept_id, i.inhibitor_concept_id, "
             f"c_inh.name AS inhibitor_name, c_tgt.name AS target_name, "
             f"c_inh.role AS inhibitor_role, c_tgt.role AS target_role, "
+            f"c_inh.lifespan AS inhibitor_lifespan, "
             f"i.created_at "
             f"FROM inhibitions i "
             f"JOIN concepts c_inh ON i.inhibitor_concept_id = c_inh.id "
