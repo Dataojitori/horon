@@ -25,6 +25,27 @@ _logger = logging.getLogger(__name__)
 
 _UNSET = object()
 
+# 正文的硬上限。audit 的 8192 B 线只报警，这条线拦写入：超过它的节点只能减，不能再变大。
+CONTENT_HARD_LIMIT_BYTES = 12288
+
+
+def audit_content_bytes(content: str | None) -> int:
+    """Count exactly the non-empty line bytes used by the audit threshold."""
+    return sum(len(t.encode("utf-8")) for t in (content or "").splitlines() if t.strip())
+
+
+def _check_content_growth(label: str, old_content: str | None, new_content: str | None) -> None:
+    """正文写入前的硬上限检查。输入：节点描述（写进报错）、旧正文、新正文。
+    行为：新正文超过 CONTENT_HARD_LIMIT_BYTES 且比旧正文大时 raise ValueError，
+    所以跨线变大和线上继续变大都被拦，线上持平或变小照常放行。输出：无。"""
+    old_size = audit_content_bytes(old_content)
+    new_size = audit_content_bytes(new_content)
+    if new_size > CONTENT_HARD_LIMIT_BYTES and new_size > old_size:
+        raise ValueError(
+            f"Refused: this update would grow the content of {label} from {old_size} B to "
+            f"{new_size} B, over the {CONTENT_HARD_LIMIT_BYTES} B limit (UTF-8, non-empty lines). "
+            "Nothing was written. Over the limit, content may only shrink or stay the same size.")
+
 
 class ConcurrentUpdateError(ValueError):
     """update(expected_old=...) 写入时发现正文已不是调用方读到的那份（读和写之间被别的连接改过）。
@@ -1391,6 +1412,9 @@ class MutationMixin:
                 raise ConcurrentUpdateError(
                     f"Content of {label} was changed by another writer after it was read; nothing was written.")
             old_val = expected_old
+
+        # 放在写入之后：expected_old 过期时先报并发冲突让调用方重算；这里报错整个事务回滚。
+        _check_content_growth(label, old_val, value)
 
         diff = {"content": {"concept_id": cid, "old": old_val, "new": value}}
         infos = self._run_mutation_hooks(cid, diff)

@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS tags (
 );
 
 -- 种子词表（系统保留 tag）
-INSERT OR IGNORE INTO tags (name) VALUES ('result'), ('exit'), ('state'), ('action'), ('boot');
+INSERT OR IGNORE INTO tags (name) VALUES ('exit'), ('boot');
 
 CREATE TABLE IF NOT EXISTS concept_tags (
     concept_id  INTEGER NOT NULL REFERENCES concepts(id) ON DELETE CASCADE,

@@ -26,7 +26,7 @@ _MAX_NAME_LEN = 200
 _MAX_WHEN_TO_READ_LEN = 500
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
-SYSTEM_TAGS = {"exit", "state", "boot"}
+SYSTEM_TAGS = {"exit", "boot"}
 VALID_ON_FIRE_ACTION_TYPES = frozenset({"notify", "set_focus", "add_todo"})
 # on_fire 所有动作文字加起来的大小上限，按 UTF-8 字节算（中日文一字 3 字节、英文字母 1 字节，
 # 同样的信息量大致同价；正文的 8192 B 线也按字节）。900 B 约中文 300 字、英文 150 词。

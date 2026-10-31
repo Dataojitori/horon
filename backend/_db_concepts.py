@@ -372,7 +372,7 @@ class ConceptMixin:
         other_users = self.conn.execute(
             "SELECT c.name FROM concept_tags ct "
             "JOIN concepts c ON ct.concept_id = c.id "
-            "WHERE ct.tag = ? AND ct.concept_id != ?",
+            "WHERE ct.tag = ? AND ct.concept_id IS NOT ?",
             (tag_name, source_cid),
         ).fetchall()
         if other_users:

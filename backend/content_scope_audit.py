@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 
 from backend._db_common import _now
+from backend._db_mutations import audit_content_bytes
 from backend.name_suggest import suggest_names
 from backend.embedding import blob_to_embedding, embed_texts, embedding_to_blob
 from backend.llm import DECISIONS_ENDPOINT, EMBEDDING_MODEL, JEV_MODEL, openrouter_post
@@ -121,11 +122,6 @@ def similar_names(own_id: int, ids: list[int], names: list[str], matrix: np.ndar
     """
     sims = matrix @ matrix[ids.index(own_id)]
     return [(ids[i], names[i]) for i in np.argsort(-sims) if ids[i] != own_id][:k]
-
-
-def audit_content_bytes(content: str | None) -> int:
-    """Count exactly the non-empty line bytes used by the audit threshold."""
-    return sum(len(t.encode("utf-8")) for t in (content or "").splitlines() if t.strip())
 
 
 def audit_fingerprint(name: str, content: str | None) -> str:
