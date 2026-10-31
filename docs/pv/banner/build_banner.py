@@ -1,15 +1,14 @@
 """Regenerate docs/pv/banner/horon-banner.svg (the README header, 1280 x 480).
 
 Input:   horse-emblem.svg in this folder (the horse holding its own reins; drawn by Gemini,
-         jaw and neck corrected by hand) and the Instrument Serif font (Horon's wordmark font).
+         jaw and neck corrected by hand) and the Instrument Serif font in fonts/ (SIL OFL 1.1).
 Does:    places the emblem on the left of a light card and sets "HORON / self-improving / harness"
          on the right. The text is converted to outlines (paths) because GitHub shows README SVGs
          through <img>, where web fonts cannot load.
 Output:  horon-banner.svg next to this script.
 
 Needs:   pip install fonttools uharfbuzz
-Fonts:   web/node_modules/@fontsource/instrument-serif  (run `npm install` in web/ first)
-Run:     python docs/pv/banner/build_banner.py
+Run:   python docs/pv/banner/build_banner.py
 """
 import re
 import tempfile
@@ -21,8 +20,7 @@ from fontTools.pens.transformPen import TransformPen
 from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parent
-REPO = HERE.parents[2]
-FONT_DIR = REPO / "web" / "node_modules" / "@fontsource" / "instrument-serif" / "files"
+FONT_DIR = HERE / "fonts"
 EMBLEM = HERE / "horse-emblem.svg"
 OUT = HERE / "horon-banner.svg"
 

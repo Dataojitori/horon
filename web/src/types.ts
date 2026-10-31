@@ -104,6 +104,12 @@ export interface NeighborNode {
   byte_size?: number;
 }
 
+/**
+ * 正文超过这个体积就标成“太长”。和 CLI 里 audit 的超长线是同一个数（8 KB）。
+ * 这里按整段正文的 UTF-8 字节算，audit 只算非空行，所以网页会比 audit 略早一点亮警告。
+ */
+export const OVERSIZE_BYTES = 8192;
+
 export function formatBytes(bytes?: number | null): string {
   if (bytes === undefined || bytes === null || bytes <= 0) return "0 B";
   if (bytes < 1024) return `${bytes} B`;
@@ -124,6 +130,8 @@ export interface NeighborhoodData {
   focal: ConceptDetail;
   neighbors: NeighborNode[];
   internal_links: InternalLink[];
+  /** 读完哪些节点之后常来读它（进边），按权重从高到低 */
+  incoming: TransitionSuggestion[];
 }
 
 // ── Search results ──────────────────────────────────────

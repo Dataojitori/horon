@@ -32,13 +32,11 @@
 }
 
 .review-badge-count {
-  font-size: 12px;
-  font-weight: 600;
-  padding: 3px 12px;
-  border-radius: var(--radius-pill);
-  background: rgb(var(--c-accent) / 0.12);
-  color: var(--t-accent);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-dim);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .review-btn-secondary {
@@ -47,21 +45,23 @@
   font-weight: 500;
   font-family: var(--font-sans);
   background: var(--bg-secondary);
-  border: 1px solid var(--border-glass);
+  border: 1px solid var(--border-soft);
   color: var(--text-secondary);
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-xs);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition:
-    color 0.15s,
-    border-color 0.15s,
-    box-shadow 0.2s;
+    color var(--dur-quick),
+    border-color var(--dur-quick);
 }
 
 .review-btn-secondary:hover {
-  border-color: var(--border-glass-hover);
+  border-color: var(--border-strong);
   color: var(--text-primary);
-  box-shadow: var(--shadow-sm);
+}
+
+.review-btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 .review-content {
@@ -100,20 +100,6 @@
   color: var(--text-secondary);
 }
 
-.review-empty-icon {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  background: rgb(var(--c-ok) / 0.12);
-  color: var(--t-ok);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 28px;
-  margin-bottom: 20px;
-  box-shadow: 0 0 0 8px rgb(var(--c-ok) / 0.06);
-}
-
 .review-empty-state h3 {
   font-size: 18px;
   font-weight: 650;
@@ -138,18 +124,9 @@
 
 .review-card {
   background: var(--bg-secondary);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  transition:
-    border-color 0.15s,
-    box-shadow 0.25s;
-}
-
-.review-card:hover {
-  border-color: var(--border-glass-hover);
-  box-shadow: var(--shadow-md);
 }
 
 .review-card-deleted {
@@ -165,7 +142,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 16px 22px;
-  border-bottom: 1px solid var(--border-glass);
+  border-bottom: 1px solid var(--border-soft);
   flex-wrap: wrap;
   gap: 12px;
 }
@@ -179,9 +156,9 @@
 }
 
 .concept-id-tag {
-  font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 12.5px;
   color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
 }
 
 .concept-name-link {
@@ -200,12 +177,25 @@
 }
 
 .badge {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  padding: 2px 10px;
-  border-radius: var(--radius-pill);
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+}
+
+.badge-role {
+  padding: 0;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.badge-role.kind-sensor {
+  color: var(--t-chain);
+}
+.badge-role.kind-logic {
+  color: var(--t-logic);
+}
+.badge-role.kind-guard {
+  color: var(--t-danger);
 }
 
 .badge-deleted {
@@ -219,10 +209,9 @@
 }
 
 .snapshot-timestamp {
-  font-size: 12px;
-  font-family: var(--font-mono);
+  font-size: 12.5px;
   color: var(--text-dim);
-  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
 }
 
 .card-header-actions {
@@ -236,13 +225,13 @@
   font-size: 13px;
   font-family: var(--font-sans);
   font-weight: 600;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   border: 1px solid transparent;
   transition:
-    background-color 0.15s,
-    border-color 0.15s,
-    transform 0.15s var(--ease-out);
+    background-color var(--dur-quick),
+    border-color var(--dur-quick),
+    transform var(--dur-quick) var(--ease-out);
 }
 
 .review-btn:active:not(:disabled) {
@@ -255,25 +244,23 @@
 }
 
 .review-btn-approve {
-  background: rgb(var(--c-ok) / 0.14);
-  border-color: rgb(var(--c-ok) / 0.28);
-  color: var(--t-ok);
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 .review-btn-approve:hover:not(:disabled) {
-  background: rgb(var(--c-ok) / 0.24);
-  border-color: rgb(var(--c-ok) / 0.55);
+  background: rgb(var(--c-accent) / 0.88);
 }
 
 .review-btn-rollback {
-  background: rgb(var(--c-danger) / 0.1);
-  border-color: rgb(var(--c-danger) / 0.24);
+  background: transparent;
+  border-color: var(--border-strong);
   color: var(--t-danger);
 }
 
 .review-btn-rollback:hover:not(:disabled) {
-  background: rgb(var(--c-danger) / 0.18);
-  border-color: rgb(var(--c-danger) / 0.5);
+  background: rgb(var(--c-danger) / 0.08);
+  border-color: rgb(var(--c-danger) / 0.45);
 }
 
 .review-card-body {
@@ -293,20 +280,13 @@
   gap: 8px;
 }
 
-.field-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent);
-}
-
 /* ── Diff Viewer ────────────────────────────── */
 
 /* 记忆内容多半是中文叙述，用无衬线正文字体读起来像文章而不是终端输出；
    只有行号和 +/- 保留等宽，列才对得齐。 */
 .diff-container {
   background: var(--bg-sunken);
-  border: 1px solid var(--border-glass);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   overflow-x: auto;
   font-family: var(--font-sans);
@@ -338,7 +318,7 @@
   font-size: 11px;
   line-height: 1.7;
   user-select: none;
-  border-right: 1px solid var(--border-glass);
+  border-right: 1px solid var(--border-soft);
   background: rgb(var(--ink-rgb) / 0.03);
 }
 
@@ -427,8 +407,8 @@
   padding: 3px;
   gap: 2px;
   background: var(--bg-sunken);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
 }
 
 .review-mode-switch button {
@@ -438,7 +418,7 @@
   font-family: var(--font-sans);
   background: transparent;
   border: none;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-xs);
   color: var(--text-secondary);
   cursor: pointer;
   transition:

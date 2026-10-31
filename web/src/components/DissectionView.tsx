@@ -11,11 +11,22 @@ import {
   type SimulationLinkDatum,
 } from "d3-force";
 import { api } from "../api";
-import { formatBytes, type NeighborhoodData, type ConceptDetail } from "../types";
+import { formatBytes, OVERSIZE_BYTES, type NeighborhoodData, type ConceptDetail } from "../types";
 import "./DissectionView.css";
 
 // 背景点阵的间距（px，缩放为 1 时）
 const GRID_SIZE = 28;
+
+// 没有内部成员的节点（大多数记忆）中间放一张卡片，不画空圈。卡片宽度固定，高度渲染后量。
+const FOCAL_CARD_W = 320;
+// 左右两侧的联想每边最多放几个：左边“读完常来读它”（进边），右边“读完它常去读”（出边）
+const MAX_PER_SIDE = 5;
+
+const MODE_LABEL: Record<string, string> = {
+  CHAIN: "In order",
+  AND: "All of",
+  OR: "Any of",
+};
 
 interface Props {
   focalId: number;
@@ -31,12 +42,19 @@ interface SimNode extends SimulationNodeDatum {
   when_to_read: string | null;
   isFocal: boolean;
   isInternal: boolean;
+  /** 联想节点（来自转移权重）：in 画在左边（读完它常来读焦点），out 画在右边（读完焦点常去读它） */
+  isAssoc?: boolean;
+  side?: "in" | "out";
   degree?: number;
 }
 
 interface SimLink extends SimulationLinkDatum<SimNode> {
   status: string | null;
-  kind: "directed" | "undirected" | "inhibition" | "internal-directed";
+  kind: "directed" | "undirected" | "inhibition" | "internal-directed" | "assoc";
+  /** 联想线的粗细：转移权重除以同一侧的最大权重（0~1） */
+  strength?: number;
+  /** 两个方向都常连着读：线两头都画箭头 */
+  twoWay?: boolean;
   short_code?: string;
   relation_id?: number;
   relation_name?: string;
@@ -97,6 +115,9 @@ export default function DissectionView({
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  // 每次打开节点只自动适配一次；用户开始操作后，视野由用户掌握。
+  // 用 ref 让仿真的 end 回调立即看到交互，不因重渲染或卡片尺寸变化而重置。
+  const autoFitPendingRef = useRef(true);
   const isPanning = useRef(false);
   const panStart = useRef({ x: 0, y: 0 });
   const panOrigin = useRef({ x: 0, y: 0 });
@@ -114,10 +135,13 @@ export default function DissectionView({
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+    // 画布容器要等数据到了才渲染（之前是加载圈），所以数据到了以后要重新挂一次监听；
+    // 只挂在首次渲染上会一直拿默认的 800×600，整个布局偏到左上角。
+  }, [data !== null && !loadError]);
 
   useEffect(() => {
     let current = true;
+    autoFitPendingRef.current = true;
     setData(null);
     setLoadError(null);
     api
@@ -160,12 +184,41 @@ export default function DissectionView({
     return Math.max(140, Math.min(400, Math.max(areaRadius, minRadiusByNodeSize, countRadius)));
   };
 
-  const CONTAINER_RADIUS = getDynamicContainerRadius();
+  const hasMembers = data ? getInternalMembers(data.focal).length > 0 : false;
+  // 卡片模式下，量到的卡片尺寸。量到之前先用估计值。
+  const focalCardRef = useRef<HTMLDivElement>(null);
+  const [focalBox, setFocalBox] = useState({ w: FOCAL_CARD_W, h: 120 });
+  const focalBoxRef = useRef(focalBox);
+  focalBoxRef.current = focalBox;
+  useEffect(() => {
+    const el = focalCardRef.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      if (w > 0 && h > 0) setFocalBox((b) => (b.w === w && b.h === h ? b : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [data, hasMembers]);
+
+  // 有成员时是圆形容器的半径；卡片模式下取卡片对角线的一半，外圈节点照样绕着它排
+  const CONTAINER_RADIUS = hasMembers
+    ? getDynamicContainerRadius()
+    : Math.round(Math.sqrt(focalBox.w * focalBox.w + focalBox.h * focalBox.h) / 2);
 
   useEffect(() => {
     if (!data) return;
 
     const focalConcept = data.focal;
+    // 先同步量一次画布的真实尺寸：画布和数据在同一次渲染里出现，尺寸监听的第一次回报
+    // 要晚于这里；不量的话初始布局会围着默认的 800×600 中心排，之后再被拽回来就乱了
+    const el = containerRef.current;
+    if (el && el.clientWidth > 0 && el.clientHeight > 0) {
+      dimsRef.current = { width: el.clientWidth, height: el.clientHeight };
+    }
     const cx = dimsRef.current.width / 2;
     const cy = dimsRef.current.height / 2;
 
@@ -232,24 +285,92 @@ export default function DissectionView({
     const externalNeighbors = data.neighbors.filter(
       (n) => !internalNodeIds.has(n.id) && n.id !== focalConcept.id,
     );
-    const externalAngle = (2 * Math.PI) / Math.max(externalNeighbors.length, 1);
     const orbitR = CONTAINER_RADIUS + 90;
-
-    externalNeighbors.forEach((n, i) => {
-      nodes.push({
-        id: n.id,
-        name: n.name,
-        when_to_read: n.when_to_read,
-        isFocal: false,
-        isInternal: false,
-        degree: n.degree,
-        x: cx + Math.cos(externalAngle * i) * orbitR,
-        y: cy + Math.sin(externalAngle * i) * orbitR,
-      });
+    // 横向留给阅读顺序（左进右出），电路关系放纵向：把它当条件用的放上面，抑制关系放下面
+    const inhibitionIds = new Set<number>();
+    data.internal_links.forEach((l) => {
+      if (l.kind === "inhibition") {
+        inhibitionIds.add(l.source);
+        inhibitionIds.add(l.target);
+      }
     });
+    const topNeighbors = externalNeighbors.filter((n) => !inhibitionIds.has(n.id));
+    const bottomNeighbors = externalNeighbors.filter((n) => inhibitionIds.has(n.id));
+    const placeOnArc = (list: typeof externalNeighbors, center: number) => {
+      const spread = (80 * Math.PI) / 180;
+      list.forEach((n, i) => {
+        const t = list.length > 1 ? i / (list.length - 1) : 0.5;
+        const ang = center - spread / 2 + t * spread;
+        nodes.push({
+          id: n.id,
+          name: n.name,
+          when_to_read: n.when_to_read,
+          isFocal: false,
+          isInternal: false,
+          degree: n.degree,
+          x: cx + Math.cos(ang) * orbitR,
+          y: cy + Math.sin(ang) * orbitR,
+        });
+      });
+    };
+    placeOnArc(topNeighbors, -Math.PI / 2);
+    placeOnArc(bottomNeighbors, Math.PI / 2);
+
+    // 3b. 联想：左边是读完它们常来读焦点的（进边），右边是读完焦点常去读的（出边）。
+    //     已经作为成员或电路邻居出现的不再重复；两个方向都有的只放右边，线两头画箭头。
+    const shown = new Set(nodes.map((n) => n.id));
+    const outgoing = (focalConcept.suggested_next ?? [])
+      .filter((t) => !shown.has(t.concept_id))
+      .slice(0, MAX_PER_SIDE);
+    const outIds = new Set(outgoing.map((t) => t.concept_id));
+    const inIds = new Set((data.incoming ?? []).map((t) => t.concept_id));
+    const incoming = (data.incoming ?? [])
+      .filter((t) => !shown.has(t.concept_id) && !outIds.has(t.concept_id))
+      .slice(0, MAX_PER_SIDE);
+    const maxOut = Math.max(1e-6, ...outgoing.map((t) => t.weight));
+    const maxIn = Math.max(1e-6, ...incoming.map((t) => t.weight));
+    const assocR = externalNeighbors.length > 0 ? orbitR + 110 : CONTAINER_RADIUS + 120;
+    // 每侧排在一段 ±50° 的弧上，权重最高的在最上面
+    const sideAngle = (i: number, n: number, right: boolean) => {
+      const spread = (100 * Math.PI) / 180;
+      const t = n > 1 ? i / (n - 1) : 0.5;
+      const a = -spread / 2 + t * spread;
+      return right ? a : Math.PI - a;
+    };
+    const pushAssoc = (list: typeof outgoing, side: "in" | "out") =>
+      list.forEach((t, i) => {
+        const ang = sideAngle(i, list.length, side === "out");
+        nodes.push({
+          id: t.concept_id,
+          name: t.concept_name,
+          when_to_read: t.when_to_read ?? null,
+          isFocal: false,
+          isInternal: false,
+          isAssoc: true,
+          side,
+          x: cx + Math.cos(ang) * assocR,
+          y: cy + Math.sin(ang) * assocR,
+        });
+      });
+    pushAssoc(incoming, "in");
+    pushAssoc(outgoing, "out");
 
     // 4. Build links
     const links: SimLink[] = [];
+    // 线的方向就是阅读方向：进边从左边的节点指向焦点，出边从焦点指向右边的节点
+    incoming.forEach((t) => {
+      links.push({ source: t.concept_id, target: focalConcept.id, status: null, kind: "assoc", strength: t.weight / maxIn });
+    });
+    outgoing.forEach((t) => {
+      links.push({
+        source: focalConcept.id,
+        target: t.concept_id,
+        status: null,
+        kind: "assoc",
+        strength: t.weight / maxOut,
+        twoWay: inIds.has(t.concept_id),
+      });
+    });
 
     // Add internal links ONLY for CHAIN (directed flow between consecutive steps)
     // AND / OR do NOT draw pairwise criss-cross links to avoid visual clutter.
@@ -365,12 +486,14 @@ export default function DissectionView({
             if (l.kind.startsWith("internal")) {
               return 140;
             }
+            if (l.kind === "assoc") return assocR;
             return orbitR;
           })
           .strength((l) => {
             if (l.kind.startsWith("internal")) {
               return 0.8;
             }
+            if (l.kind === "assoc") return 0.35;
             return 0.3;
           }),
       )
@@ -379,6 +502,7 @@ export default function DissectionView({
         forceManyBody<SimNode>().strength((node) => {
           if (node.isFocal) return 0;
           if (node.isInternal) return -350;
+          if (node.isAssoc) return -160;
           return -400;
         })
       )
@@ -387,11 +511,15 @@ export default function DissectionView({
         "collide",
         forceCollide<SimNode>().radius((node) => {
           const { w, h } = getNodeDimensions(node);
+          // 联想卡片又宽又扁，按对角线当圆算会把一圈卡片推得很远；
+          // 它们之间的重叠交给下面 tick 里的矩形碰撞处理，这里只给一个小半径
+          if (node.isAssoc) return h / 2 + 12;
           return Math.sqrt((w * w + h * h) / 4) + 24;
         })
       )
-      .force("x", forceX<SimNode>(cx).strength(0.03))
-      .force("y", forceY<SimNode>(cy).strength(0.03))
+      // 横向拉得松、竖向拉得紧：外圈摊成和屏幕一样的横椭圆，而不是竖着顶出屏幕
+      .force("x", forceX<SimNode>(cx).strength((n) => (n.isAssoc ? 0.01 : 0.03)))
+      .force("y", forceY<SimNode>(cy).strength((n) => (n.isAssoc ? 0.09 : 0.03)))
       .alphaDecay(0.02)
       .on("tick", () => {
         // resize 时不重建仿真，几何中心改为每帧从 ref 读取实时值。
@@ -556,8 +684,20 @@ export default function DissectionView({
               const ndist = Math.sqrt(ndx * ndx + ndy * ndy);
 
               if (ndist > 0) {
-                const gx = cx + (ndx / ndist) * CONTAINER_RADIUS;
-                const gy = cy + (ndy / ndist) * CONTAINER_RADIUS;
+                // 焦点那一端：有成员时落在圆边上；卡片模式落在卡片的矩形边上（外扩 6px）
+                let gx: number;
+                let gy: number;
+                if (hasMembers) {
+                  gx = cx + (ndx / ndist) * CONTAINER_RADIUS;
+                  gy = cy + (ndy / ndist) * CONTAINER_RADIUS;
+                } else {
+                  const { w: fw, h: fh } = focalBoxRef.current;
+                  const tx0 = Math.abs(ndx) > 0 ? (fw / 2 + 6) / Math.abs(ndx) : Infinity;
+                  const ty0 = Math.abs(ndy) > 0 ? (fh / 2 + 6) / Math.abs(ndy) : Infinity;
+                  const tt = Math.min(tx0, ty0);
+                  gx = cx + ndx * tt;
+                  gy = cy + ndy * tt;
+                }
 
                 const neighborDim = getNodeDimensions(neighborNode);
                 const absDx = Math.abs(ndx);
@@ -677,12 +817,34 @@ export default function DissectionView({
         });
       });
 
+    sim.on("end", () => {
+      if (!autoFitPendingRef.current) return;
+      autoFitPendingRef.current = false;
+      const { width, height } = dimsRef.current;
+      const ccx = width / 2;
+      const ccy = height / 2;
+      let ext = { x: CONTAINER_RADIUS, y: CONTAINER_RADIUS + 60 };
+      nodes.forEach((node) => {
+        if (node.isFocal) return;
+        const { w, h } = getNodeDimensions(node);
+        ext = {
+          x: Math.max(ext.x, Math.abs((node.x ?? ccx) - ccx) + w / 2),
+          y: Math.max(ext.y, Math.abs((node.y ?? ccy) - ccy) + h / 2),
+        };
+      });
+      const margin = 28;
+      const fit = Math.min((width / 2 - margin) / ext.x, (height / 2 - margin) / ext.y);
+      setPan({ x: 0, y: 0 });
+      // 只缩小不放大；最小 0.8，再小字就读不清了，宁可让最外圈的几张出屏、靠拖动去看
+      setZoom(Math.max(0.8, Math.min(1, fit)));
+    });
+
     simRef.current = sim;
 
     return () => {
       sim.stop();
     };
-  }, [data, CONTAINER_RADIUS]);
+  }, [data, CONTAINER_RADIUS, hasMembers]);
 
   // resize 只更新中心相关的力与焦点节点坐标，再轻推一下 alpha，
   // 不重建整张仿真——避免每次 ResizeObserver 触发都把节点弹回初始圆环。
@@ -708,6 +870,7 @@ export default function DissectionView({
 
   const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
+    autoFitPendingRef.current = false;
     setZoom((z) => Math.max(0.3, Math.min(3, z - e.deltaY * 0.001)));
   }, []);
 
@@ -724,6 +887,7 @@ export default function DissectionView({
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isPanning.current) return;
+    autoFitPendingRef.current = false;
     setPan({
       x: panOrigin.current.x + (e.clientX - panStart.current.x),
       y: panOrigin.current.y + (e.clientY - panStart.current.y),
@@ -739,6 +903,7 @@ export default function DissectionView({
     (e: React.MouseEvent, node: SimNode) => {
       e.stopPropagation();
       if (!simRef.current) return;
+      autoFitPendingRef.current = false;
       
       const sim = simRef.current;
       sim.alphaTarget(0.3).restart();
@@ -816,9 +981,12 @@ export default function DissectionView({
     return (
       <div className="dissection-loading dissection-error">
         <button className="back-btn" onClick={onBack}>
-          &#x2190; Galaxy
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Map
         </button>
-        <p className="dissection-error-title">Failed to load concept #{focalId}</p>
+        <p className="dissection-error-title">Couldn’t open memory #{focalId}</p>
         <p className="dissection-error-detail">{loadError}</p>
       </div>
     );
@@ -855,8 +1023,22 @@ export default function DissectionView({
       onMouseLeave={handleMouseUp}
     >
       <button className="back-btn" onClick={onBack}>
-        &#x2190; Galaxy
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <path d="M10 3.5 5.5 8l4.5 4.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+        Map
       </button>
+
+      {simNodes.some((n) => n.isAssoc) && (
+        <div className="reading-flow-hint" aria-hidden="true">
+          <span>Often read before it</span>
+          <svg viewBox="0 0 72 12" width="72" height="12">
+            <path d="M2 6h22M19 2.5 24 6l-5 3.5M48 6h22M65 2.5 70 6l-5 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+            <circle cx="36" cy="6" r="4" fill="currentColor" />
+          </svg>
+          <span>Often read after it</span>
+        </div>
+      )}
 
       <div
         className="dissection-canvas"
@@ -873,6 +1055,19 @@ export default function DissectionView({
           height={dimensions.height}
         >
           <defs>
+            {/* 联想线的箭头：大小固定（userSpaceOnUse），不随线宽变 */}
+            <marker
+              id="arrow-assoc"
+              viewBox="0 0 10 10"
+              refX="9"
+              refY="5"
+              markerWidth="9"
+              markerHeight="9"
+              markerUnits="userSpaceOnUse"
+              orient="auto-start-reverse"
+            >
+              <path d="M1 1.5 9 5 1 8.5" fill="none" className="assoc-arrow" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+            </marker>
             <marker
               id="arrowhead-confirmed"
               viewBox="0 0 10 7"
@@ -922,6 +1117,21 @@ export default function DissectionView({
             const isInternal = link.kind.startsWith("internal");
             const isNegated = link.status === "negated";
             const hasLabel = (isInternal && link.short_code) || (!isInternal && link.relation_name);
+            if (link.kind === "assoc") {
+              // 联想线：虚线，越常一起读的越粗
+              return (
+                <g key={i}>
+                  <line
+                    className="assoc-line"
+                    strokeWidth={0.8 + 1.8 * (link.strength ?? 0)}
+                    strokeDasharray="2 5"
+                    strokeLinecap="round"
+                    markerEnd="url(#arrow-assoc)"
+                    markerStart={link.twoWay ? "url(#arrow-assoc)" : undefined}
+                  />
+                </g>
+              );
+            }
             return (
               <g key={i}>
                 <line
@@ -980,61 +1190,56 @@ export default function DissectionView({
           })}
         </svg>
 
-        {/* Circular Geofence Container */}
-        <div
-          className={`geofence-circle ${focal.activation_type ? `mode-${focal.activation_type.toLowerCase()}` : ""}`}
-          style={{
-            position: "absolute",
-            // 不用 translate(-50%, -50%) 居中：容器宽度是奇数时圆心会落在半个像素上，里面的标题文字就虚了
-            left: snapPx(cx - CONTAINER_RADIUS),
-            top: snapPx(cy - CONTAINER_RADIUS),
-            width: CONTAINER_RADIUS * 2,
-            height: CONTAINER_RADIUS * 2,
-            borderRadius: "50%",
-            pointerEvents: "none",
-            zIndex: 1,
-          }}
-        >
+        {hasMembers ? (
+          /* 有成员：圆形容器，成员排在里面，标题挂在圆的上沿 */
           <div
-            className="geofence-header"
+            className={`geofence-circle ${focal.activation_type ? `mode-${focal.activation_type.toLowerCase()}` : ""}`}
+            style={{
+              position: "absolute",
+              // 不用 translate(-50%, -50%) 居中：容器宽度是奇数时圆心会落在半个像素上，里面的标题文字就虚了
+              left: snapPx(cx - CONTAINER_RADIUS),
+              top: snapPx(cy - CONTAINER_RADIUS),
+              width: CONTAINER_RADIUS * 2,
+              height: CONTAINER_RADIUS * 2,
+              borderRadius: "50%",
+              pointerEvents: "none",
+              zIndex: 1,
+            }}
+          >
+            <div
+              className="geofence-header"
+              onClick={(e) => {
+                e.stopPropagation();
+                onInspect(focal.id);
+              }}
+              onMouseEnter={() => onInspect(focal.id)}
+              style={{ pointerEvents: "auto", cursor: "pointer" }}
+            >
+              <div className="geofence-title">{focal.name}</div>
+              <FocalMeta focal={focal} memberCount={internalMembersList.length} />
+            </div>
+          </div>
+        ) : (
+          /* 没有成员（大多数记忆）：中间一张卡片，写名字、什么时候读、状态 */
+          <div
+            ref={focalCardRef}
+            className={`focal-card kind-${focal.role} ${focal.is_active ? "is-lit" : ""}`}
+            style={{
+              left: snapPx(cx - focalBox.w / 2),
+              top: snapPx(cy - focalBox.h / 2),
+              width: FOCAL_CARD_W,
+            }}
             onClick={(e) => {
               e.stopPropagation();
               onInspect(focal.id);
             }}
             onMouseEnter={() => onInspect(focal.id)}
-            style={{
-              pointerEvents: "auto",
-              cursor: "pointer",
-            }}
           >
-            <div className="geofence-title">{focal.name}</div>
-            <div className="geofence-sub-badges">
-              {focal.activation_type && (
-                <span className={`geofence-badge mode-${focal.activation_type.toLowerCase()}`}>
-                  {focal.activation_type === "CHAIN" && "➔ CHAIN"}
-                  {focal.activation_type === "AND" && "⯌ AND (ALL)"}
-                  {focal.activation_type === "OR" && "⯎ OR (ANY)"}
-                </span>
-              )}
-              <span className={`geofence-badge status-${focal.is_active ? "active" : "inactive"}`}>
-                {focal.is_active ? "ACTIVE" : "INACTIVE"}
-              </span>
-              {focal.byte_size !== undefined && focal.byte_size > 0 && (
-                <span
-                  className={`geofence-badge size-badge ${focal.byte_size >= 4800 ? "size-warning" : ""}`}
-                  title={`正文大小: ${formatBytes(focal.byte_size)}`}
-                >
-                  {focal.byte_size >= 4800 ? `⚠ ${formatBytes(focal.byte_size)}` : formatBytes(focal.byte_size)}
-                </span>
-              )}
-              {internalMembersList.length > 0 && (
-                <span className="geofence-badge members-count">
-                  {internalMembersList.length} MEMBERS
-                </span>
-              )}
-            </div>
+            <div className="focal-card-title">{focal.name}</div>
+            {focal.when_to_read && <p className="focal-card-when">{focal.when_to_read}</p>}
+            <FocalMeta focal={focal} memberCount={0} />
           </div>
-        </div>
+        )}
 
         {/* Render nodes (Internal sub-elements and External neighbors) */}
         {simNodes
@@ -1043,7 +1248,7 @@ export default function DissectionView({
             <div
               key={node.id}
               ref={handleNodeRef(node.id)}
-              className={`dissection-node ${node.isInternal ? "internal" : "neighbor"}`}
+              className={`dissection-node ${node.isInternal ? "internal" : node.isAssoc ? `assoc side-${node.side}` : "neighbor"}`}
               onClick={(e) => {
                 e.stopPropagation();
               }}
@@ -1057,6 +1262,44 @@ export default function DissectionView({
             </div>
           ))}
       </div>
+    </div>
+  );
+}
+
+const ROLE_NAME: Record<string, string> = {
+  plain: "Memory",
+  sensor: "Sensor",
+  logic: "Logic",
+  guard: "Guard",
+};
+
+/**
+ * 焦点节点标题下面那一行：角色、组合方式、通电状态、体积。
+ * 记忆（plain）没有电位，不写状态；体积只在太长时用红字提醒。
+ */
+function FocalMeta({ focal, memberCount }: { focal: ConceptDetail; memberCount: number }) {
+  const isCircuit = focal.role !== "plain";
+  const tooLong = (focal.byte_size ?? 0) >= OVERSIZE_BYTES;
+  return (
+    <div className="focal-meta">
+      <span className={`focal-role kind-${focal.role}`}>{ROLE_NAME[focal.role] ?? focal.role}</span>
+      {focal.activation_type && memberCount > 0 && (
+        <span className={`focal-mode mode-${focal.activation_type.toLowerCase()}`}>
+          {MODE_LABEL[focal.activation_type]} {memberCount}
+        </span>
+      )}
+      {isCircuit && (
+        <span className={`focal-state ${focal.is_active ? "is-lit" : ""}`}>
+          <span className="focal-lamp" aria-hidden="true" />
+          {focal.is_active ? "Lit" : "Off"}
+        </span>
+      )}
+      {focal.byte_size !== undefined && focal.byte_size > 0 && (
+        <span className={`focal-size ${tooLong ? "is-too-long" : ""}`} title="Size of the note">
+          {formatBytes(focal.byte_size)}
+          {tooLong && " — too long"}
+        </span>
+      )}
     </div>
   );
 }

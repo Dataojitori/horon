@@ -19,7 +19,8 @@
   /* 正文、按钮、代码都用系统自带字体，不打包网络字体：
      系统字体带屏幕点阵优化，中英文同一套，在 125% 这类小数缩放的 Windows 屏上也清晰；
      打包进来的 Inter 没有这层优化，英文会比旁边的中文发虚（实测过）。
-     只有字标（--font-display）用打包的字体，它字号大，不受这个影响。 */
+     字标也用系统字体：衬线展示字配奶油底、珊瑚点，正是现在 AI 生成页面最常见的那一套。
+     等宽字体只用在真正的代码上（正则、钩子规则），不拿来写小标签。 */
   --font-sans:
     system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
     "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei",
@@ -28,133 +29,131 @@
   --font-mono:
     ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Cascadia Mono",
     "Liberation Mono", "Microsoft YaHei UI", "PingFang SC", monospace;
-  --font-display: "Instrument Serif", "Iowan Old Style", "Palatino Linotype", Georgia, serif;
-
-  /* 形状 */
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  /* 形状：圆角按层级分，不是所有东西一个圆角。
+     xs 小标签、sm 按钮和输入框、md 卡片、lg 浮层面板。胶囊形只留给数字角标。 */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
   --radius-pill: 999px;
 
-  /* 动效 */
-  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  /* 动效：一条主曲线管八成的动画，三档时长 */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
   --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-quick: 120ms;
+  --dur-standard: 240ms;
+  --dur-slow: 420ms;
 
   /* 布局 */
-  --topbar-h: 60px;
+  --topbar-h: 52px;
 }
 
-/* ── 亮色（默认）：傍晚台灯。奶油底、梅褐字、珊瑚强调 ───────── */
+/* ── 亮色（默认）：薄暮 ─────────────────────────────────────────
+   天刚暗下来的淡灰紫底 #ECE3EA、卡面 #F7F2F6、深茄紫的字 #2E2236，点缀苔绿、玫瑰、紫。
+   强调色就是字的墨色：当前选中、主要按钮、待审数字用墨色实底，别处不用它装饰。
+   罐光（琥珀 #FFD27A）是唯一的暖光，留给“通电”：节点亮着才发这种光，选中、按钮都不用它，
+   免得“选中了”被看成“亮着”。
+   不用蓝色（冷蓝就是 SaaS 后台味），也不用奶油底＋珊瑚（AI 生成页面的默认款）。 */
 :root,
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --ink-rgb: 74 52 64; /* 叠在底色上的半透明层（边框、悬停底）用 */
-  --shadow-rgb: 74 52 64; /* 阴影用带一点暖紫的梅褐，比纯黑柔和 */
+  --ink-rgb: 46 34 54; /* 叠在底色上的半透明层（边框、悬停底）用 */
+  --shadow-rgb: 46 34 54; /* 阴影带一点茄紫，比纯黑柔和 */
 
   /* 表面：画布 < 面板 < 浮层 */
-  --bg-primary: #f7ede2;
-  --bg-canvas-glow: #fdf8f1;
-  --bg-secondary: #fffcf8;
-  --bg-elevated: #ffffff;
-  --bg-sunken: rgb(var(--ink-rgb) / 0.045);
-  --bg-glass: rgb(255 252 248 / 0.78);
-  --bg-glass-hover: rgb(255 253 250 / 0.96);
-  --bg-hover: rgb(var(--ink-rgb) / 0.05);
+  --bg-primary: #ece3ea;
+  --bg-canvas-glow: #f4eef3;
+  --bg-secondary: #f7f2f6;
+  --bg-elevated: #fbf8fa;
+  --bg-sunken: rgb(var(--ink-rgb) / 0.05);
+  --bg-hover: rgb(var(--ink-rgb) / 0.06);
 
-  --border-glass: rgb(var(--ink-rgb) / 0.09);
-  --border-glass-hover: rgb(var(--ink-rgb) / 0.2);
+  --border-soft: rgb(var(--ink-rgb) / 0.1);
+  --border-strong: rgb(var(--ink-rgb) / 0.22);
 
-  /* 文字 */
-  --text-primary: #3a2a34;
-  --text-secondary: #6f5c67;
-  --text-dim: #85737e;
+  /* 文字：三档都过 WCAG AA（在底色和卡面上都 ≥ 4.5:1） */
+  --text-primary: #2e2236;
+  --text-secondary: #574a61;
+  --text-dim: #685a72;
 
   /* 强调与语义色（背景/描边用 --c-*，文字用 --t-*） */
-  --c-accent: 226 99 76;
-  --t-accent: #b53b25;
-  --c-logic: 96 112 214;
-  --t-logic: #4a5bc4;
-  --c-or: 150 94 200;
-  --t-or: #7b45b0;
-  --c-chain: 66 160 128;
-  --t-chain: #276e51;
-  --c-ok: 52 160 100;
-  --t-ok: #25704a;
-  --c-warn: 232 160 50;
-  --t-warn: #8f5a0c;
-  --c-danger: 214 69 80;
-  --t-danger: #bc323d;
+  --c-accent: 46 34 54;
+  --t-accent: #2e2236;
+  --c-lamp: 255 210 122;
+  --t-lamp: #7f5a0e;
+  --c-logic: 125 104 173; /* 紫：逻辑门 */
+  --t-logic: #5f4a92;
+  --c-or: 196 146 64; /* 赭黄：任一即可 */
+  --t-or: #7f5a0e;
+  --c-chain: 95 138 90; /* 苔绿：传感器与先后顺序 */
+  --t-chain: #3d6a3a;
+  --c-ok: 95 138 90;
+  --t-ok: #3d6a3a;
+  --c-warn: 210 150 60;
+  --t-warn: #7f5a0e;
+  --c-danger: 200 68 92;
+  --t-danger: #a8324a;
 
   --accent: rgb(var(--c-accent));
-  --on-accent: #ffffff;
+  --on-accent: #f7f2f6;
 
   --status-confirmed: rgb(var(--c-ok));
   --status-hypothesis: rgb(var(--c-warn));
   --status-negated: rgb(var(--c-danger));
 
-  /* 阴影 */
-  --shadow-xs: 0 1px 2px rgb(var(--shadow-rgb) / 0.07);
-  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.05), 0 3px 10px -3px rgb(var(--shadow-rgb) / 0.1);
-  --shadow-md: 0 2px 4px rgb(var(--shadow-rgb) / 0.04), 0 12px 28px -10px rgb(var(--shadow-rgb) / 0.18);
-  --shadow-lg: 0 4px 10px rgb(var(--shadow-rgb) / 0.05), 0 30px 64px -18px rgb(var(--shadow-rgb) / 0.32);
+  /* 阴影：只给真正浮起来的东西（下拉、侧栏）。平铺在页面上的卡片用描边，不用阴影 */
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.06), 0 2px 8px -2px rgb(var(--shadow-rgb) / 0.1);
+  --shadow-lg: 0 2px 6px rgb(var(--shadow-rgb) / 0.05), 0 24px 56px -16px rgb(var(--shadow-rgb) / 0.3);
 
-  --scrim: rgb(58 42 52 / 0.18);
   --selection: rgb(var(--c-accent) / 0.22);
 }
 
-/* ── 暗色：夜灯。和亮色同一套暖调——梅炭色的底、奶油色的字、柔和的珊瑚 ─────
-   不用接近纯黑的底、纯白的字和荧光的红绿：那套高对比配色放在终端里很顺眼，
-   放在面向普通用户的产品里就是“黑客风”。
-   原则：底不要比 #1a1519 更黑；字不要比 #ece3dd 更白；语义色全部压低饱和。 */
+/* ── 暗色：入夜。同一套颜色把灯关掉：深茄紫的底、淡紫白的字，罐光在这里最亮 ─────
+   底不比 #1a1420 更黑；字不比 #ede4ee 更白；语义色压低饱和，不用荧光色。 */
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  --ink-rgb: 255 236 228; /* 暖白，不是纯白：边框、悬停底、滚动条都带一点暖 */
-  --shadow-rgb: 12 6 10;
+  --ink-rgb: 240 230 242;
+  --shadow-rgb: 10 6 14;
 
-  --bg-primary: #1a1519;
-  --bg-canvas-glow: #271e26;
-  --bg-secondary: #241c23;
-  --bg-elevated: #2e242d;
-  --bg-sunken: rgb(var(--ink-rgb) / 0.045);
-  --bg-glass: rgb(36 28 35 / 0.78);
-  --bg-glass-hover: rgb(46 36 45 / 0.92);
-  --bg-hover: rgb(var(--ink-rgb) / 0.06);
+  --bg-primary: #1e1724;
+  --bg-canvas-glow: #281f2f;
+  --bg-secondary: #261d2c;
+  --bg-elevated: #2f2537;
+  --bg-sunken: rgb(var(--ink-rgb) / 0.05);
+  --bg-hover: rgb(var(--ink-rgb) / 0.07);
 
-  --border-glass: rgb(var(--ink-rgb) / 0.08);
-  --border-glass-hover: rgb(var(--ink-rgb) / 0.17);
+  --border-soft: rgb(var(--ink-rgb) / 0.09);
+  --border-strong: rgb(var(--ink-rgb) / 0.2);
 
-  --text-primary: #ece3dd;
-  --text-secondary: #b3a4ab;
-  --text-dim: #95858f;
+  --text-primary: #ede4ee;
+  --text-secondary: #bfb1c6;
+  --text-dim: #a596ad;
 
-  --c-accent: 240 140 118;
-  --t-accent: #f2a38f;
-  --c-logic: 128 160 232;
-  --t-logic: #9db6ee;
-  --c-or: 178 142 226;
-  --t-or: #c4a6ec;
-  --c-chain: 104 196 170;
-  --t-chain: #86d2b8;
-  --c-ok: 112 190 146; /* 鼠尾草绿 */
-  --t-ok: #9ad4b0;
+  --c-accent: 237 228 238;
+  --t-accent: #ede4ee;
+  --c-lamp: 255 210 122;
+  --t-lamp: #ffd27a;
+  --c-logic: 190 168 230;
+  --t-logic: #cdb8ea;
+  --c-or: 226 186 118;
+  --t-or: #ecc98a;
+  --c-chain: 150 196 146;
+  --t-chain: #a9d0a6;
+  --c-ok: 150 196 146;
+  --t-ok: #a9d0a6;
   --c-warn: 232 184 108;
   --t-warn: #ecc27f;
-  --c-danger: 226 116 124; /* 玫瑰红 */
-  --t-danger: #eba0a6;
+  --c-danger: 226 116 134;
+  --t-danger: #eba0b0;
 
   --accent: rgb(var(--c-accent));
-  --on-accent: #2a130e;
+  --on-accent: #1e1724;
 
-  --shadow-xs: 0 1px 2px rgb(var(--shadow-rgb) / 0.4);
-  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.35), 0 3px 10px -3px rgb(var(--shadow-rgb) / 0.45);
-  --shadow-md: 0 2px 4px rgb(var(--shadow-rgb) / 0.3), 0 12px 28px -10px rgb(var(--shadow-rgb) / 0.6);
-  --shadow-lg: 0 4px 10px rgb(var(--shadow-rgb) / 0.3), 0 30px 64px -18px rgb(var(--shadow-rgb) / 0.7);
+  --shadow-sm: 0 1px 2px rgb(var(--shadow-rgb) / 0.35), 0 2px 8px -2px rgb(var(--shadow-rgb) / 0.45);
+  --shadow-lg: 0 2px 6px rgb(var(--shadow-rgb) / 0.3), 0 24px 56px -16px rgb(var(--shadow-rgb) / 0.7);
 
-  --scrim: rgb(var(--shadow-rgb) / 0.45);
   --selection: rgb(var(--c-accent) / 0.3);
 }
 

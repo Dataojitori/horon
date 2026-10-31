@@ -15,6 +15,22 @@ interface DiffLine {
   newLineNum?: number;
 }
 
+/** 快照时间 "2026-10-29T21:27:58" 显示成 "Oct 29, 21:27"；不是这个格式就原样返回。 */
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  return `${date}, ${time}`;
+}
+
+const ROLE_NAME: Record<string, string> = {
+  plain: "Memory",
+  sensor: "Sensor",
+  logic: "Logic",
+  guard: "Guard",
+};
+
 // 一页最多渲染多少张卡：把单次挂载的 LCS diff 计算量和 DOM 节点数封顶。
 // 待审核堆积时，全量渲染 N 张卡 = N 次 O(m*n) diff + N 倍 diff 行 DOM，
 // 低端机器上一次点击就要对账几万个节点——分页把这个上界固定下来。
@@ -154,7 +170,7 @@ function DiffViewer({
   );
 
   if (original == null && current == null) {
-    return <div className="diff-empty">(无内容 / Empty)</div>;
+    return <div className="diff-empty">(empty)</div>;
   }
 
   return (
@@ -163,7 +179,7 @@ function DiffViewer({
         {rows.map((dl, idx) =>
           dl.type === "skip" ? (
             <div key={idx} className="diff-row diff-skip">
-              ⋯ {dl.count} 行未改动
+              {dl.count} unchanged {dl.count === 1 ? "line" : "lines"}
             </div>
           ) : (
           <div key={idx} className={`diff-row diff-${dl.type}`}>
@@ -222,22 +238,22 @@ const ReviewCard = memo(function ReviewCard({
           <span
             className="concept-name-link"
             onClick={() => !item.is_deleted && onNavigateToNode?.(item.concept_id)}
-            title={item.is_deleted ? "该节点已删除" : "点击跳转至节点"}
+            title={item.is_deleted ? "This memory was deleted" : "Open this memory"}
           >
             {item.concept_name}
           </span>
           {item.is_deleted && item.is_creation ? (
-            <span className="badge badge-deleted">CANCELLED (已取消创建)</span>
+            <span className="badge badge-deleted">Created, then deleted</span>
           ) : item.is_deleted ? (
-            <span className="badge badge-deleted">DELETED (已删除)</span>
+            <span className="badge badge-deleted">Deleted</span>
           ) : item.is_creation ? (
-            <span className="badge badge-created">CREATED (新建)</span>
+            <span className="badge badge-created">New</span>
           ) : (
-            <span className={`badge badge-role role-${item.role || "plain"}`}>
-              {item.role?.toUpperCase() || "PLAIN"}
+            <span className={`badge badge-role kind-${item.role || "plain"}`}>
+              {ROLE_NAME[item.role || "plain"]}
             </span>
           )}
-          <span className="snapshot-timestamp">{item.created_at}</span>
+          <span className="snapshot-timestamp" title={item.created_at}>{formatWhen(item.created_at)}</span>
         </div>
 
         <div className="card-header-actions">
@@ -246,14 +262,14 @@ const ReviewCard = memo(function ReviewCard({
             disabled={isProcessing}
             onClick={() => onApprove(item.concept_id)}
           >
-            {isProcessing ? "处理中..." : "同意 (Approve)"}
+            {isProcessing ? "Saving…" : "Approve"}
           </button>
           <button
             className="review-btn review-btn-rollback"
             disabled={isProcessing}
             onClick={() => onRollback(item.concept_id, item.is_creation, item.is_deleted)}
           >
-            {isProcessing ? "回滚中..." : "回滚 (Rollback)"}
+            {isProcessing ? "Rolling back…" : "Roll back"}
           </button>
         </div>
       </div>
@@ -261,22 +277,22 @@ const ReviewCard = memo(function ReviewCard({
       <div className="review-card-body">
         {item.is_deleted && item.is_creation ? (
           <div className="deletion-banner">
-            <span>该节点为新建后被删除。回滚将直接清除快照记录。</span>
+            <span>This memory was created and then deleted. Rolling back only clears this record.</span>
           </div>
         ) : item.is_deleted ? (
           <div className="deletion-banner">
-            <span>⚠ 该节点已被删除。回滚后将作为 <strong>plain（砖块）</strong> 角色恢复。</span>
+            <span>This memory was deleted. Rolling back brings it back as a plain memory.</span>
           </div>
         ) : item.is_creation ? (
           <div className="creation-banner">
-            <span>✨ 该节点为新建节点。回滚将直接删除此节点（若被其他概念引用，请先切断关联）。</span>
+            <span>This memory is new. Rolling back deletes it; if other memories link to it, remove those links first.</span>
           </div>
         ) : null}
 
         {whenToReadChange && (
           <div className="change-section">
             <div className="change-section-title">
-              <span className="field-dot" /> 书腰变更 (When-to-read Diff)
+              When to read
             </div>
             <DiffViewer
               original={whenToReadChange.original_value}
@@ -289,7 +305,7 @@ const ReviewCard = memo(function ReviewCard({
         {contentChange && (
           <div className="change-section">
             <div className="change-section-title">
-              <span className="field-dot" /> 正文变更 (Content Diff)
+              Note
             </div>
             <DiffViewer
               original={contentChange.original_value}
@@ -369,13 +385,13 @@ export default function ReviewView({
     async (conceptId: number, isCreation: boolean, isDeleted: boolean) => {
       let promptMsg: string;
       if (isCreation && isDeleted) {
-        promptMsg = "该节点为新建后被删除，回滚将直接清除快照记录。确定回滚吗？";
+        promptMsg = "This memory was created and then deleted. Roll back to clear the record?";
       } else if (isCreation) {
-        promptMsg = "该节点为新建节点，回滚将直接删除该节点。确定回滚吗？";
+        promptMsg = "This memory is new. Rolling back deletes it. Roll back?";
       } else if (isDeleted) {
-        promptMsg = "该节点已被删除，回滚将重新恢复为 plain（砖块）角色。确定回滚吗？";
+        promptMsg = "This memory was deleted. Roll back to restore it as a plain memory?";
       } else {
-        promptMsg = "确定要将该节点的所有修改回滚到快照前状态吗？";
+        promptMsg = "Undo every change to this memory since the snapshot?";
       }
 
       if (!window.confirm(promptMsg)) {
@@ -388,7 +404,7 @@ export default function ReviewView({
         setReviews((prev) => prev.filter((r) => r.concept_id !== conceptId));
         onRefreshGraph?.();
       } catch (e: any) {
-        alert(`回滚失败: ${e.message}`);
+        alert(`Couldn’t roll back: ${e.message}`);
       } finally {
         setActionLoading((prev) => ({ ...prev, [conceptId]: false }));
       }
@@ -400,7 +416,7 @@ export default function ReviewView({
     return (
       <div className="review-loading">
         <div className="loading-spinner" />
-        <p>加载待审核快照...</p>
+        <p>Loading changes…</p>
       </div>
     );
   }
@@ -409,26 +425,26 @@ export default function ReviewView({
     <div className="review-view">
       <div className="review-toolbar">
         <div className="review-toolbar-left">
-          <h2 className="review-title">人工审核与快照 (Review & Snapshots)</h2>
-          <span className="review-badge-count">{reviews.length} 个节点待审核</span>
+          <h2 className="review-title">Changes to review</h2>
+          <span className="review-badge-count">{reviews.length} waiting</span>
         </div>
         <div className="review-toolbar-right">
-          <div className="review-mode-switch" title="所有待审核节点的 diff 显示方式">
+          <div className="review-mode-switch" title="How every change below is shown">
             <button
               className={diffMode === "full" ? "active" : ""}
               onClick={() => setDiffMode("full")}
             >
-              全文
+              Full text
             </button>
             <button
               className={diffMode === "changes" ? "active" : ""}
               onClick={() => setDiffMode("changes")}
             >
-              仅改动
+              Changes only
             </button>
           </div>
           <button className="review-btn-secondary" onClick={fetchReviews}>
-            刷新 (Refresh)
+            Refresh
           </button>
         </div>
       </div>
@@ -438,9 +454,9 @@ export default function ReviewView({
       <div className="review-content" ref={contentRef}>
         {reviews.length === 0 ? (
           <div className="review-empty-state">
-            <div className="review-empty-icon">&#x2713;</div>
-            <h3>全部快照已审核完毕</h3>
-            <p>目前没有来自 CLI 的待审核新建、修改或删除操作。</p>
+            
+            <h3>Nothing to review</h3>
+            <p>When a memory is created, edited or deleted from the CLI, the change waits here for you.</p>
           </div>
         ) : (
           <div className="review-cards-list">
@@ -463,17 +479,17 @@ export default function ReviewView({
                   disabled={currentPage <= 1}
                   onClick={() => setPage(currentPage - 1)}
                 >
-                  上一页
+                  Previous
                 </button>
                 <span className="review-pager-label">
-                  第 {currentPage} / {totalPages} 页（共 {reviews.length} 条，每页 {PAGE_SIZE} 条）
+                  Page {currentPage} of {totalPages}
                 </span>
                 <button
                   className="review-btn-secondary"
                   disabled={currentPage >= totalPages}
                   onClick={() => setPage(currentPage + 1)}
                 >
-                  下一页
+                  Next
                 </button>
               </div>
             )}

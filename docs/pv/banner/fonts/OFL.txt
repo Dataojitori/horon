@@ -1,13 +1,3 @@
-Third-party font bundled with this app
-
-Instrument Serif (via @fontsource/instrument-serif) is licensed under the SIL Open Font
-License, Version 1.1 (OFL-1.1), which permits free use, including commercial use,
-embedding in websites and apps, and redistribution. The font is used unmodified
-(the favicon uses the outline of its capital H). Full license text follows.
-
-================================================================
-@fontsource/instrument-serif
-================================================================
 Copyright 2022 The Instrument Serif Project Authors (https://github.com/Instrument/instrument-serif) InstrumentSerif-Italic.ttf: Copyright 2022 The Instrument Serif Project Authors (https://github.com/Instrument/instrument-serif)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.

@@ -38,8 +38,8 @@ function readInitialTheme(): Theme {
 
 // 浏览器地址栏/系统标题栏的颜色跟着主题走
 const THEME_COLOR: Record<Theme, string> = {
-  light: "#F7EDE2",
-  dark: "#1a1519",
+  light: "#ECE3EA",
+  dark: "#1e1724",
 };
 
 function applyTheme(theme: Theme) {

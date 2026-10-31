@@ -3,7 +3,7 @@ import "./ThemeToggle.css";
 
 function SunIcon() {
   return (
-    <svg className="theme-icon theme-icon-sun" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+    <svg className="theme-icon theme-icon-sun" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
       <circle cx="10" cy="10" r="3.6" fill="currentColor" />
       <g stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
         <path d="M10 2.2v1.8" />
@@ -21,7 +21,7 @@ function SunIcon() {
 
 function MoonIcon() {
   return (
-    <svg className="theme-icon theme-icon-moon" viewBox="0 0 20 20" width="14" height="14" aria-hidden="true">
+    <svg className="theme-icon theme-icon-moon" viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
       <path
         d="M16.2 12.4A6.6 6.6 0 0 1 7.6 3.8a.5.5 0 0 0-.7-.6 7.6 7.6 0 1 0 9.9 9.9.5.5 0 0 0-.6-.7Z"
         fill="currentColor"
@@ -30,7 +30,7 @@ function MoonIcon() {
   );
 }
 
-/** 顶栏右侧的亮/暗主题开关：滑块在哪边，就是当前主题。 */
+/** 顶栏右侧的亮/暗主题开关：一个图标按钮，显示的是当前主题（亮色是太阳，暗色是月亮）。 */
 export default function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
   const isDark = theme === "dark";
@@ -49,7 +49,6 @@ export default function ThemeToggle() {
     >
       <SunIcon />
       <MoonIcon />
-      <span className="theme-toggle-thumb" aria-hidden="true" />
     </button>
   );
 }

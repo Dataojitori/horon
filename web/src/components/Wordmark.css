@@ -1,45 +1,53 @@
 .wordmark {
   display: inline-flex;
-  align-items: baseline;
-  font-family: var(--font-display);
-  font-weight: 400;
+  align-items: center;
+  gap: 0.42em;
+  font-family: var(--font-sans);
+  font-weight: 700;
   line-height: 1;
-  letter-spacing: 0.005em;
+  letter-spacing: -0.03em;
   color: var(--text-primary);
   white-space: nowrap;
 }
 
-/* 句点：随字号缩放（em），落在基线上 */
-.wordmark-dot {
+/* 灯：墨色描边的小圆，里面是罐光，外面一圈很淡的光晕。随字号缩放（em）。
+   描边让它在奶油底上也立得住（罐光色直接放在奶油底上会化掉）。 */
+.wordmark-lamp {
   flex-shrink: 0;
-  width: 0.17em;
-  height: 0.17em;
-  margin-left: 0.09em;
+  width: 0.62em;
+  height: 0.62em;
   border-radius: 50%;
-  background: rgb(var(--c-accent));
+  background: rgb(var(--c-lamp));
+  box-shadow:
+    0 0 0 0.09em var(--text-primary),
+    0 0 0 0.34em rgb(var(--c-lamp) / 0.32);
 }
 
-.wordmark.is-loading .wordmark-dot {
-  animation: wordmark-dot-pulse 1.8s ease-in-out infinite;
+.wordmark.is-loading .wordmark-lamp {
+  animation: wordmark-lamp-breathe 1.8s ease-in-out infinite;
 }
 
-.wordmark.is-error .wordmark-dot {
-  background: var(--text-dim);
-  opacity: 0.6;
+.wordmark.is-error .wordmark-lamp {
+  background: var(--bg-primary);
+  box-shadow: 0 0 0 0.09em var(--text-dim);
 }
 
-@keyframes wordmark-dot-pulse {
+@keyframes wordmark-lamp-breathe {
   0%,
   100% {
-    opacity: 0.15;
+    box-shadow:
+      0 0 0 0.09em var(--text-primary),
+      0 0 0 0.12em rgb(var(--c-lamp) / 0);
   }
   50% {
-    opacity: 1;
+    box-shadow:
+      0 0 0 0.09em var(--text-primary),
+      0 0 0 0.42em rgb(var(--c-lamp) / 0.38);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wordmark.is-loading .wordmark-dot {
+  .wordmark.is-loading .wordmark-lamp {
     animation: none;
   }
 }

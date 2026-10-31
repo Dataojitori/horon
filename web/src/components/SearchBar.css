@@ -25,11 +25,11 @@
 
 .search-input {
   width: 100%;
-  height: 36px;
-  padding: 0 14px 0 38px;
-  border: 1px solid var(--border-glass);
+  height: 34px;
+  padding: 0 34px 0 36px;
+  border: 1px solid transparent;
   background: var(--bg-sunken);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius-sm);
   font-family: var(--font-sans);
   font-size: 13px;
   color: var(--text-primary);
@@ -45,13 +45,35 @@
 }
 
 .search-input:hover {
-  border-color: var(--border-glass-hover);
+  border-color: var(--border-strong);
 }
 
 .search-input:focus {
   border-color: rgb(var(--c-accent) / 0.55);
   background: var(--bg-elevated);
-  box-shadow: 0 0 0 4px rgb(var(--c-accent) / 0.14);
+  box-shadow: 0 0 0 3px rgb(var(--c-accent) / 0.14);
+}
+
+/* 右端的 “/” 提示：按 / 就能跳到这里 */
+.search-kbd {
+  position: absolute;
+  top: 50%;
+  right: 9px;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  font-family: var(--font-sans);
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  pointer-events: none;
+}
+
+.search-wrapper:focus-within .search-kbd {
+  display: none;
 }
 
 /* ── 下拉结果 ───────────────────────── */
@@ -67,23 +89,19 @@
   margin-top: 10px;
   padding: 6px;
   background: var(--bg-elevated);
-  border: 1px solid var(--border-glass);
-  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
   max-height: 380px;
   overflow-y: auto;
   z-index: 300;
   box-shadow: var(--shadow-lg);
-  animation: search-pop 0.18s var(--ease-out);
+  animation: search-pop var(--dur-quick) var(--ease-out);
 }
 
 @keyframes search-pop {
   from {
     opacity: 0;
-    transform: translateY(-4px) scale(0.985);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(-3px);
   }
 }
 
@@ -94,12 +112,11 @@
   flex-direction: column;
   gap: 3px;
   border-radius: var(--radius-sm);
-  transition: background-color 0.12s;
 }
 
 .search-item:hover,
 .search-item.active {
-  background: rgb(var(--c-accent) / 0.1);
+  background: var(--bg-hover);
 }
 
 .search-name {
@@ -129,41 +146,20 @@
   flex: 1;
 }
 
+/* 命中在哪个字段：淡色小字，不用彩色胶囊（四种颜色只会让人去猜颜色的意思） */
 .search-badge {
-  font-size: 10.5px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
   flex-shrink: 0;
-  line-height: 1.5;
-}
-
-.badge-alias {
-  background: rgb(var(--c-or) / 0.13);
-  color: var(--t-or);
-}
-
-.badge-when-to-read {
-  background: rgb(var(--c-chain) / 0.14);
-  color: var(--t-chain);
-}
-
-.badge-content {
-  background: rgb(var(--c-warn) / 0.16);
-  color: var(--t-warn);
-}
-
-.badge-name {
-  background: rgb(var(--c-logic) / 0.13);
-  color: var(--t-logic);
 }
 
 .search-highlight {
-  background: rgb(var(--c-accent) / 0.2);
-  color: var(--t-accent);
+  background: rgb(var(--c-lamp) / 0.45);
+  color: inherit;
   font-weight: 600;
-  padding: 0 2px;
-  border-radius: 3px;
+  padding: 0 1px;
+  border-radius: 2px;
 }
 
 .search-empty {

@@ -8,7 +8,7 @@
   background-color: var(--bg-primary);
   background-image: radial-gradient(
     circle,
-    rgb(var(--ink-rgb) / 0.16) 1.2px,
+    rgb(var(--ink-rgb) / 0.11) 1.1px,
     transparent 1.5px
   );
   background-size: 28px 28px;
@@ -71,34 +71,30 @@
 
 .back-btn {
   position: absolute;
-  top: 16px;
-  left: 16px;
+  top: 14px;
+  left: 14px;
   z-index: 20;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 7px 16px 7px 13px;
-  border: 1px solid var(--border-glass);
-  background: var(--bg-glass);
+  gap: 4px;
+  height: 32px;
+  padding: 0 12px 0 8px;
+  border: 1px solid var(--border-soft);
+  background: var(--bg-secondary);
   color: var(--text-secondary);
   font-family: var(--font-sans);
   font-size: 13px;
   font-weight: 500;
-  border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-sm);
+  border-radius: var(--radius-sm);
   cursor: pointer;
   transition:
-    color 0.15s,
-    border-color 0.15s,
-    background-color 0.15s,
-    box-shadow 0.2s;
+    color var(--dur-quick),
+    border-color var(--dur-quick);
 }
 
 .back-btn:hover {
   color: var(--text-primary);
-  border-color: var(--border-glass-hover);
-  background: var(--bg-glass-hover);
-  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
 }
 
 /* ── SVG link layer ────────────────── */
@@ -205,93 +201,159 @@
 
 .geofence-header {
   position: absolute;
-  top: -52px;
+  top: -50px;
   /* 用 auto 边距居中，不用 left:50% + translateX(-50%)：后者在宽度为奇数时会让文字落在半个像素上 */
   left: 0;
   right: 0;
   width: max-content;
+  max-width: 420px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: var(--bg-elevated);
-  padding: 9px 20px 10px;
-  border-radius: var(--radius-lg);
-  border: 1px solid rgb(var(--geo) / 0.35);
-  box-shadow: var(--shadow-md);
-  transition:
-    border-color 0.2s,
-    box-shadow 0.2s,
-    transform 0.25s var(--ease-out);
+  padding: 9px 18px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgb(var(--geo) / 0.4);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-quick);
   user-select: none;
-  white-space: nowrap;
 }
 
 .geofence-header:hover {
-  border-color: rgb(var(--geo) / 0.7);
-  box-shadow: var(--shadow-lg);
-  transform: translateY(-1px);
+  border-color: rgb(var(--geo) / 0.8);
 }
 
 .geofence-title {
   font-size: 15px;
   font-weight: 650;
-  letter-spacing: -0.005em;
   color: var(--text-primary);
-  font-family: var(--font-sans);
+  text-align: center;
 }
 
-.geofence-sub-badges {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+/* ── 焦点卡片：没有成员的节点放在中间的那张 ── */
+
+.focal-card {
+  position: absolute;
+  z-index: 2;
+  padding: 16px 18px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color var(--dur-quick);
 }
 
-.geofence-badge {
-  font-size: 10px;
-  font-weight: 600;
-  font-family: var(--font-mono);
-  padding: 2px 9px;
-  border-radius: var(--radius-pill);
-  letter-spacing: 0.04em;
-  background: var(--bg-sunken);
+.focal-card:hover {
+  border-color: rgb(var(--c-accent) / 0.6);
+}
+
+/* 通电的节点：卡片外面一圈罐光 */
+.focal-card.is-lit {
+  border-color: rgb(var(--c-lamp));
+  box-shadow:
+    0 0 0 4px rgb(var(--c-lamp) / 0.35),
+    0 0 36px rgb(var(--c-lamp) / 0.45);
+}
+
+.focal-card-title {
+  font-size: 16px;
+  font-weight: 650;
+  line-height: 1.4;
+  color: var(--text-primary);
+}
+
+.focal-card-when {
+  margin-top: 6px;
+  font-size: 12.5px;
+  line-height: 1.55;
   color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
-.geofence-badge.mode-and {
-  background: rgb(var(--c-logic) / 0.13);
-  color: var(--t-logic);
-}
+/* ── 标题下面那一行：角色、组合方式、状态、体积。普通大小写的小字，不做胶囊 ── */
 
-.geofence-badge.mode-or {
-  background: rgb(var(--c-or) / 0.13);
-  color: var(--t-or);
-}
-
-.geofence-badge.mode-chain {
-  background: rgb(var(--c-chain) / 0.14);
-  color: var(--t-chain);
-}
-
-.geofence-badge.status-active {
-  background: rgb(var(--c-ok) / 0.14);
-  color: var(--t-ok);
-}
-
-.geofence-badge.status-inactive {
-  background: var(--bg-sunken);
+.focal-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 10px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
-.geofence-badge.members-count {
-  background: var(--bg-sunken);
+.geofence-header .focal-meta {
+  margin-top: 0;
+  justify-content: center;
+}
+
+.focal-role {
+  font-weight: 600;
   color: var(--text-secondary);
 }
 
-.geofence-badge.size-warning {
-  background: rgb(var(--c-danger) / 0.13);
+.focal-role.kind-sensor {
+  color: var(--t-chain);
+}
+.focal-role.kind-logic {
+  color: var(--t-logic);
+}
+.focal-role.kind-guard {
   color: var(--t-danger);
+}
+
+.focal-mode {
+  font-weight: 500;
+}
+.focal-mode.mode-and {
+  color: var(--t-logic);
+}
+.focal-mode.mode-or {
+  color: var(--t-or);
+}
+.focal-mode.mode-chain {
+  color: var(--t-chain);
+}
+
+.focal-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.focal-lamp {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.4px var(--text-dim);
+}
+
+.focal-state.is-lit {
+  color: var(--t-lamp);
+  font-weight: 600;
+}
+
+.focal-state.is-lit .focal-lamp {
+  background: rgb(var(--c-lamp));
+  box-shadow:
+    0 0 0 1.4px var(--text-primary),
+    0 0 0 4px rgb(var(--c-lamp) / 0.35);
+}
+
+.focal-size {
+  font-variant-numeric: tabular-nums;
+}
+
+.focal-size.is-too-long {
+  color: var(--t-danger);
+  font-weight: 600;
 }
 
 /* ── Node cards ────────────────────── */
@@ -313,16 +375,14 @@
 /* ── Internal sub-elements ──────────── */
 
 .dissection-node.internal {
-  padding: 10px 16px;
+  padding: 9px 14px;
   background: var(--bg-elevated);
-  border: 1px solid rgb(var(--c-accent) / 0.28);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
 }
 
 .dissection-node.internal:hover {
   border-color: rgb(var(--c-accent) / 0.7);
-  box-shadow: var(--shadow-md), 0 0 0 4px rgb(var(--c-accent) / 0.1);
 }
 
 .dissection-node.internal .node-name {
@@ -338,20 +398,75 @@
   color: var(--text-secondary);
 }
 
-/* ── External neighbors ─────────────── */
+/* ── 外圈：电路上的邻居 ── */
 
 .dissection-node.neighbor {
-  padding: 9px 15px;
-  background: var(--bg-glass);
-  border: 1px solid var(--border-glass);
+  padding: 8px 13px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-xs);
 }
 
 .dissection-node.neighbor:hover {
-  border-color: var(--border-glass-hover);
-  background: var(--bg-glass-hover);
-  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+/* ── 最外圈：读完它常接着读的（联想）。没有底色，只是一行字加一根虚线，比邻居更轻 ── */
+
+.dissection-node.assoc {
+  padding: 6px 11px;
+  background: rgb(var(--ink-rgb) / 0.02);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+}
+
+.dissection-node.assoc .node-name {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.dissection-node.assoc:hover {
+  border-style: solid;
+  background: var(--bg-elevated);
+}
+
+.dissection-node.assoc:hover .node-name {
+  color: var(--text-primary);
+}
+
+.assoc-line {
+  stroke: var(--text-dim);
+  stroke-opacity: 0.55;
+}
+
+.assoc-arrow {
+  stroke: var(--text-dim);
+}
+
+/* 底部一行说明：左边是读它之前常读的，右边是读完它常去读的 */
+.reading-flow-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 18px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+
+.reading-flow-hint span {
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--bg-primary) 85%, transparent);
 }
 
 .node-name {

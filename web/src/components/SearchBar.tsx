@@ -20,10 +20,10 @@ interface SearchItemData {
 }
 
 const FIELD_INFO: Record<string, { label: string; badgeClass: string }> = {
-  alias: { label: "别名", badgeClass: "badge-alias" },
-  when_to_read: { label: "说明", badgeClass: "badge-when-to-read" },
-  content: { label: "正文", badgeClass: "badge-content" },
-  name: { label: "名称", badgeClass: "badge-name" },
+  alias: { label: "Alias", badgeClass: "badge-alias" },
+  when_to_read: { label: "When to read", badgeClass: "badge-when-to-read" },
+  content: { label: "Content", badgeClass: "badge-content" },
+  name: { label: "Name", badgeClass: "badge-name" },
 };
 
 function cleanSnippet(snippet: string): string {
@@ -195,6 +195,20 @@ export default function SearchBar({ onSelect }: Props) {
     }
   };
 
+  // 按 / 跳到搜索框（正在别的输入框里打字时不抢）
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return;
+      e.preventDefault();
+      inputRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (
@@ -211,6 +225,7 @@ export default function SearchBar({ onSelect }: Props) {
   return (
     <div ref={wrapperRef} className="search-wrapper">
       <input
+        ref={inputRef}
         className="search-input"
         type="text"
         value={query}
@@ -221,12 +236,14 @@ export default function SearchBar({ onSelect }: Props) {
             setOpen(true);
           }
         }}
-        placeholder="Search concepts, aliases, content..."
+        placeholder="Search memories"
+        aria-label="Search memories"
       />
+      {!query && <kbd className="search-kbd" aria-hidden="true">/</kbd>}
       {open && (
         <div className="search-dropdown">
           {results.length === 0 ? (
-            <div className="search-empty">未找到相关概念</div>
+            <div className="search-empty">Nothing matches “{query}”</div>
           ) : (
             results.map((r, i) => {
               const showSnippet =
