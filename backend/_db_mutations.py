@@ -7,17 +7,18 @@ import re
 from typing import Any
 
 from . import tag_sandbox
-from ._db_common import SYSTEM_TAGS, dump_jev_questions, _now, _validate_name, _validate_and_normalize_on_fire, transactional
+from ._db_common import SYSTEM_TAGS, dump_jev_questions, _now, _validate_name, _validate_when_to_read, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
 from .models import MutationResult
 
 
-def _check_tool_regex(tool: str) -> None:
-    """工具名规则是正则，按整串匹配（re.fullmatch）。写错的正则当场报错，不等到匹配时静默失效。"""
+def _check_regex(field: str, pattern: str) -> None:
+    """绑定钩子或守卫时校验一条正则。输入：字段名（写进报错）、正则文本。
+    行为：编译不过就 raise ValueError，让写错的规则在绑定时就报错。输出：无。"""
     try:
-        re.compile(tool)
-    except re.error as e:
-        raise ValueError(f"tool 正则写错了：{tool!r}（{e}）") from None
+        re.compile(pattern)
+    except Exception as e:
+        raise ValueError(f"{field} is not a valid regex: {pattern!r} ({e}).") from None
 
 
 _logger = logging.getLogger(__name__)
@@ -142,9 +143,7 @@ class MutationMixin:
     @transactional
     def _set_when_to_read(self, concept, text: str) -> MutationResult:
         """设置/更新概念的书腰 (1:1 覆盖)。"""
-        text = text.strip()
-        if not text:
-            raise ValueError("When to read text cannot be empty.")
+        text = _validate_when_to_read(text)
         cid = self._resolve_id(concept)
         cname = self._resolve_concept_name(cid)
         label = f"'{concept}' ('{cname}', id={cid})"
@@ -215,13 +214,14 @@ class MutationMixin:
 
         if not match_pattern or not match_pattern.strip():
             raise ValueError("match_pattern cannot be empty.")
+        _check_regex("match_pattern", match_pattern.strip())
 
         if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode", "dsh"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_tool = tool.strip() if (tool and event_type in ("tool_call", "tool_result")) else None
         if clean_tool:
-            _check_tool_regex(clean_tool)
+            _check_regex("tool", clean_tool)
 
         questions = [q.strip() for q in (jev_questions or []) if q and q.strip()]
         if not questions and jev_threshold is not None:
@@ -287,12 +287,14 @@ class MutationMixin:
 
         if not tool or not tool.strip():
             raise ValueError("tool name cannot be empty.")
-        _check_tool_regex(tool.strip())
+        _check_regex("tool", tool.strip())
 
         if adapter is not None and adapter not in ("claude-code", "codex", "antigravity", "opencode", "dsh"):
             raise ValueError(f"Unknown hook adapter: {adapter!r}")
 
         clean_args = args_pattern.strip() if args_pattern and args_pattern.strip() else None
+        if clean_args:
+            _check_regex("args_pattern", clean_args)
 
         old_guard = self.conn.execute(
             "SELECT id FROM tool_guards WHERE guard_concept_id = ?", (cid,)

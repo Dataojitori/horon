@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 
 from . import tag_sandbox
-from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_and_normalize_on_fire, transactional
+from ._db_common import SYSTEM_TAGS, _now, _validate_name, _validate_when_to_read, _validate_and_normalize_on_fire, transactional
 from .embedding import sync_single_embedding
 from .models import MutationResult
 from .tag_sandbox import TagPluginError
@@ -104,7 +104,7 @@ class ConceptMixin:
             raise ValueError("Plain concepts cannot have on_fire actions.")
 
         clean_content = content.strip() if content else None
-        clean_when_to_read = when_to_read.strip() if when_to_read and when_to_read.strip() else None
+        clean_when_to_read = _validate_when_to_read(when_to_read) if when_to_read else None
 
         cursor = self.conn.execute(
             "INSERT INTO concepts (name, content, when_to_read, role, is_active, lifespan, activation_type, on_fire, created_at, updated_at) "

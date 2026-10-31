@@ -705,15 +705,13 @@ def _build_parser():
     p = sub.add_parser("set", allow_abbrev=False)
     p.add_argument("target")
     p.add_argument("prop", choices=["name", "when_to_read", "activation-rule", "activation_rule", "role", "lifespan", "active", "on_fire", "on-fire", "sensor_hook", "sensor-hook", "tool_guard", "tool-guard"])
-    p.add_argument("value")
+    p.add_argument("value", help="New value. For tool_guard: tool name regex, full match, case-sensitive, e.g. Bash|bash")
     p.add_argument("--lifespan", default=None, choices=["turn", "session", "permanent"],
                    help="Lifespan when setting role to sensor")
     p.add_argument("--activation-rule", "--activation_rule", dest="activation_rule", default=None,
                    help="Activation rule when setting role to logic/guard")
-    p.add_argument("--on-fire", "--on_fire", dest="on_fire", default=None,
-                   help="On-fire action config")
     p.add_argument("--match-pattern", "--match_pattern", dest="match_pattern", default="",
-                   help="Regex or substring match pattern for sensor_hook")
+                   help="Regex match pattern for sensor_hook")
     p.add_argument("--tool", default=None,
                    help="Tool name regex for sensor_hook (tool_call/tool_result), full match, case-sensitive, e.g. Bash|bash")
     p.add_argument("--adapter", choices=["claude-code", "codex", "antigravity", "opencode", "dsh"], default=None,
@@ -912,7 +910,6 @@ def _dispatch(args, db):
             args.value,
             lifespan=getattr(args, "lifespan", None),
             activation_rule=getattr(args, "activation_rule", None),
-            on_fire=getattr(args, "on_fire", None),
             match_pattern=getattr(args, "match_pattern", ""),
             tool=getattr(args, "tool", None),
             args_pattern=getattr(args, "args_pattern", None),

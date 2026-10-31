@@ -196,9 +196,20 @@ def get_concept(concept_id: int, db: HoronDB = Depends(get_db)):
     return result.model_dump()
 
 
+# 解剖视图左边最多列几个“读完常来读它”的节点
+INCOMING_LIMIT = 8
+
+
 @router.get("/neighborhood/{concept_id}")
 def get_neighborhood(concept_id: int, db: HoronDB = Depends(get_db)):
-    """解剖视图使用的邻域接口（激活状态按 session_id 显示）。"""
+    """解剖视图使用的邻域接口（激活状态按 session_id 显示）。
+
+    输出：
+      focal：焦点节点详情（含 suggested_next，即读完它常接着读的，出边）。
+      neighbors / internal_links：电路上的邻居和连线。
+      incoming：读完哪些节点之后常来读它（进边），按转移权重从高到低，最多 INCOMING_LIMIT 条；
+        每项 {concept_id, concept_name, when_to_read, weight}，和 suggested_next 同一个形状。只读，不改转移表。
+    """
     try:
         focal = db.read_concept(concept_id)
     except ValueError as e:
@@ -278,10 +289,27 @@ def get_neighborhood(concept_id: int, db: HoronDB = Depends(get_db)):
             "relation_name": f"{focal.name} ─⊣ {inh.target_name}",
         })
 
+    incoming = [
+        {
+            "concept_id": r["from_concept_id"],
+            "concept_name": r["name"],
+            "when_to_read": r["when_to_read"],
+            "weight": r["weight"],
+        }
+        for r in db.conn.execute(
+            "SELECT ct.from_concept_id, c.name, c.when_to_read, ct.weight "
+            "FROM concept_transitions ct JOIN concepts c ON c.id = ct.from_concept_id "
+            "WHERE ct.to_concept_id = ? AND ct.from_concept_id != ? "
+            "ORDER BY ct.weight DESC, ct.from_concept_id ASC LIMIT ?",
+            (concept_id, concept_id, INCOMING_LIMIT),
+        ).fetchall()
+    ]
+
     return {
         "focal": focal.model_dump(),
         "neighbors": neighbors,
         "internal_links": internal_links,
+        "incoming": incoming,
     }
 
 

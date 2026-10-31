@@ -22,6 +22,8 @@ _logger = logging.getLogger(__name__)
 
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _MAX_NAME_LEN = 200
+# 书腰要送去算嵌入、按 token 收费，所以限长。实际库里最长 246 字，99% 不超过 177 字。
+_MAX_WHEN_TO_READ_LEN = 500
 _FORBIDDEN_CHARS = {'→', '&', ':', '|'}
 
 SYSTEM_TAGS = {"exit", "state", "boot"}
@@ -47,6 +49,16 @@ def _now():
 
 
 # ── Validators ───────────────────────────────────────────────────────────────
+
+def _validate_when_to_read(text: str) -> str:
+    """校验并清理书腰。返回 strip 后的文本，为空或超长则 raise。"""
+    text = text.strip()
+    if not text:
+        raise ValueError("When to read text cannot be empty.")
+    if len(text) > _MAX_WHEN_TO_READ_LEN:
+        raise ValueError(f"When to read too long ({len(text)} chars, max {_MAX_WHEN_TO_READ_LEN}).")
+    return text
+
 
 def _validate_name(name: str) -> str:
     """校验并清理名字（concept 名或 alias）。返回 strip 后的名字，不合法则 raise。"""
@@ -139,39 +151,24 @@ def _validate_and_normalize_on_fire(raw: Any) -> str | None:
     else:
         parsed = raw
 
-    # 2. 校验单字典格式
-    if isinstance(parsed, dict):
-        if not parsed:
-            raise ValueError("on_fire 动作对象不能为空。")
-        for k, v in parsed.items():
+    # 2. 单个动作和动作列表按同一套规则校验，存回时保持传入的形状
+    if not isinstance(parsed, (dict, list)):
+        raise ValueError(f"无效的 on_fire 数据格式: {type(parsed).__name__}。必须是动作列表或字典。")
+    if not parsed:
+        raise ValueError("on_fire cannot be empty.")
+    actions = [parsed] if isinstance(parsed, dict) else parsed
+    for item in actions:
+        if not isinstance(item, dict) or not item:
+            raise ValueError(f"on_fire 列表中的每个动作必须是非空字典，得到: {item!r}")
+        for k, v in item.items():
             if k not in VALID_ON_FIRE_ACTION_TYPES:
                 raise ValueError(
                     f"未定义的 on_fire 动作种类 '{k}'。支持的动作种类: {', '.join(sorted(VALID_ON_FIRE_ACTION_TYPES))}"
                 )
             if not isinstance(v, str) or not v.strip():
                 raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
-        _check_on_fire_length(parsed.values())
-        return json.dumps(parsed, ensure_ascii=False)
-
-    # 3. 校验列表格式
-    elif isinstance(parsed, list):
-        if not parsed:
-            raise ValueError("on_fire 动作列表不能为空。")
-        for item in parsed:
-            if not isinstance(item, dict) or not item:
-                raise ValueError(f"on_fire 列表中的每个动作必须是非空字典，得到: {item!r}")
-            for k, v in item.items():
-                if k not in VALID_ON_FIRE_ACTION_TYPES:
-                    raise ValueError(
-                        f"未定义的 on_fire 动作种类 '{k}'。支持的动作种类: {', '.join(sorted(VALID_ON_FIRE_ACTION_TYPES))}"
-                    )
-                if not isinstance(v, str) or not v.strip():
-                    raise ValueError(f"动作 '{k}' 的内容必须是非空字符串，得到: {v!r}")
-        _check_on_fire_length(v for item in parsed for v in item.values())
-        return json.dumps(parsed, ensure_ascii=False)
-
-    else:
-        raise ValueError(f"无效的 on_fire 数据格式: {type(parsed).__name__}。必须是动作列表或字典。")
+    _check_on_fire_length(v for item in actions for v in item.values())
+    return json.dumps(parsed, ensure_ascii=False)
 
 
 # ── Transactional decorator ──────────────────────────────────────────────────

@@ -11,7 +11,6 @@ Horon Harness Functions — 神经效应器核心原子动作。
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import Any
 
@@ -20,8 +19,6 @@ from backend.llm import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
 from backend._db_common import parse_jev_questions
 from backend.evaluator import load_active_states
 from backend.integrity import check_at_session_start
-
-logger = logging.getLogger("horon.harness")
 
 HARNESS_PREFIX = "【Horon Harness】"
 
@@ -152,19 +149,6 @@ def end_turn(db: HoronDB) -> None:
     db.turn_end()
 
 
-def _tool_matches(rule_tool: str, tool_name: str | None) -> bool:
-    """传感器或守卫上写的工具名规则是不是管这个工具：规则是正则，整串匹配、区分大小写。
-
-    纯字母数字下划线的旧规则（Bash、mcp__bluesky__send_post）等于精确比较；
-    要跨宿主就在规则里写明，如 Bash|bash。写坏的正则（绑定时已拦，库里旧数据才可能有）不匹配任何工具。
-    """
-    try:
-        return re.fullmatch(rule_tool, tool_name or "") is not None
-    except re.error as e:
-        logger.debug(f"Regex error in tool rule {rule_tool!r}: {e}")
-        return False
-
-
 def sense(
     db: HoronDB,
     event_type: str,
@@ -175,7 +159,8 @@ def sense(
 
     输入：事件类型、事件文本（消息正文 / 工具结果 / 序列化的调用参数）、工具名。
     行为：
-      1. 正则初筛：每条钩子按 match_pattern 对 text 做 re.search（忽略大小写）。
+      1. 正则初筛：钩子的 tool 规则对工具名做 re.fullmatch（整串匹配、区分大小写，跨宿主写成 Bash|bash），
+         match_pattern 对 text 做 re.search（忽略大小写）。写坏的正则跳过这条钩子，由开局完整性检查报告。
       2. 命中且没挂 Jev 题的钩子，直接点火。
       3. 命中且挂了 Jev 题（jev_question 列，可多道，见 parse_jev_questions）、本会话里还没亮的钩子，
          把所有钩子的所有题合成一次请求问 Jev（state 按 JEV_STATE 写成“谁对谁说：「text」”；用户消息和
@@ -206,12 +191,13 @@ def sense(
     activated: list[int] = []
     to_ask: list[Any] = []
     for r in rows:
-        if r["tool"] and not _tool_matches(r["tool"], tool_name):
-            continue
         try:
+            if r["tool"] and not re.fullmatch(r["tool"], tool_name or ""):
+                continue
             hit = re.search(r["match_pattern"], text, re.IGNORECASE)
-        except re.error as e:
-            logger.debug(f"Regex error on hook #{r['hook_id']} pattern {r['match_pattern']!r}: {e}")
+        except Exception:
+            # 这里不发消息：model_message 的消息会让宿主强制续写，每次事件都发就停不下来。
+            # 写坏的规则由开局完整性检查（backend.integrity.broken_regexes）报给 AI。
             continue
         if not hit:
             continue
@@ -363,7 +349,10 @@ def guard(
 
     工作逻辑：
     1. 顺便匹配 tool_call 类型的传感器；
-    2. 校验 tool_guards 表中的守卫规则：未激活则深入逆推缺失前置/活跃抑制源；
+    2. 校验 tool_guards 表中的守卫规则：tool 规则对工具名做 re.fullmatch，args_pattern 对序列化参数做
+       re.search（忽略大小写）；未激活则深入逆推缺失前置/活跃抑制源。规则的正则写坏时看不出它管不管这次调用，
+       一律拦下并说明怎么修，不看守卫是否通电；工具名规则写坏时所有工具都被拦。
+       参数里带 tool_guard / tool-guard 的调用不拦，否则修规则的命令也过不去；
     3. 返回 (allowed, deny_reason, fired_notifications)。通知不在这里入队，
        放行时由各 adapter 决定是入队还是直接送出，拦截时随拒绝理由一起返回。
     """
@@ -382,24 +371,35 @@ def guard(
 
     # 2. 检查 tool_guards 规则
     query = (
-        "SELECT tg.id AS guard_rule_id, tg.guard_concept_id, tg.tool, tg.args_pattern, c.name "
+        "SELECT tg.id AS guard_rule_id, tg.guard_concept_id, tg.tool, tg.args_pattern, tg.adapter, c.name "
         "FROM tool_guards tg "
         "JOIN concepts c ON tg.guard_concept_id = c.id "
         "WHERE (tg.adapter IS NULL OR tg.adapter = "
         "(SELECT adapter FROM sessions WHERE session_id = ?))"
     )
-    guards = [g for g in db.conn.execute(query, (db.session_id,)).fetchall()
-              if _tool_matches(g["tool"], tool_name)]
+    guards = db.conn.execute(query, (db.session_id,)).fetchall()
     states = load_active_states(db.conn, db.session_id)
 
     for g in guards:
-        pat = g["args_pattern"]
-        if pat:
-            try:
-                if not re.search(pat, args_json, re.IGNORECASE):
-                    continue
-            except Exception:
+        try:
+            if not re.fullmatch(g["tool"], tool_name):
                 continue
+            pat = g["args_pattern"]
+            if pat and not re.search(pat, args_json, re.IGNORECASE):
+                continue
+        except Exception as e:
+            # 重新绑定会整条替换规则，所以命令要保持原规则的形状，否则规则的范围会变。
+            args_arg = " --args-pattern '<regex>'" if g["args_pattern"] else ""
+            adapter_arg = f" --adapter {g['adapter']}" if g["adapter"] else ""
+            broken = (f"Guard {g['guard_concept_id']} '{g['name']}' has a broken regex ({e}): "
+                      f"tool {g['tool']!r}, args_pattern {g['args_pattern']!r}. "
+                      f"Calls are blocked until you bind it again: "
+                      f"set {g['guard_concept_id']} tool_guard '<tool>'{args_arg}{adapter_arg}")
+            # 修这条规则的调用本身不拦：Bash 守卫写坏后，修它的命令也要走 Bash。
+            if re.search(r"tool[_-]guard", args_json):
+                fired_msgs.append(broken)
+                continue
+            return False, broken, fired_msgs
 
         if states[g["guard_concept_id"]] == 0:
             try:

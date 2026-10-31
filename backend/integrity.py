@@ -1,6 +1,6 @@
 """Database integrity checks run at session start.
 
-Two things can go wrong in the database that no write path catches:
+Three things can go wrong in the database that no write path catches:
 - a when_to_read has no embedding, or one from an older embedding model. Setting a
   when_to_read embeds it right after commit, but if that call fails (no key, network,
   API error) the failure is only logged, and the node silently drops out of
@@ -8,6 +8,8 @@ Two things can go wrong in the database that no write path catches:
   background process (`python -m backend.integrity`) instead of inside the hook.
 - a composition member (compose_members) is not a sensor or logic node. Only a judgement
   call can fix that, so it is reported in the session-start broadcast.
+- a sensor or guard rule holds a regex that does not compile. Binding rejects these, so they
+  come from rows older than that check or from a restored backup. Reported the same way.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import subprocess
 import sys
 import time
@@ -93,15 +96,40 @@ def circuit_violations(db) -> list[str]:
             for r in rows]
 
 
+def broken_regexes(db) -> list[str]:
+    """Stored sensor and guard rules whose regex does not compile.
+
+    Input: an open HoronDB.
+    Output: one line per bad regex, "[node id] node name field 'pattern': error"; empty when
+    every rule compiles.
+    """
+    columns = (("sensor_hooks", "sensor_concept_id", "tool"),
+               ("sensor_hooks", "sensor_concept_id", "match_pattern"),
+               ("tool_guards", "guard_concept_id", "tool"),
+               ("tool_guards", "guard_concept_id", "args_pattern"))
+    problems = []
+    for table, id_column, field in columns:
+        rows = db.conn.execute(
+            f"SELECT t.{id_column} AS cid, c.name, t.{field} AS pattern FROM {table} t "
+            f"JOIN concepts c ON t.{id_column} = c.id WHERE t.{field} IS NOT NULL"
+        ).fetchall()
+        for r in rows:
+            try:
+                re.compile(r["pattern"])
+            except Exception as e:
+                problems.append(f"[{r['cid']}] {r['name']} {field} {r['pattern']!r}: {e}")
+    return problems
+
+
 def check_at_session_start(db) -> str | None:
-    """Run both checks; start the embedding repair in the background if needed.
+    """Run the checks; start the embedding repair in the background if needed.
 
     Input: an open HoronDB (called once per new session from sync_session).
     Side effect: when stale_embeddings is non-empty (and no repair is already running on this
     database), spawns `python -m backend.integrity --db <this database>` detached from the
     hook, so the hook does not wait on embedding API calls.
-    Output: a broadcast line listing circuit violations, or None when there are none.
-    The embedding repair is not announced; failures land in the repair process's log.
+    Output: broadcast text listing circuit violations and broken regexes, one item per line,
+    or None when there are none. The embedding repair is not announced; failures land in the repair process's log.
     """
     if stale_embeddings(db) and _claim_backfill(db.db_path):
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
@@ -113,11 +141,17 @@ def check_at_session_start(db) -> str | None:
         except Exception:
             backfill_lock_path(db.db_path).unlink(missing_ok=True)
             raise
+    problems = []
     violations = circuit_violations(db)
-    if not violations:
-        return None
-    return ("电路组合里混进了不是 sensor/logic 的成员，求值会出错，读这些节点改掉规则："
-            + "；".join(violations))
+    if violations:
+        problems.append("电路组合里混进了不是 sensor/logic 的成员，求值会出错，读这些节点改掉规则："
+                        + "；".join(violations))
+    broken = broken_regexes(db)
+    if broken:
+        problems.append("These rules have a broken regex. A broken sensor rule never fires and a broken "
+                        "guard rule blocks calls until you bind it again with a valid regex: "
+                        + "; ".join(broken))
+    return "\n- ".join(problems) or None
 
 
 def repair_embeddings(db) -> tuple[int, int]:
