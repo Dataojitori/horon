@@ -367,6 +367,8 @@ def _format_login(db, recent_n: int) -> str:
     行为: 先打一行说明书位置，正文要读者自己去读——说明书很长，和记忆拼在一起会让不少宿主截断输出，
           截掉的往往正是后面的 boot 节点。位置默认是本仓库的 .agents/skills/horon-cli/SKILL.md；
           读者碰不到这台机器的文件时（远程服务），用环境变量 HORON_MANUAL_LOCATION 换成读者能打开的地址。
+          环境变量 HORON_MANUAL_FILE 指向一份短说明书时，不打位置，把全文放在最后：网页上的模型看到位置也不一定去读。
+          放最后是因为截断输出时要先保住记忆。
           对挂了系统 Tag `boot` 的节点逐个 read_concept，整批记一次注意力转移；
           最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
     输出: 拼好的纯文本。
@@ -379,7 +381,8 @@ def _format_login(db, recent_n: int) -> str:
         pointer = f"{manual_note}{_SKILL_PATH.resolve()} (hosts with the horon-cli skill installed can invoke it directly)"
     else:
         pointer = f"(Horon manual not found: {_SKILL_PATH})"
-    parts = [pointer]
+    manual_file = os.environ.get("HORON_MANUAL_FILE", "").strip()
+    parts = [] if manual_file else [pointer]
 
     boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
     header = f"════════ [1/2] Startup nodes (Tag boot, {len(boot_ids)} total) ════════"
@@ -403,6 +406,8 @@ def _format_login(db, recent_n: int) -> str:
     if recent_n > 0:
         parts.append(f"════════ [2/2] {recent_n} most recently modified nodes ════════\n"
                      + _format_recent(db.recent_mutations(recent_n)))
+    if manual_file:
+        parts.append("════════ Manual ════════\n" + Path(manual_file).read_text(encoding="utf-8"))
     return "\n\n".join(parts)
 
 
