@@ -364,23 +364,27 @@ def _format_login(db, recent_n: int) -> str:
     """会话开场：boot 节点全文 + 最近修改的节点。说明书不在这里输出。
 
     输入: db, recent_n（recent 条数，0 表示不显示）。
-    行为: 先打一行说明书路径（.agents/skills/horon-cli/SKILL.md），正文要读者自己去读——
-          说明书很长，和记忆拼在一起会让不少宿主截断输出，截掉的往往正是后面的 boot 节点；
+    行为: 先打一行说明书位置，正文要读者自己去读——说明书很长，和记忆拼在一起会让不少宿主截断输出，
+          截掉的往往正是后面的 boot 节点。位置默认是本仓库的 .agents/skills/horon-cli/SKILL.md；
+          读者碰不到这台机器的文件时（远程服务），用环境变量 HORON_MANUAL_LOCATION 换成读者能打开的地址。
           对挂了系统 Tag `boot` 的节点逐个 read_concept，整批记一次注意力转移；
           最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
     输出: 拼好的纯文本。
     """
-    if _SKILL_PATH.exists():
-        pointer = (f"Horon 使用说明书（怎么读写记忆、建节点、搭电路）不随 login 输出。本会话还没读过的话，读完它再开始操作：{_SKILL_PATH.resolve()}"
-                   "（已安装为 skill 的宿主可直接调用 horon-cli skill）")
+    manual_location = os.environ.get("HORON_MANUAL_LOCATION", "").strip()
+    manual_note = "The Horon manual (how to read and write memories) is not part of the login output. If you have not read it this session, read it before doing anything else: "
+    if manual_location:
+        pointer = manual_note + manual_location
+    elif _SKILL_PATH.exists():
+        pointer = f"{manual_note}{_SKILL_PATH.resolve()} (hosts with the horon-cli skill installed can invoke it directly)"
     else:
-        pointer = f"(找不到 Horon 使用说明书 {_SKILL_PATH})"
+        pointer = f"(Horon manual not found: {_SKILL_PATH})"
     parts = [pointer]
 
     boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
-    header = f"════════ [1/2] 启动节点（Tag boot，共 {len(boot_ids)} 个）════════"
+    header = f"════════ [1/2] Startup nodes (Tag boot, {len(boot_ids)} total) ════════"
     if not boot_ids:
-        parts.append(header + "\n(没有节点挂 boot Tag。用 `add <节点> tag boot` 指定启动节点。)")
+        parts.append(header + "\n(No node has the boot Tag. Use `add <node> tag boot` to choose startup nodes.)")
     else:
         results = [db.read_concept(cid) for cid in boot_ids]
         try:
@@ -397,7 +401,7 @@ def _format_login(db, recent_n: int) -> str:
         parts.append(header + "\n" + "\n\n".join(bodies))
 
     if recent_n > 0:
-        parts.append(f"════════ [2/2] 最近修改的 {recent_n} 个节点 ════════\n"
+        parts.append(f"════════ [2/2] {recent_n} most recently modified nodes ════════\n"
                      + _format_recent(db.recent_mutations(recent_n)))
     return "\n\n".join(parts)
 

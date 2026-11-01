@@ -206,7 +206,7 @@ def _session_start_check(db: HoronDB) -> str:
     except Exception:
         logger.exception("remote cli: session-start integrity check failed")
         return ""
-    return f"\n【完整性检查】{problems}\n" if problems else ""
+    return f"\n[Integrity check] {problems}\n" if problems else ""
 
 
 def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None) -> tuple[int, bool, str, str]:
