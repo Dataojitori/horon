@@ -1,7 +1,7 @@
 """Query / read mixin for HoronDB."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
 import numpy as np
@@ -723,19 +723,13 @@ class QueryMixin:
         if not recent_reads:
             return
 
-        import datetime
-
-        def _parse_ts(ts_str: str) -> datetime.datetime:
-            clean = str(ts_str).replace("T", " ").split(".")[0]
-            return datetime.datetime.strptime(clean, "%Y-%m-%d %H:%M:%S")
-
-        now_time = _parse_ts(_now())
+        now_time = datetime.now(timezone.utc)
         last_time = now_time
 
         # 把日志行按读取归组：sub_action 相同的相邻行是同一批，其余一行一次读取
         reads: list[tuple[list[int], object]] = []
         for row in recent_reads:
-            row_time = _parse_ts(row["timestamp"])
+            row_time = datetime.fromisoformat(row["timestamp"])
 
             # If the gap between this read and the next (or current) read is > 30 mins, break the chain
             if (last_time - row_time).total_seconds() > 30 * 60:

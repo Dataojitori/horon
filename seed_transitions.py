@@ -58,7 +58,7 @@ import memory_migration as M  # noqa: E402  复用它的只读连接、台账校
 
 # 所有种子行共用的 last_accessed_at。真实读取会在 ON CONFLICT 时改写这个字段，
 # 所以"仍带哨兵值"＝"这条边至今没被真正走过"，--undo 依此判断。
-SEED_STAMP = "1970-01-01T00:00:00"
+SEED_STAMP = "1970-01-01T00:00:00+00:00"
 
 W_PARENT_TO_CHILD = {0: 1.5, 1: 1.5, 2: 1.2}   # 按 priority 取，缺省见下
 W_PARENT_TO_CHILD_DEFAULT = 1.0

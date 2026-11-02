@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
+from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
 
@@ -44,8 +44,15 @@ _MIGRATIONS_DIR = _PROJECT_DIR / "backend" / "migrations"
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+TIME_FORMAT = "%Y-%m-%dT%H:%M:%S+00:00"
+
+
 def _now():
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+    """当前时间，UTC，带时区，如 2026-11-03T06:55:01+00:00。
+
+    库里所有时间都是这个格式（旧库由迁移 017 换算过来），所以按字符串比较就是按时间先后。
+    """
+    return datetime.now(timezone.utc).strftime(TIME_FORMAT)
 
 
 # ── Validators ───────────────────────────────────────────────────────────────

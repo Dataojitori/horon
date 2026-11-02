@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import sqlite3
 import sys
-import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ._db_common import (
     _now, SYSTEM_TAGS, transactional,  # noqa: F401  re-exported
-    _SCHEMA_PATH, _MIGRATIONS_DIR, OFFLINE_DEV_SESSION_ID,
+    _SCHEMA_PATH, _MIGRATIONS_DIR, OFFLINE_DEV_SESSION_ID, TIME_FORMAT,
 )
 from ._db_plugins import PluginMixin
 from ._db_concepts import ConceptMixin
@@ -186,8 +186,8 @@ class HoronDB(
 
         排除 devonly 离线开发会话。
         """
-        # 和 _now() 同一种时间（本地时间、同一格式），字符串比较才成立
-        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(time.time() - days * 86400))
+        # 和 _now() 同一种时间（UTC、同一格式），字符串比较才成立
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime(TIME_FORMAT)
         rows = self.conn.execute(
             "SELECT session_id FROM sessions "
             "WHERE session_id != ? AND last_active_at < ?",

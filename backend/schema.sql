@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS session_active_sensors (
 );
 
 INSERT OR IGNORE INTO sessions (session_id, created_at, last_active_at)
-VALUES ('devonly', strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'), strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'));
+VALUES ('devonly', strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'), strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now'));
 
 -- 14. 概念书腰向量表 (冷热分离，1:1 挂载于 concepts)
 CREATE TABLE IF NOT EXISTS concept_embeddings (
