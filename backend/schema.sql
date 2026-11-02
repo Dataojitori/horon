@@ -167,7 +167,7 @@ VALUES ('devonly', strftime('%Y-%m-%dT%H:%M:%S', 'now', 'localtime'), strftime('
 -- 14. 概念书腰向量表 (冷热分离，1:1 挂载于 concepts)
 CREATE TABLE IF NOT EXISTS concept_embeddings (
     concept_id      INTEGER PRIMARY KEY REFERENCES concepts(id) ON DELETE CASCADE,
-    embedding       BLOB    NOT NULL,               -- 书腰向量 (OpenRouter voyage-4-large, 1024-dim)
+    embedding       BLOB    NOT NULL,               -- 书腰向量 (OpenRouter qwen3-embedding-8b, 1024-dim)
     embedding_model TEXT    NOT NULL,               -- 向量模型标识
     updated_at      TEXT    NOT NULL
 );

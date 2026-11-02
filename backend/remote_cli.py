@@ -28,7 +28,7 @@ cost_usd 和 usage 明细（嵌入、suggest_name、audit 里 Jev 判断等花�
 和本地 CLI 的区别：
     - 直接调 frontend/cli.py 的 _build_parser() 和 _audited_dispatch()，不起子进程；
       每次调用开一个 HoronDB 连接，用完关闭。
-    - 会话固定为 remote-api（审计日志、读取记录和本地的 devonly / 宿主会话分开）。
+    - 会话默认为 remote-api（审计日志、读取记录和本地的 devonly / 宿主会话分开），调用方可以指定。
     - 不加载任何 Tag 插件（HoronDB(plugins_enabled=False)）。写入时不过插件检查，audit 不跑插件。
     - 不调用 hook 的 sense()，所以传感器、Jev 复核都不会因为这里的命令被求值
       （详见 set 配了电路属性后的行为：只落库，不求值正则、不问 Jev）。
@@ -118,9 +118,9 @@ class _BadRequest(_RemoteError):
 def _check_command_name(tokens: list[str]) -> None:
     """解析之前先查：第一项必须是白名单里的子命令（不接受放在子命令前面的任何选项）。"""
     if not tokens:
-        raise _Rejected("args 不能为空：第一项是子命令名。")
+        raise _Rejected("args is empty: the first item must be the command name.")
     if tokens[0] not in ALLOWED_COMMANDS:
-        raise _Rejected(f"命令 '{tokens[0]}' 不在白名单内。允许的子命令：{', '.join(sorted(ALLOWED_COMMANDS))}。")
+        raise _Rejected(f"Command '{tokens[0]}' is not allowed here. Allowed commands: {', '.join(sorted(ALLOWED_COMMANDS))}.")
 
 
 def _check_no_file_args(ns) -> None:
@@ -128,14 +128,14 @@ def _check_no_file_args(ns) -> None:
     for dest, flag in FILE_ARG_DESTS.items():
         if getattr(ns, dest, None) is not None:
             raise _Rejected(
-                f"远程接口不允许使用 {flag}（会读写服务器上的文件）。内容请直接写在请求里；"
-                f"batch 的命令文本放在 batch_text 里。")
+                f"{flag} is not allowed here (it reads or writes files on the server). Put the text in the request "
+                f"itself; for batch, put the commands in batch_text.")
 
 
 def _check_parsed(ns) -> None:
     """已解析命令的完整策略检查，单条命令和 batch 的每一行都过这里。"""
     if ns.command not in ALLOWED_COMMANDS:  # 防御：上面按名字查过一遍，这里按解析结果再查一遍
-        raise _Rejected(f"命令 '{ns.command}' 不在白名单内。")
+        raise _Rejected(f"Command '{ns.command}' is not allowed here.")
     _check_no_file_args(ns)
 
 
@@ -161,8 +161,8 @@ def _parse(parser, tokens: list[str]):
 
 def _usage_hint(text: str) -> str:
     if "unrecognized arguments" in text or "expected one argument" in text:
-        text += ("\n[提示] args 是 CLI 参数数组，一个参数一项（不要把整条命令拼成一个字符串）。"
-                 "值以 - 开头的内容请写成 --选项=值 的形式。")
+        text += ("\n[Hint] args is a list of CLI arguments, one argument per item (do not put the whole command in one string). "
+                 "Write a value that starts with - as --option=value.")
     return text
 
 
@@ -173,19 +173,19 @@ def _validate_batch(parser, batch_text: str) -> None:
     try:
         commands = _cli._parse_batch_commands(batch_text)
     except Exception as e:
-        raise _BadRequest(f"batch_text 语法错误：{e}") from None
+        raise _BadRequest(f"batch_text could not be parsed: {e}") from None
     if not commands:
-        raise _BadRequest("batch_text 里没有命令。")
+        raise _BadRequest("batch_text contains no commands.")
     for start_line, tokens, _raw in commands:
         try:
             _check_command_name(tokens)
             if tokens[0] == "batch":
-                raise _Rejected("batch 里不能再嵌套 batch。")
+                raise _Rejected("batch cannot contain another batch.")
             _check_parsed(_parse(parser, tokens))
         except _Usage as u:
-            raise _BadRequest(f"batch_text 第 {start_line} 行参数错误：{_usage_hint(u.text).strip()}") from None
+            raise _BadRequest(f"batch_text line {start_line}: invalid arguments: {_usage_hint(u.text).strip()}") from None
         except _Rejected as r:
-            raise _Rejected(f"batch_text 第 {start_line} 行被拒绝：{r}") from None
+            raise _Rejected(f"batch_text line {start_line} was refused: {r}") from None
 
 
 
@@ -209,20 +209,21 @@ def _session_start_check(db: HoronDB) -> str:
     return f"\n[Integrity check] {problems}\n" if problems else ""
 
 
-def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None) -> tuple[int, bool, str, str]:
+def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None,
+         session_id: str) -> tuple[int, bool, str, str]:
     """已通过策略检查的命令在这里真正执行。返回 (HTTP 状态, ok, output, error)。"""
     try:
         db = HoronDB(
             db_path=db_path,
             snapshot_mode=True,
-            session_id=REMOTE_SESSION_ID,
+            session_id=session_id,
             plugins_enabled=False,
         )
     except FileNotFoundError:
-        return 404, False, "", "这个记忆库不存在（可能已被删除）。"
+        return 404, False, "", "This memory database does not exist (it may have been deleted)."
     except Exception as e:
         logger.exception("remote cli: failed to open database")
-        return 500, False, "", f"打开数据库失败：{type(e).__name__}: {e}"
+        return 500, False, "", f"Could not open the database: {type(e).__name__}: {e}"
     try:
         db.touch_session(REMOTE_ADAPTER)  # 登记 remote-api 会话；已登记的只刷新最后活跃时间
         if ns.command == "batch":
@@ -244,16 +245,20 @@ def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None) -> 
     except ValueError as e:  # CLI 里“正常的失败”（找不到节点、参数不合法、拒绝写入等）
         return 200, False, "", str(e)
     except SystemExit as e:
-        return 200, False, "", f"命令异常退出（code={e.code}）"
+        return 200, False, "", f"The command exited unexpectedly (code={e.code})."
     except Exception as e:
         logger.exception("remote cli: unexpected error running %s", args[0])
-        return 200, False, "", f"内部错误：{type(e).__name__}: {e}"
+        return 200, False, "", f"Internal error: {type(e).__name__}: {e}"
     finally:
         db.close()
 
 
-def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None = None) -> RemoteCliResult:
+def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None = None,
+                   session_id: str = REMOTE_SESSION_ID) -> RemoteCliResult:
     """在 db_path 这个库上安全地执行一条 CLI 命令（或一段 batch），返回结果和这次的付费开销。
+
+    session_id：审计和共读记录归到哪个会话。本地 Horon 的远程模式传自己的会话，
+    不同会话的读取才不会混在一起；不传就是 remote-api。
 
     同步函数；异步框架里放进线程池调用。策略检查（白名单、文件参数、argparse）不碰库，
     不合格直接返回 403/422，开销为 0。
@@ -261,11 +266,11 @@ def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None 
     db_path = Path(db_path).resolve()
     args = list(args)
     if len(args) > MAX_ARGS:
-        return RemoteCliResult(422, False, error=f"args 最多 {MAX_ARGS} 项。")
+        return RemoteCliResult(422, False, error=f"args can have at most {MAX_ARGS} items.")
     try:
         _check_command_name(args)
         if batch_text is not None and args[0] != "batch":
-            raise _BadRequest("batch_text 只能和 batch 命令一起使用。")
+            raise _BadRequest("batch_text can only be used with the batch command.")
         parser = _cli._build_parser()
         try:
             ns = _parse(parser, args)
@@ -276,11 +281,11 @@ def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None 
         _check_parsed(ns)
         if ns.command == "batch":
             if batch_text is None:
-                raise _BadRequest("batch 需要 batch_text（每行一条命令的文本）；这里不读文件也不读 stdin。")
+                raise _BadRequest("batch needs batch_text (one command per line); files and stdin are not read here.")
             _validate_batch(parser, batch_text)
     except _RemoteError as e:
         return RemoteCliResult(e.status, False, error=str(e))
 
     with CostMeter() as meter:
-        status, ok, output, error = _run(db_path, ns, parser, args, batch_text)
+        status, ok, output, error = _run(db_path, ns, parser, args, batch_text, session_id)
     return RemoteCliResult(status, ok, output, error, meter.summary())

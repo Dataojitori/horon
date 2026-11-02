@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-from backend.embedding import sync_single_embedding
+from backend.embedding import sync_embeddings
 from backend.llm import EMBEDDING_MODEL, CostMeter
 
 logger = logging.getLogger("horon.integrity")
@@ -154,21 +154,22 @@ def check_at_session_start(db) -> str | None:
     return "\n- ".join(problems) or None
 
 
-def repair_embeddings(db) -> tuple[int, int]:
-    """Embed every node returned by stale_embeddings.
+def repair_embeddings(db, batch_size: int = 64) -> tuple[int, int]:
+    """Embed every node returned by stale_embeddings, batch_size nodes per request.
 
     Input: an open HoronDB.
     Output: (written, failed). A node whose when_to_read changed meanwhile counts as
-    neither; its own write path embeds the new text.
+    neither; its own write path embeds the new text. A failed request counts its whole batch.
     """
     written = failed = 0
-    for cid, text in stale_embeddings(db):
+    stale = stale_embeddings(db)
+    for start in range(0, len(stale), batch_size):
+        batch = stale[start:start + batch_size]
         try:
-            if sync_single_embedding(db, cid, text):
-                written += 1
+            written += sync_embeddings(db, batch, timeout=120)
         except Exception as e:
-            failed += 1
-            logger.warning("embedding for concept %s failed: %s", cid, e)
+            failed += len(batch)
+            logger.warning("embedding for concepts %s..%s failed: %s", batch[0][0], batch[-1][0], e)
     return written, failed
 
 

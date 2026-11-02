@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 from backend.db import HoronDB, create_database, database_exists
 from backend._db_common import OFFLINE_DEV_SESSION_ID
+from backend import remote_client
 from backend._db_mutations import ConcurrentUpdateError
 from backend.evaluator import parse_on_fire_action
 from backend.harness.core import sync_session
@@ -360,29 +361,35 @@ def _format_recent(rows) -> str:
 _SKILL_PATH = Path(__file__).parent.parent / ".agents" / "skills" / "horon-cli" / "SKILL.md"
 
 
-def _format_login(db, recent_n: int) -> str:
-    """会话开场：boot 节点全文 + 最近修改的节点。说明书不在这里输出。
+def _login_manual_parts() -> tuple[str | None, str | None]:
+    """login 输出里说明书的那两段：(开头的说明书位置, 末尾的说明书全文)，没有的那段是 None。
 
-    输入: db, recent_n（recent 条数，0 表示不显示）。
-    行为: 先打一行说明书位置，正文要读者自己去读——说明书很长，和记忆拼在一起会让不少宿主截断输出，
-          截掉的往往正是后面的 boot 节点。位置默认是本仓库的 .agents/skills/horon-cli/SKILL.md；
-          读者碰不到这台机器的文件时（远程服务），用环境变量 HORON_MANUAL_LOCATION 换成读者能打开的地址。
-          环境变量 HORON_MANUAL_FILE 指向一份短说明书时，不打位置，把全文放在最后：网页上的模型看到位置也不一定去读。
-          放最后是因为截断输出时要先保住记忆。
-          对挂了系统 Tag `boot` 的节点逐个 read_concept，整批记一次注意力转移；
+    说明书很长，和记忆拼在一起会让不少宿主截断输出，截掉的往往正是后面的 boot 节点，
+    所以默认只在开头打一行位置，正文要读者自己去读。位置是本仓库的 .agents/skills/horon-cli/SKILL.md。
+    读者碰不到这台机器的文件时（远程服务），设环境变量 HORON_MANUAL_FILE 指向一份短说明书：不打位置，
+    把全文放在最后。放最后是因为截断输出时要先保住记忆。
+    读的是运行这段代码的机器上的环境变量和文件。
+    """
+    manual_file = os.environ.get("HORON_MANUAL_FILE", "").strip()
+    if manual_file:
+        return None, "════════ Manual ════════\n" + Path(manual_file).read_text(encoding="utf-8")
+    manual_note = "The Horon manual (how to read and write memories) is not part of the login output. If you have not read it this session, read it before doing anything else: "
+    if _SKILL_PATH.exists():
+        return f"{manual_note}{_SKILL_PATH.resolve()} (hosts with the horon-cli skill installed can invoke it directly)", None
+    return f"(Horon manual not found: {_SKILL_PATH})", None
+
+
+def _format_login(db, recent_n: int, with_manual: bool = True) -> str:
+    """会话开场：boot 节点全文 + 最近修改的节点。
+
+    输入: db, recent_n（recent 条数，0 表示不显示）,
+          with_manual（False 时不带说明书的位置和全文，见 _login_manual_parts）。
+    行为: 对挂了系统 Tag `boot` 的节点逐个 read_concept，整批记一次注意力转移；
           最后附 recent。boot 清单存在库里，改清单用 add/delete <节点> tag boot。
     输出: 拼好的纯文本。
     """
-    manual_location = os.environ.get("HORON_MANUAL_LOCATION", "").strip()
-    manual_note = "The Horon manual (how to read and write memories) is not part of the login output. If you have not read it this session, read it before doing anything else: "
-    if manual_location:
-        pointer = manual_note + manual_location
-    elif _SKILL_PATH.exists():
-        pointer = f"{manual_note}{_SKILL_PATH.resolve()} (hosts with the horon-cli skill installed can invoke it directly)"
-    else:
-        pointer = f"(Horon manual not found: {_SKILL_PATH})"
-    manual_file = os.environ.get("HORON_MANUAL_FILE", "").strip()
-    parts = [] if manual_file else [pointer]
+    pointer, manual = _login_manual_parts() if with_manual else (None, None)
+    parts = [pointer] if pointer else []
 
     boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
     header = f"════════ [1/2] Startup nodes (Tag boot, {len(boot_ids)} total) ════════"
@@ -406,8 +413,8 @@ def _format_login(db, recent_n: int) -> str:
     if recent_n > 0:
         parts.append(f"════════ [2/2] {recent_n} most recently modified nodes ════════\n"
                      + _format_recent(db.recent_mutations(recent_n)))
-    if manual_file:
-        parts.append("════════ Manual ════════\n" + Path(manual_file).read_text(encoding="utf-8"))
+    if manual:
+        parts.append(manual)
     return "\n\n".join(parts)
 
 
@@ -842,10 +849,13 @@ def _build_parser():
     p.add_argument("concept", help="Concept name, alias or ID")
 
     # login — 会话开场：boot 节点 + recent（说明书只给路径）
-    add_command("login",
+    p = add_command("login",
         "Session start: print all concepts tagged 'boot' and recent mutations. The manual is NOT printed; only its path."
-    ).add_argument("--recent", type=int, default=10, dest="recent_n",
+    )
+    p.add_argument("--recent", type=int, default=10, dest="recent_n",
         help="How many recent concepts to show (default: 10, 0 to hide)")
+    # 远程模式下本地 CLI 发给服务器时加上：说明书的位置和全文由本地补，服务器上的说明书设置不该出现在本地输出里
+    p.add_argument("--without-manual", action="store_true", help=argparse.SUPPRESS)
 
     # batch
     p = add_command("batch",
@@ -1054,7 +1064,7 @@ def _dispatch(args, db):
         return RawOutput(_format_recent(db.recent_mutations(args.n)))
 
     elif args.command == "login":
-        return RawOutput(_format_login(db, args.recent_n))
+        return RawOutput(_format_login(db, args.recent_n, with_manual=not args.without_manual))
 
     elif args.command == "search_semantic":
         results = db.search_by_intent(args.query, limit=args.limit)
@@ -1238,14 +1248,112 @@ def _run_batch(parser, db, raw_text: str, print_all: bool, check=None) -> tuple[
     return "".join(out), None
 
 
+# 远程模式下留在本机跑的命令：reset 清的是本地会话状态，compile 要看本地会话的传感器。其余都发给服务器。
+_LOCAL_COMMANDS_IN_REMOTE_MODE = {"reset", "compile"}
+
+# 带文件的参数在远程模式下先读好，换成同义的文字参数：服务器不读文件。值是 (argparse 的 dest, 文字参数)。
+_FILE_FLAGS = {
+    "--content-file": ("content_file", "--content"),
+    "--content_file": ("content_file", "--content"),
+    "--append-file": ("append_file", "--append"),
+    "--old-file": ("old_file", "--old"),
+    "--new-file": ("new_file", "--new"),
+}
+
+
+def _inline_file_args(tokens: list[str], ns) -> list[str]:
+    """把 tokens 里的文件参数换成文字参数。ns 是 tokens 的解析结果：
+    只有解析结果里确实是这个文件参数时才换，`--append "--old-file"` 这种字面文字不会被误伤。"""
+    out = []
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        i += 1
+        flag, has_value, value = token.partition("=")
+        if flag not in _FILE_FLAGS:
+            out.append(token)
+            continue
+        if not has_value and i < len(tokens):
+            value = tokens[i]
+        dest, text_flag = _FILE_FLAGS[flag]
+        if getattr(ns, dest, None) != value:
+            out.append(token)
+            continue
+        if not has_value:
+            i += 1
+        out.append(f"{text_flag}={_read_file(value)}")
+    return out
+
+
+def _inline_batch_file_args(parser, text: str) -> str:
+    """batch 文本里有文件参数时重新拼一遍文本，没有就原样返回。
+
+    这一步在发请求之前逐行解析、读文件。任何一行出错（引号没闭合、参数不对、文件读不到），
+    原来的报错照常抛出，另在 stderr 补一句整段都没执行：本地模式的 batch 出错时前面的行已经生效，
+    读者分不出这里不一样。
+    """
+    try:
+        commands = [tokens for _, tokens, _ in _parse_batch_commands(text)]
+        rewritten = [_inline_file_args(tokens, parser.parse_args(tokens)) for tokens in commands]
+    except (SystemExit, ValueError, OSError):
+        print("Nothing in this batch ran: it is checked on this machine before being sent to the server, "
+              "and this error stopped it.", file=sys.stderr)
+        raise
+    if rewritten == commands:
+        return text
+    return "\n".join(shlex.join(tokens) for tokens in rewritten) + "\n"
+
+
+def _run_remote(parser, args, remote: remote_client.RemoteSettings) -> int:
+    """把这条命令发给服务器执行，打印结果；服务器的规则变了就同步进本地规则库。返回退出码。"""
+    batch_text = None
+    if args.command == "batch":
+        text = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
+        batch_text = _inline_batch_file_args(parser, text)
+        tokens = ["batch", "--all"] if args.all else ["batch"]
+    else:
+        tokens = _inline_file_args(sys.argv[1:], args)
+    # login 的说明书部分按本机的设置补（和本地模式一样），不用服务器上那份
+    local_manual = args.command == "login" and not args.without_manual
+    if local_manual:
+        tokens.append("--without-manual")
+    try:
+        response = remote_client.run_command(remote, tokens, batch_text, SESSION_ID)
+    except remote_client.RemoteError as e:
+        print(f"Fail. {e}")
+        return 1
+    output = response.output
+    if local_manual and response.ok:
+        pointer, manual = _login_manual_parts()
+        output = "\n\n".join(part for part in (pointer, output.rstrip("\n"), manual) if part)
+    sys.stdout.write(output)
+    if output and not output.endswith("\n"):
+        sys.stdout.write("\n")
+    if not response.ok:
+        print(response.error if response.error.startswith("Fail.") else f"Fail. {response.error}")
+    # 规则同步成功时不显示。失败要说：钩子和门禁这时用的还是旧规则。
+    if response.rules_version and response.rules_version != remote_client.local_version(remote):
+        try:
+            remote_client.refresh_rules(remote)
+        except (remote_client.RemoteError, OSError, sqlite3.Error) as e:
+            print(f"[Rule sync failed; hooks and guards are still using the old rules] {e}")
+    return 0 if response.ok else 1
+
+
 def main():
     parser = _build_parser()
     args = parser.parse_args()
     root = Path(__file__).parent.parent
     load_dotenv(root / ".env")
-    db_path = root / os.environ["HORON_DB"]
-    if not database_exists(db_path):  # 第一次用 Horon：在 HORON_DB 指的位置建一个空库
-        create_database(db_path)
+    remote = remote_client.remote_settings()
+    if remote:
+        if args.command not in _LOCAL_COMMANDS_IN_REMOTE_MODE:
+            sys.exit(_run_remote(parser, args, remote))
+        db_path = remote_client.ensure_rules_db(remote)
+    else:
+        db_path = root / os.environ["HORON_DB"]
+        if not database_exists(db_path):  # 第一次用 Horon：在 HORON_DB 指的位置建一个空库
+            create_database(db_path)
     db = HoronDB(db_path=db_path, snapshot_mode=True, session_id=SESSION_ID)
     if SESSION_ID != OFFLINE_DEV_SESSION_ID:
         # 宿主没装钩子时这个会话还没登记；首次登记会顺带算一遍它的电路状态

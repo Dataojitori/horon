@@ -7,9 +7,12 @@
 
 调用：
     openrouter_post(url, payload, timeout)    嵌入（EMBEDDINGS_ENDPOINT）和 Jev（DECISIONS_ENDPOINT）
-    complete_text(prompt, kind=...)           让 NAMER_MODEL 回一段文字；有 OPENCODE_GO_API_KEY
-                                              走 OpenCode Go，没有就用 OPENROUTER_API_KEY 走 OpenRouter
-两个函数收到响应后都自己调 record_usage 记账，调用方不用管。
+    complete_text(prompt, kind=...)           让 NAMER_MODEL 回一段文字；有 OPENCODE_GO_API_KEY 走
+                                              OpenCode Go，没有就走 openrouter_post
+openrouter_post 给每个请求加上 ZERO_RETENTION：只路由到零数据留存、不拿请求训练的端点。没有这样的
+端点时 OpenRouter 回 404，宁可失败也不发给会留存的提供方。OpenCode Go 不在这个保证之内。
+换模型前先查它在 OpenRouter 上有没有零留存端点（https://openrouter.ai/api/v1/endpoints/zdr）。
+openrouter_post 收到响应后自己调 record_usage 记账，调用方不用管。
 
 记账：用 CostMeter 把一段代码包起来，就能拿到这段代码里所有模型调用的合计：
 
@@ -18,7 +21,7 @@
     meter.summary()   # {"cost_usd": ..., "input_tokens": ..., "output_tokens": ..., "calls": [...], ...}
 
 美元数优先用提供方在响应里给的 usage.cost（OpenRouter 的嵌入、Jev、聊天都给）。响应里没有 cost 的
-（OpenCode Go 是订阅，不给），按 PRICES_PER_TOKEN 里同一模型 ID 的单价折算；表里也没有这个模型，
+（如 OpenCode Go），按 PRICES_PER_TOKEN 里同一模型 ID 的单价折算；表里也没有这个模型，
 cost_usd 记 None，合计里按 0 算，并在 summary 的 unpriced_calls 里数出来——换了模型忘了补单价，
 会在这里露出来，不会悄悄套用别的模型的价格。
 
@@ -36,8 +39,11 @@ from typing import Any
 
 # ── 模型与接口 ───────────────────────────────────────────────────────────────
 
-EMBEDDING_MODEL = "voyageai/voyage-4-large"
+EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
 EMBEDDING_DIMENSIONS = 1024
+# 嵌入优先用 DeepInfra：同一模型下它的延迟稳定（单条约 1 秒），Nebius 从 1 秒到几十秒不等，
+# 而 OpenRouter 按延迟排序时仍可能选中 Nebius。DeepInfra 不可用时退到其他零留存端点。
+EMBEDDING_PROVIDER_ORDER = ["DeepInfra"]
 JEV_MODEL = "perplexity/pplx-decider-v1.2"
 NAMER_MODEL = "openai/gpt-6-luna"
 
@@ -45,6 +51,9 @@ EMBEDDINGS_ENDPOINT = "https://openrouter.ai/api/v1/embeddings"
 DECISIONS_ENDPOINT = "https://openrouter.ai/api/alpha/decisions"
 CHAT_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 GO_RESPONSES_ENDPOINT = "https://opencode.ai/zen/go/v1/responses"
+
+# 每个 OpenRouter 请求都带上：只走零数据留存（zdr）的端点，并拒绝会拿请求训练的提供方。
+ZERO_RETENTION = {"zdr": True, "data_collection": "deny"}
 
 # 响应里不带 cost 时用的单价（美元/token），键是完整模型 ID。
 # 数字取自 https://openrouter.ai/api/v1/models 里该模型的 pricing.prompt / pricing.completion；
@@ -133,8 +142,11 @@ def openrouter_post(url: str, payload: dict, timeout: int, *, kind: str | None =
     "decision" / "chat" by endpoint). The API key is read from OPENROUTER_API_KEY (surrounding whitespace removed).
     Raises RuntimeError when the key is unset or blank, and when OpenRouter answers with an
     HTTP error; that message carries the status and OpenRouter's response body, which says
-    why (bad key, no credit, unknown model, payload too large, ...).
+    why (bad key, no credit, unknown model, payload too large, no zero-retention endpoint, ...).
+    The payload is sent with "provider" set to ZERO_RETENTION (a caller's own "provider" keys
+    are kept, but zdr and data_collection are always forced).
     """
+    payload = {**payload, "provider": {**payload.get("provider", {}), **ZERO_RETENTION}}
     key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     if not key:
         raise RuntimeError(
@@ -163,7 +175,7 @@ def complete_text(prompt: str, *, kind: str, model: str = NAMER_MODEL, timeout: 
     Input: the prompt; `kind` labels the call in the cost record (e.g. "suggest_name");
     `model` is the full OpenRouter model ID. With OPENCODE_GO_API_KEY set (non-blank) the call goes to
     OpenCode Go, which names the same model without the vendor prefix ("openai/gpt-6-luna" ->
-    "gpt-6-luna"); otherwise it goes to OpenRouter with OPENROUTER_API_KEY.
+    "gpt-6-luna") and is not covered by ZERO_RETENTION; otherwise it goes through openrouter_post.
     Output: the reply text ("" if the model returned none).
     Raises RuntimeError if no key is set, and on an HTTP error (the message carries the
     status and the response body); network errors propagate as raised.

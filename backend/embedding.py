@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import struct
 
-from .llm import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDINGS_ENDPOINT, openrouter_post
+from .llm import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL, EMBEDDING_PROVIDER_ORDER, EMBEDDINGS_ENDPOINT, openrouter_post
 
 
 def embedding_to_blob(emb: list[float] | None) -> bytes | None:
@@ -34,6 +34,7 @@ def embed_texts(texts: list[str], timeout: int = 120) -> list[list[float]]:
         "model": EMBEDDING_MODEL,
         "input": texts,
         "dimensions": EMBEDDING_DIMENSIONS,
+        "provider": {"order": EMBEDDING_PROVIDER_ORDER},
     }, timeout)["data"]
     vectors = [item["embedding"] for item in sorted(data, key=lambda item: item["index"])]
     if len(vectors) != len(texts):
@@ -48,31 +49,41 @@ def embed_texts(texts: list[str], timeout: int = 120) -> list[list[float]]:
     return normalised
 
 
-def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
-    """Fetch the embedding of a when_to_read and store it in concept_embeddings.
+def sync_embeddings(db_instance, items: list[tuple[int, str]], timeout: int = 30) -> int:
+    """Fetch the embeddings of several when_to_read texts in one request and store them.
 
-    Input: the HoronDB, the concept id, and the when_to_read text it had when the hook was queued.
-    Designed to be called via `_post_commit_hooks` AFTER the main transaction has
-    committed, so it doesn't hold up the database lock; failures (no key, network, API
-    error) are raised to the caller, which logs them without undoing the mutation.
-    Output: True if the embedding was written; False if the concept's when_to_read no longer
-    equals `text` (it was changed again meanwhile), in which case nothing is written.
+    Input: the HoronDB and (concept id, the when_to_read text it had when queued) pairs.
+    Called AFTER the main transaction has committed, so it doesn't hold up the database
+    lock; failures (no key, network, API error) are raised to the caller, which logs them
+    without undoing the mutation.
+    Output: how many embeddings were written. A concept whose when_to_read no longer equals
+    its queued text (it was changed again meanwhile) is skipped.
     """
     from ._db_common import _now
-    emb_blob = embedding_to_blob(embed_texts([text], timeout=30)[0])
+    if not items:
+        return 0
+    vectors = embed_texts([text for _, text in items], timeout=timeout)
+    written = 0
     # We are outside the main transaction lock now, so a quick new transaction is safe.
     with db_instance.conn:
-        cursor = db_instance.conn.execute(
-            """
-            INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
-            SELECT id, ?, ?, ?
-            FROM concepts
-            WHERE id = ? AND when_to_read = ?
-            ON CONFLICT(concept_id) DO UPDATE SET
-                embedding=excluded.embedding,
-                embedding_model=excluded.embedding_model,
-                updated_at=excluded.updated_at
-            """,
-            (emb_blob, EMBEDDING_MODEL, _now(), concept_id, text)
-        )
-        return cursor.rowcount > 0
+        for (concept_id, text), vector in zip(items, vectors):
+            cursor = db_instance.conn.execute(
+                """
+                INSERT INTO concept_embeddings (concept_id, embedding, embedding_model, updated_at)
+                SELECT id, ?, ?, ?
+                FROM concepts
+                WHERE id = ? AND when_to_read = ?
+                ON CONFLICT(concept_id) DO UPDATE SET
+                    embedding=excluded.embedding,
+                    embedding_model=excluded.embedding_model,
+                    updated_at=excluded.updated_at
+                """,
+                (embedding_to_blob(vector), EMBEDDING_MODEL, _now(), concept_id, text)
+            )
+            written += cursor.rowcount
+    return written
+
+
+def sync_single_embedding(db_instance, concept_id: int, text: str) -> bool:
+    """sync_embeddings for one node. Output: True if written, False if its when_to_read changed meanwhile."""
+    return sync_embeddings(db_instance, [(concept_id, text)]) > 0

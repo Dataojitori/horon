@@ -36,6 +36,7 @@ from backend.harness.adapters.claude_code import handle_claude_code
 from backend.harness.adapters.codex import handle_codex
 from backend.harness.adapters.opencode import handle_opencode
 from backend.harness.adapters.dsh import handle_dsh
+from backend.remote_client import ensure_rules_db, remote_settings
 from backend.harness.core import (
     HARNESS_PREFIX,
     drain,
@@ -165,9 +166,13 @@ def main():
 
     adapter_type = detect_adapter_type(payload, args.adapter)
     load_dotenv(_PROJECT_ROOT / ".env")
-    db_path = _PROJECT_ROOT / os.environ["HORON_DB"]
-    if not database_exists(db_path):  # 刚装好 Horon、还没跑过 CLI 时，第一次 hook 建库
-        create_database(db_path)
+    remote = remote_settings()
+    if remote:  # 远程模式：钩子读本地规则库，不走网络
+        db_path = ensure_rules_db(remote)
+    else:
+        db_path = _PROJECT_ROOT / os.environ["HORON_DB"]
+        if not database_exists(db_path):  # 刚装好 Horon、还没跑过 CLI 时，第一次 hook 建库
+            create_database(db_path)
     db = HoronDB(db_path=db_path, session_id=payload_session_id(payload, adapter_type))
     try:
         exit_code, stdout_data, stderr_data = dispatch_hook(event_name, payload, db, adapter_type)
