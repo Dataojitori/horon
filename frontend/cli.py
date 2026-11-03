@@ -590,8 +590,8 @@ def _read_nocturne_memory(uri: str) -> str:
         # paths → node_uuid → memories (latest non-deprecated)
         row = conn.execute(
             "SELECT node_uuid FROM paths "
-            "WHERE domain = ? AND path = ? AND namespace = ''",
-            (domain, path),
+            "WHERE domain = ? AND path = ? AND namespace = ?",
+            (domain, path, os.environ.get("NOCTURNE_NAMESPACE", "")),
         ).fetchone()
         if not row:
             raise ValueError(f"URI not found in nocturne memory: {uri}")

@@ -20,6 +20,7 @@
   python memory_migration.py update <UUID/URI> --horon <名/ID> [--note "迁移方针"] # 首次迁入、改绑概念、或确认新版后追平版本号
   python memory_migration.py update <UUID/URI> --status ignored --note "忽略理由"   # 标记为忽略
   python memory_migration.py update <UUID/URI> --note "更新方针"    # 仅修改备注/方针
+  python memory_migration.py import [--exclude writer] [--apply]   # 一次导入全部未迁移的记忆，出报告
 """
 
 from __future__ import annotations
@@ -237,10 +238,10 @@ def get_mcp_active_memory(nm_conn: sqlite3.Connection, node_uuid: str) -> sqlite
           id 更大的废弃行（核过，十几个），照 id 挑会静默拿到早就作废的正文。
           条件必须写成 `deprecated = 0` 而不是 `COALESCE(deprecated, 0) = 0`——
           后者不匹配那个部分索引的条件，会退化成全表扫描（实测：SCAN vs COVERING INDEX）。
-    输出：命中返回该行（id / title / content / created_at）；该节点没有生效版本返回 None。
+    输出：命中返回该行（id / content / created_at）；该节点没有生效版本返回 None。
     """
     return nm_conn.execute(
-        "SELECT id, title, content, created_at FROM memories "
+        "SELECT id, content, created_at FROM memories "
         "WHERE node_uuid = ? AND deprecated = 0",
         (node_uuid,)
     ).fetchone()
@@ -407,7 +408,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
         if not args.domain and not args.prefix:
             orphan_all = nm_conn.execute(
                 """
-                SELECT m.id, m.node_uuid, m.title, m.content
+                SELECT m.id, m.node_uuid, m.content
                 FROM memories m
                 WHERE m.deprecated = 0
                   AND NOT EXISTS (
@@ -470,7 +471,7 @@ def cmd_scan(args: argparse.Namespace) -> None:
                 placeholders = ",".join(["?"] * len(batch))
                 rows = nm_conn.execute(
                     f"""
-                    SELECT id, node_uuid, title, content, created_at
+                    SELECT id, node_uuid, content, created_at
                     FROM memories
                     WHERE deprecated = 0 AND node_uuid IN ({placeholders})
                     """,
@@ -694,7 +695,7 @@ def cmd_show(args: argparse.Namespace) -> None:
             print(f"  - {cyan(p)}")
 
         if active_mcp:
-            print(f"MCP 最新版本: ID={bold(str(active_mcp['id']))} | 标题={active_mcp['title']} | 创建时间={active_mcp['created_at']}")
+            print(f"MCP 最新版本: ID={bold(str(active_mcp['id']))} | 创建时间={active_mcp['created_at']}")
             print(dim(f"正文长度: {len(active_mcp['content'] or '')} 字符"))
         else:
             print(yellow("MCP 侧无活跃正文 (可能已废弃或不存在)"))
@@ -956,6 +957,255 @@ def cmd_update(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# import：把还没进台账的记忆一次全部建成 Horon 概念
+# ---------------------------------------------------------------------------
+REPORT_PATH = SCRIPT_DIR / ".horon-local" / "nocturne_import_report.md"
+
+
+def assign_names(plan: list[dict[str, Any]], taken: set[str]) -> dict[str, str]:
+    """Give every path of every planned memory a Horon name.
+
+    A path is named after its last segment (core://agent/my_user -> my_user). Where paths of
+    different memories would get the same name, or a name already in Horon, each of them takes
+    one more parent segment, round by round, until the names differ (agent/my_user). The most a
+    path can take is domain/path. Two paths of the same memory may end up with the same name.
+    Output: {uri: name}.
+    """
+    owner, segments, depth = {}, {}, {}
+    for item in plan:
+        for uri, _ in item["paths"]:
+            domain, path = parse_uri(uri)
+            owner[uri] = item["uuid"]
+            segments[uri] = [domain] + (path.split("/") if path else [])
+            depth[uri] = 1
+
+    from backend._db_common import _validate_name
+
+    def name(uri: str) -> str:
+        return "/".join(segments[uri][-depth[uri]:])
+
+    def valid(n: str) -> bool:
+        try:
+            _validate_name(n)
+            return True
+        except ValueError:
+            return False
+
+    while True:
+        owners_by_name: dict[str, set[str]] = {}
+        for uri in depth:
+            owners_by_name.setdefault(name(uri), set()).add(owner[uri])
+        grow = [uri for uri in depth
+                if (len(owners_by_name[name(uri)]) > 1 or name(uri) in taken or not valid(name(uri)))
+                and depth[uri] < len(segments[uri])]
+        if not grow:
+            return {uri: name(uri) for uri in depth}
+        for uri in grow:
+            depth[uri] += 1
+
+
+def read_boot_uris(nm_conn: sqlite3.Connection, config_path: Path) -> tuple[list[str], str]:
+    """Nocturne's boot URIs for NAMESPACE, and where they were read from.
+
+    Nocturne keeps them in the active row of its presets table; config.json only seeds that table
+    on first run, so it is read only when the database has no active preset. As in Nocturne, a
+    namespace without its own entry uses the global ("") list.
+    """
+    has_presets = nm_conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'presets'").fetchone()
+    row = nm_conn.execute(
+        "SELECT boot_uris FROM presets WHERE is_active = 1").fetchone() if has_presets else None
+    if row:
+        boot, source = json.loads(row["boot_uris"]), "active preset in the Nocturne database"
+    elif config_path.exists():
+        boot = json.loads(config_path.read_text(encoding="utf-8-sig")).get("boot_uris") or {}
+        source = str(config_path)
+    else:
+        return [], "no active preset and no config.json"
+    if not isinstance(boot, dict):
+        raise RuntimeError(f"boot_uris from {source} is not an object: {boot!r}")
+    return (boot[NAMESPACE] if NAMESPACE in boot else boot.get("", [])), source
+
+
+def plan_import(nm_conn: sqlite3.Connection, ledger: dict[str, dict[str, Any]],
+                excludes: list[str]) -> tuple[list[dict[str, Any]], int, int]:
+    """Collect the memories to import.
+
+    Output: (plan, already_in_ledger, excluded). Each plan item has the node uuid, its active
+    memory row, and its paths as (uri, disclosure), oldest path first. The oldest path is the one
+    the memory was created at; the others were added later as aliases.
+    """
+    rows = nm_conn.execute(
+        """
+        SELECT p.node_uuid, p.domain || '://' || COALESCE(p.path, '') AS uri, e.disclosure
+        FROM paths p LEFT JOIN edges e ON e.id = p.edge_id
+        WHERE p.namespace = ? AND p.node_uuid IS NOT NULL
+        ORDER BY p.created_at, LENGTH(COALESCE(p.path, '')), p.path
+        """,
+        (NAMESPACE,),
+    ).fetchall()
+    paths_by_node: dict[str, list[tuple[str, str]]] = {}
+    for r in rows:
+        paths_by_node.setdefault(r["node_uuid"], []).append((r["uri"], (r["disclosure"] or "").strip()))
+
+    plan, in_ledger, excluded = [], 0, 0
+    for uuid, paths in paths_by_node.items():
+        if uuid in ledger:
+            in_ledger += 1
+            continue
+        if excludes and all(any(_prefix_hit(uri, x, None) for x in excludes) for uri, _ in paths):
+            excluded += 1
+            continue
+        memory = get_mcp_active_memory(nm_conn, uuid)
+        if memory is None:
+            continue
+        plan.append({"uuid": uuid, "paths": paths, "memory": memory})
+    return plan, in_ledger, excluded
+
+
+def cmd_import(args: argparse.Namespace) -> None:
+    """Create one Horon concept per memory that is not in the ledger yet, register each in the
+    ledger, and write a report of what was decided automatically and what failed."""
+    if os.environ.get("HORON_REMOTE_KEY", "").strip():
+        raise RuntimeError("HORON_REMOTE_KEY is set, so Horon is in remote mode. import writes the local "
+                           "Horon database: leave HORON_REMOTE_KEY empty in .env while importing.")
+    excludes = [x if "://" in x else f"{x}://" for x in (args.exclude or [])]
+    config_path = Path(args.config) if args.config else NM_DB_PATH.parent / "config.json"
+
+    with get_nm_conn() as nm_conn:
+        ledger = load_ledger()
+        plan, in_ledger, excluded = plan_import(nm_conn, ledger, excludes)
+        boot_uris, boot_source = read_boot_uris(nm_conn, config_path)
+        resolved = [(resolve_node_uuid(nm_conn, u), u) for u in boot_uris]
+    boot_nodes = {k: u for k, u in resolved if k is not None}
+    boot_missing = [u for k, u in resolved if k is None]
+    with get_horon_conn() as h_conn:
+        taken = {r["alias"] for r in h_conn.execute("SELECT alias FROM aliases")}
+    names = assign_names(plan, taken)
+
+    multi = [p for p in plan if len(p["paths"]) > 1]
+    print(bold("=== Nocturne Memory -> Horon import ==="))
+    print(f"To import: {len(plan)} | already in the ledger: {in_ledger} | excluded: {excluded}")
+    print(f"Memories with more than one path: {len(multi)}")
+    print(f"Names that needed parent segments to stay unique: {sum('/' in n for n in names.values())}")
+    print(f"Boot URIs ({boot_source}): {len(boot_uris)}, with no memory behind them: {len(boot_missing)}")
+    if not args.apply:
+        print(dim("\nDry run, nothing written. Add --apply to import."))
+        return
+
+    sys.path.insert(0, str(SCRIPT_DIR))
+    from frontend import cli as horon_cli  # the same parser and audited dispatch the CLI uses
+    from backend.db import HoronDB
+    from backend.harness.core import sync_session
+    from backend._db_mutations import CONTENT_HARD_LIMIT_BYTES, audit_content_bytes
+
+    parser = horon_cli._build_parser()
+    db = HoronDB(db_path=HORON_DB_PATH, snapshot_mode=True, session_id=horon_cli.SESSION_ID)
+    if horon_cli.SESSION_ID != horon_cli.OFFLINE_DEV_SESSION_ID:
+        sync_session(db, horon_cli.ADAPTER)
+
+    def run(*argv: str):
+        return horon_cli._audited_dispatch(parser.parse_args(list(argv)), db)
+
+    def why(e: BaseException) -> str:
+        return "the Horon CLI parser rejected an argument (its error is printed above)" if isinstance(e, SystemExit) else str(e)
+
+    imported, failed, alias_failed, conflicts, no_disclosure, booted, oversize = [], [], [], [], [], [], []
+    try:
+        for i, item in enumerate(plan, 1):
+            paths = item["paths"]
+            uri = paths[0][0]
+            name = names[uri]
+            when = next((d for _, d in paths if d), "")
+            argv = ["create_concept", name, f"--content={item['memory']['content']}"]
+            if when:
+                argv.append(f"--when-to-read={when}")
+            try:
+                concept_id = run(*argv).concept_id
+            except (Exception, SystemExit) as e:
+                failed.append((uri, why(e)))
+                continue
+
+            now = dt.datetime.now(dt.timezone.utc).isoformat()
+            ledger[item["uuid"]] = {
+                "status": "migrated",
+                "horon_id": concept_id,
+                "horon_name": name,
+                "mcp_version_id": item["memory"]["id"],
+                "migrated_at": now,
+                "updated_at": now,
+                "note": "memory_migration.py import",
+            }
+            save_ledger(ledger)
+            imported.append((concept_id, name, paths))
+
+            for alias in dict.fromkeys(names[u] for u, _ in paths[1:]):
+                if alias == name:
+                    continue
+                try:
+                    run("add", str(concept_id), "name", alias)
+                except (Exception, SystemExit) as e:
+                    alias_failed.append((concept_id, name, alias, why(e)))
+            if len({d for _, d in paths if d}) > 1:
+                conflicts.append((concept_id, name, paths))
+            if not when:
+                no_disclosure.append((concept_id, name))
+            size = audit_content_bytes(item["memory"]["content"])
+            if size > CONTENT_HARD_LIMIT_BYTES:
+                oversize.append((concept_id, name, size))
+            if item["uuid"] in boot_nodes:
+                run("add", str(concept_id), "tag", "boot")
+                booted.append((concept_id, name))
+            if i % 50 == 0:
+                print(dim(f"  {i}/{len(plan)}"))
+    finally:
+        db.close()
+        report = _import_report(names, imported, failed, alias_failed, conflicts, no_disclosure, booted,
+                                boot_missing, oversize, CONTENT_HARD_LIMIT_BYTES)
+        REPORT_PATH.parent.mkdir(exist_ok=True)
+        REPORT_PATH.write_text(report, encoding="utf-8")
+        print(green(f"\nImported {len(imported)}, failed {len(failed)}."))
+        print(f"Report: {REPORT_PATH}")
+
+
+def _import_report(names, imported, failed, alias_failed, conflicts, no_disclosure, booted, boot_missing,
+                   oversize, limit) -> str:
+    lines = [
+        "# Nocturne Memory import report",
+        "",
+        f"Imported {len(imported)} memories, {len(failed)} could not be imported.",
+        "",
+        "Each concept is named after the last segment of its first Nocturne path, with parent segments "
+        "added where two memories would share a name; its other paths are aliases. Its when_to_read is "
+        "the first non-empty disclosure. To rename: `set <ID> name <new name>` (the old name stays as an alias).",
+        "",
+    ]
+
+    def section(title: str, entries: list[str]) -> None:
+        if entries:
+            lines.extend([f"## {title}", "", *entries, ""])
+
+    section("Could not be imported (not in the ledger; scan still lists them)",
+            [f"- `{uri}`: {err}" for uri, err in failed])
+    section("Memories with more than one path (name taken from the first)",
+            [f"- [{cid}] `{name}`, aliases: " + ", ".join(f"`{a}`" for a in aliases)
+             for cid, name, paths in imported
+             if (aliases := [a for a in dict.fromkeys(names[u] for u, _ in paths[1:]) if a != name])])
+    section("Paths with different disclosures (when_to_read uses the first non-empty one)",
+            [f"- [{cid}] `{name}`\n" + "\n".join(f"  - `{u}`: {d or '(empty)'}" for u, d in paths)
+             for cid, name, paths in conflicts])
+    section("No disclosure on any path (concept has no when_to_read)",
+            [f"- [{cid}] `{name}`" for cid, name in no_disclosure])
+    section(f"Content over {limit} B (update can only shrink it; split it into several concepts)",
+            [f"- [{cid}] `{name}`: {size} B" for cid, name, size in oversize])
+    section("Aliases that could not be added",
+            [f"- [{cid}] `{name}`: `{alias}`: {err}" for cid, name, alias, err in alias_failed])
+    section("Tagged boot", [f"- [{cid}] `{name}`" for cid, name in booted])
+    section("Boot URIs with no memory behind them (not imported)", [f"- `{u}`" for u in boot_missing])
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # CLI 参数解析入口
 # ---------------------------------------------------------------------------
 def main():
@@ -990,6 +1240,13 @@ def main():
     p_up.add_argument("--status", choices=["migrated", "ignored"], default=None, help="显式设置状态 (migrated 或 ignored)")
     p_up.add_argument("--note", default=None, help="记录或更新迁移方针、删减合并原因、或忽略理由")
 
+    # import
+    p_imp = sub.add_parser("import", help="Create a Horon concept for every memory not in the ledger yet (dry run unless --apply)")
+    p_imp.add_argument("--exclude", action="append", metavar="PREFIX",
+                       help="Skip memories whose paths are all under this prefix (e.g. writer, or core://drafts). Repeatable")
+    p_imp.add_argument("--config", help="Nocturne Memory config.json, read for boot_uris only when the database has no active preset (default: next to the database)")
+    p_imp.add_argument("--apply", action="store_true", help="Write; without it only the counts are printed")
+
     args = parser.parse_args()
 
     try:
@@ -1001,6 +1258,8 @@ def main():
             cmd_diff(args)
         elif args.command == "update":
             cmd_update(args)
+        elif args.command == "import":
+            cmd_import(args)
     except FileNotFoundError as e:
         print(red(f"文件未找到错误: {e}"), file=sys.stderr)
         sys.exit(1)

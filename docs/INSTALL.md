@@ -11,18 +11,16 @@
 
 ## 1. 获取代码与依赖
 
-需要 Python 3.10+。
+需要 Python 3.10+，依赖列在 `requirements.txt` 里。装进哪个 Python 环境随用户习惯：系统的、venv、conda 都行。用户平时怎么管 Python 环境、要不要单独隔开一个，拿不准就问。
 
 ```bash
 git clone https://github.com/Dataojitori/horon.git <HORON_DIR>
 cd <HORON_DIR>
-python -m venv .venv
-# Windows: .venv\Scripts\python   macOS/Linux: .venv/bin/python
 <PYTHON> -m pip install -r requirements.txt
 cp .env.example .env    # 有 key 就填进 OPENROUTER_API_KEY
 ```
 
-下文的 `<PYTHON>` 一律指 venv 里解释器的**绝对路径**，`<HORON_DIR>` 指仓库的**绝对路径**。钩子是由你的宿主程序在别的目录里调用的，相对路径会失效。
+下文的 `<PYTHON>` 指装了这些依赖的那个 Python 解释器的**绝对路径**，`<HORON_DIR>` 指仓库的**绝对路径**。钩子是由你的宿主程序在别的目录里调用的，相对路径会失效。
 
 验证：
 
@@ -61,7 +59,7 @@ cd <HORON_DIR>
    export { HoronHarness } from "<HORON_DIR>/backend/harness/opencode-plugin.js"
    ```
 
-2. 插件默认用 `PATH` 里的 `python` 跑 Horon。你按第 1 步装在 venv 里的话，请用户把用户级环境变量 `HORON_PYTHON` 设成 `<PYTHON>`，否则钩子会因为缺依赖而报错。
+2. 插件默认用 `PATH` 里的 `python` 跑 Horon。`<PYTHON>` 不是 `PATH` 里那个的话，请用户把用户级环境变量 `HORON_PYTHON` 设成 `<PYTHON>`，否则钩子找不到依赖会报错。
 3. 重启 OpenCode。开着 `opencode serve` 或网页版的，也要一起重启。
 
 **DeepSeek Harness（dsh）**：
