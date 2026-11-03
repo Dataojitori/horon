@@ -22,6 +22,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Iterator, NamedTuple
 
 from backend.embedding import sync_embeddings
 from backend.llm import EMBEDDING_MODEL, CostMeter
@@ -42,8 +43,9 @@ def backfill_lock_path(db_path: Path) -> Path:
     return _PROJECT_ROOT / ".horon-local" / f"backfill-{db_path.name}-{digest}.lock"
 
 
-def _claim_backfill(db_path: Path) -> bool:
-    """抢这个库的补向量锁；抢到返回 True，已有进程在补返回 False。"""
+def claim_backfill(db_path: Path) -> bool:
+    """抢这个库的补向量锁；抢到返回 True，已有进程在补返回 False。
+    抢到的一方补完自己删锁：backfill_lock_path(db_path).unlink(missing_ok=True)。"""
     lock = backfill_lock_path(db_path)
     lock.parent.mkdir(exist_ok=True)
     for _ in range(2):
@@ -121,17 +123,18 @@ def broken_regexes(db) -> list[str]:
     return problems
 
 
-def check_at_session_start(db) -> str | None:
+def check_at_session_start(db, repair_embeddings: bool = True) -> str | None:
     """Run the checks; start the embedding repair in the background if needed.
 
     Input: an open HoronDB (called once per new session from sync_session).
-    Side effect: when stale_embeddings is non-empty (and no repair is already running on this
-    database), spawns `python -m backend.integrity --db <this database>` detached from the
-    hook, so the hook does not wait on embedding API calls.
+    repair_embeddings=False skips the repair, for callers that run it themselves.
+    Side effect: when repair_embeddings is true and stale_embeddings is non-empty (and no repair
+    is already running on this database), spawns `python -m backend.integrity --db <this database>`
+    detached from the hook, so the hook does not wait on embedding API calls.
     Output: broadcast text listing circuit violations and broken regexes, one item per line,
     or None when there are none. The embedding repair is not announced; failures land in the repair process's log.
     """
-    if stale_embeddings(db) and _claim_backfill(db.db_path):
+    if repair_embeddings and stale_embeddings(db) and claim_backfill(db.db_path):
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
         try:
             subprocess.Popen([sys.executable, "-m", "backend.integrity", "--db", str(db.db_path)],
@@ -154,22 +157,40 @@ def check_at_session_start(db) -> str | None:
     return "\n- ".join(problems) or None
 
 
-def repair_embeddings(db, batch_size: int = 64) -> tuple[int, int]:
-    """Embed every node returned by stale_embeddings, batch_size nodes per request.
+class RepairedBatch(NamedTuple):
+    written: int      # embeddings stored in this batch
+    failed: int       # nodes whose request failed (the whole batch when it fails)
+    cost_usd: float   # what this batch's embedding request cost
+
+
+def iter_repair_embeddings(db, batch_size: int = 64) -> Iterator[RepairedBatch]:
+    """Embed every node returned by stale_embeddings, one request per batch_size nodes,
+    and yield one RepairedBatch after each request.
 
     Input: an open HoronDB.
-    Output: (written, failed). A node whose when_to_read changed meanwhile counts as
-    neither; its own write path embeds the new text. A failed request counts its whole batch.
+    Output: a RepairedBatch per request, so a caller can bill each batch as soon as it is paid
+    for. A node whose when_to_read changed meanwhile counts as neither written nor failed;
+    its own write path embeds the new text.
     """
-    written = failed = 0
     stale = stale_embeddings(db)
     for start in range(0, len(stale), batch_size):
         batch = stale[start:start + batch_size]
-        try:
-            written += sync_embeddings(db, batch, timeout=120)
-        except Exception as e:
-            failed += len(batch)
-            logger.warning("embedding for concepts %s..%s failed: %s", batch[0][0], batch[-1][0], e)
+        written = failed = 0
+        with CostMeter() as meter:
+            try:
+                written = sync_embeddings(db, batch, timeout=120)
+            except Exception as e:
+                failed = len(batch)
+                logger.warning("embedding for concepts %s..%s failed: %s", batch[0][0], batch[-1][0], e)
+        yield RepairedBatch(written, failed, meter.cost_usd)
+
+
+def repair_embeddings(db, batch_size: int = 64) -> tuple[int, int]:
+    """iter_repair_embeddings run to the end. Output: (written, failed) in total."""
+    written = failed = 0
+    for batch in iter_repair_embeddings(db, batch_size):
+        written += batch.written
+        failed += batch.failed
     return written, failed
 
 
