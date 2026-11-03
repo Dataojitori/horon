@@ -123,18 +123,18 @@ def broken_regexes(db) -> list[str]:
     return problems
 
 
-def check_at_session_start(db, repair_embeddings: bool = True) -> str | None:
+def check_at_session_start(db, start_repair: bool = True) -> str | None:
     """Run the checks; start the embedding repair in the background if needed.
 
     Input: an open HoronDB (called once per new session from sync_session).
-    repair_embeddings=False skips the repair, for callers that run it themselves.
-    Side effect: when repair_embeddings is true and stale_embeddings is non-empty (and no repair
+    start_repair=False skips the repair, for callers that run it themselves.
+    Side effect: when start_repair is true and stale_embeddings is non-empty (and no repair
     is already running on this database), spawns `python -m backend.integrity --db <this database>`
     detached from the hook, so the hook does not wait on embedding API calls.
     Output: broadcast text listing circuit violations and broken regexes, one item per line,
     or None when there are none. The embedding repair is not announced; failures land in the repair process's log.
     """
-    if repair_embeddings and stale_embeddings(db) and claim_backfill(db.db_path):
+    if start_repair and stale_embeddings(db) and claim_backfill(db.db_path):
         flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
         try:
             subprocess.Popen([sys.executable, "-m", "backend.integrity", "--db", str(db.db_path)],

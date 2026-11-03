@@ -34,6 +34,8 @@ cost_usd 和 usage 明细（嵌入、suggest_name、audit 里 Jev 判断等花�
       （详见 set 配了电路属性后的行为：只落库，不求值正则、不问 Jev）。
     - 不走钩子。本地开新会话时做的完整性检查（缺向量后台补、电路组合违规提示）改在 login 里做，
       违规提示附在 login 输出末尾；补向量的后台进程只补这次打开的那个库。
+      调用方想自己补向量（比如要把开销记到用户头上），传 repair_embeddings=False，
+      login 就不起这个进程，调用方用 backend.integrity 的 claim_backfill 和 iter_repair_embeddings 自己补。
     - 只认白名单里的子命令，且不允许任何会读写服务器文件的参数。
     - 不加锁：并发由 SQLite 自己排队，并发 update 不丢更新靠 update 自身的比较写入。
       库被删掉后迟到的命令打不开库（HoronDB 不建库），返回 404。
@@ -198,11 +200,11 @@ def delete_database(db_path: str | Path) -> None:
     backfill_lock_path(db_path).unlink(missing_ok=True)
 
 
-def _session_start_check(db: HoronDB) -> str:
-    """login 相当于本地开新会话：跑同一个完整性检查（缺向量就在后台起补向量进程，只补 db 这个库）。
-    本地的电路违规提示走钩子广播，这里没有钩子，所以附在 login 输出末尾。出错只记日志。"""
+def _session_start_check(db: HoronDB, repair_embeddings: bool) -> str:
+    """login 相当于本地开新会话：跑同一个完整性检查（repair_embeddings 为真时，缺向量就在后台起补向量进程，
+    只补 db 这个库）。本地的电路违规提示走钩子广播，这里没有钩子，所以附在 login 输出末尾。出错只记日志。"""
     try:
-        problems = check_at_session_start(db)
+        problems = check_at_session_start(db, repair_embeddings)
     except Exception:
         logger.exception("remote cli: session-start integrity check failed")
         return ""
@@ -210,7 +212,7 @@ def _session_start_check(db: HoronDB) -> str:
 
 
 def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None,
-         session_id: str) -> tuple[int, bool, str, str]:
+         session_id: str, repair_embeddings: bool) -> tuple[int, bool, str, str]:
     """已通过策略检查的命令在这里真正执行。返回 (HTTP 状态, ok, output, error)。"""
     try:
         db = HoronDB(
@@ -240,7 +242,7 @@ def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None,
         result = _cli._audited_dispatch(ns, db)
         output = _cli._render(result)
         if ns.command == "login":
-            output += _session_start_check(db)
+            output += _session_start_check(db, repair_embeddings)
         return 200, True, output, ""
     except ValueError as e:  # CLI 里“正常的失败”（找不到节点、参数不合法、拒绝写入等）
         return 200, False, "", str(e)
@@ -254,11 +256,12 @@ def _run(db_path: Path, ns, parser, args: list[str], batch_text: str | None,
 
 
 def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None = None,
-                   session_id: str = REMOTE_SESSION_ID) -> RemoteCliResult:
+                   session_id: str = REMOTE_SESSION_ID, repair_embeddings: bool = True) -> RemoteCliResult:
     """在 db_path 这个库上安全地执行一条 CLI 命令（或一段 batch），返回结果和这次的付费开销。
 
     session_id：审计和共读记录归到哪个会话。本地 Horon 的远程模式传自己的会话，
     不同会话的读取才不会混在一起；不传就是 remote-api。
+    repair_embeddings：login 时发现缺向量，要不要在后台起进程去补。那个进程的开销不算进返回的 cost_usd。
 
     同步函数；异步框架里放进线程池调用。策略检查（白名单、文件参数、argparse）不碰库，
     不合格直接返回 403/422，开销为 0。
@@ -287,5 +290,5 @@ def run_remote_cli(db_path: str | Path, args: list[str], batch_text: str | None 
         return RemoteCliResult(e.status, False, error=str(e))
 
     with CostMeter() as meter:
-        status, ok, output, error = _run(db_path, ns, parser, args, batch_text, session_id)
+        status, ok, output, error = _run(db_path, ns, parser, args, batch_text, session_id, repair_embeddings)
     return RemoteCliResult(status, ok, output, error, meter.summary())
