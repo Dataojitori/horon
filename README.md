@@ -1,10 +1,9 @@
-<h1 align="center"><img src="docs/pv/banner/horon-banner.svg" alt="Horon: self-improving harness" width="100%"></h1>
+<h1 align="center"><img src="docs/pv/banner/horon-banner.svg" alt="Horon: self-improving harness" width="75%"></h1>
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
-[![Interface](https://img.shields.io/badge/interface-CLI-4EAA25?logo=gnubash&logoColor=white)](.agents/skills/horon-cli/SKILL.md)
 
-**Executable memory for AI agents — turn what an agent learns into attention paths, stateful logic, and tool-level guardrails.**
+**Executable memory for personal AI agents.**
 
 > **让 AI 把吃过的亏，搭成会拦住自己的红石电路。**
 
@@ -15,38 +14,46 @@
 </tr>
 <tr>
 <td>AI 记下了教训，下次照样犯。</td>
-<td>Horon 把教训接进它下一次行动的电路里。</td>
+<td>给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。</td>
 </tr>
 </table>
 
+**[给自己的 AI 安装](#安装)** · **[在线试试记忆](#在线试试记忆)**
+
 ---
 
-## 它能搭什么
+## 提醒一次，以后每次都管用
 
-- **自适应记忆**：Horon 会学习 AI 实际翻阅记忆的路径。读过 A 之后经常接着需要 B，下次读到 A 时，B 就更容易被递到眼前。
-- **自动化电路**：把「做完 A 才能做 B」「看到 X 就提醒自己」连成会自动触发的电路。
+你提醒过 AI：「给供应商小林回信前，先看以前的沟通记录。」
+
+光记下来，它下次照样忘。用 Horon，让它自己把规矩接成电路：
+
+1. **小林来信** → 自动提醒 AI 先读沟通记录
+2. **没读就想发信** → 发送工具当场拦住，告诉它还差哪一步
+3. **收件人、附件、套话都查过** → 才通电放行
+
+![发送邮件的电路](docs/images/mail-guard.jpg)
+
+**不用你自己搭。** 把要求告诉 AI，它自己照着说明书（skill）把电路接好；下次有新规矩，它继续往上接。
+
+## 它能给你的 AI 搭什么
+
+- **自适应记忆**：记下你的工作、日常与聊过的事，并学习 AI 实际翻阅记忆的路径。读过 A 之后常要用 B，下次它读到 A，B 就更容易被递到眼前。
+- **自动化电路**：把「看到 X 就提醒自己」「做完 A 才能做 B」连成会自动触发的电路——不论是当场抓包 AI「嘴上答应记下了其实没写库」，还是把旅行筹备、长期计划连成跨对话的阶段条件。
 - **物理刹车**：前置条件不满足时，在工具执行前直接卡死拦截，并告诉 AI 还差哪一步。
-- **可复用模式（Tag 插件）**：像工业模具一样，把一类事情的“正确做法”写成插件，新任务挂上标签，就自动受这套做法约束。
+- **可复用模式（Tag 插件）**：像工业模具一样，把一类事情的正确做法写成 Tag 插件，新任务挂上标签，AI 就自动受这套做法约束。
 
-## 看看效果
+![个人助手的记忆全景](docs/images/personal-assistant-map.jpg)
 
-1. **当场抓包口头答应**：  
-   AI 在对话里满口答应「好的我记下了」，实际上根本没调工具写库。Horon 当场拦截并报错：*“你说记下了，但这一轮什么都没写。”*
+## 在线试试记忆
 
-2. **邮件回复流水线**：  
-   - 供应商小林发来一封日常确认邮件，系统触发传感器，弹出提醒：*“【Horon Harness】收到小林的来信。请阅读「给小林写邮件的指导」（ID 482），然后撰写回信。”*
-   - AI 没读就想直接调 `send_email` 发送？**直接拦截**：*“还没读「给小林写邮件的指导」，先读完再发。”*
-   - 读完再发？系统自动跑一遍检查：有无「值得注意的是」这类 AI 套话？收件人对不对？全合格才通电放行。
+**[和大家一起养的 Kip 聊聊 →](https://aisoulkeeper.com/kip)** · **[看看它的记忆界面 →](https://aisoulkeeper.com/kip/memories/)**
 
-3. **公网发帖防踩雷**：  
-   - AI 自主在社交平台发帖或回复，草稿里不小心夹带了真实姓名、私聊记录或 API Key。
-   - 发送工具在执行前**直接切断**：*“检测到敏感隐私信息，禁止对外发送。”*
-
-**你不需要自己搭电路。** 把需求告诉你的 AI，让它照着 Horon 的说明书（skill）把机关搭出来。
+把公开示例 AI「Kip」接进 ChatGPT 或 Claude，教它一件事，换个新对话看它还记不记得。（ChatGPT / Claude 网页端不支持挂载本地钩子，只能读写记忆；要使用自动提醒和工具拦截电路，需在下方支持的本地客户端中安装 Horon。Kip 的记忆全网公开，请勿输入隐私。）
 
 ## 安装
 
-不用你自己动手。把下面这段话发给你的 AI：
+把这句话发给你的 AI，让它照着说明帮你安装：
 
 ```text
 请帮我安装 Horon：阅读 https://github.com/Dataojitori/horon/blob/master/docs/INSTALL.md 并照做。
@@ -56,11 +63,6 @@
 
 ## 更多
 
-- [horon-cli](.agents/skills/horon-cli/SKILL.md)：给 AI 看的基础使用说明
-- [horon-circuit](.agents/skills/horon-circuit/SKILL.md)：给 AI 看的电路、传感器与守卫制作说明
-- [horon-plugin](.agents/skills/horon-plugin/SKILL.md)：给 AI 看的 Tag 插件制作说明
-- **可视化控制台**：查看记忆图、正在通电的电路和记忆之间的联想。启动方法见 [INSTALL.md](docs/INSTALL.md#可选可视化控制台)。
-
-## 协议
-
-Apache-2.0，附加一条署名条件：用在面向组织外部用户的产品或服务里时，请标注「This product uses Horon」并附上本仓库链接。只在内部使用不受此限。详见 [LICENSE](LICENSE)。
+- [horon-cli](.agents/skills/horon-cli/SKILL.md) · [horon-circuit](.agents/skills/horon-circuit/SKILL.md) · [horon-plugin](.agents/skills/horon-plugin/SKILL.md)：给 AI 看的说明书
+- **本地可视化控制台**：启动方法见 [INSTALL.md](docs/INSTALL.md#可选可视化控制台)
+- **协议**：Apache-2.0（面向外部用户的产品或服务需署名，详见 [LICENSE](LICENSE)）
