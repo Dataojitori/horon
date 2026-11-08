@@ -147,6 +147,8 @@ interface Layout {
   hubOf: Map<string, number>;
   /** 节点 id → 它作为源节点的 Tag 的成员数（不是源节点就是 0） */
   hubSize: Map<number, number>;
+  /** 节点 id → 和它有阅读路径的节点 id。不进力学布局，只在悬停时画 */
+  readingPaths: Map<number, number[]>;
 }
 
 function buildLayout(data: GraphData, hueCount: number): Layout {
@@ -188,12 +190,19 @@ function buildLayout(data: GraphData, hueCount: number): Layout {
     if (best) clusterOf.set(n.id, best);
   }
 
-  const links: DrawLink[] = data.links.map((l) => ({
-    source: typeof l.source === "object" ? l.source.id : l.source,
-    target: typeof l.target === "object" ? l.target.id : l.target,
-    kind: l.kind,
-    status: l.status,
-  }));
+  // 阅读路径不当成线交给布局：放进去会改动电路线和 Tag 辐条的受力分配，每帧也要白过一遍
+  const readingPaths = new Map<number, number[]>();
+  const links: DrawLink[] = [];
+  for (const l of data.links) {
+    const source = typeof l.source === "object" ? l.source.id : l.source;
+    const target = typeof l.target === "object" ? l.target.id : l.target;
+    if (l.kind === "association") {
+      readingPaths.set(source, [...(readingPaths.get(source) ?? []), target]);
+      readingPaths.set(target, [...(readingPaths.get(target) ?? []), source]);
+      continue;
+    }
+    links.push({ source, target, kind: l.kind, status: l.status });
+  }
   for (const n of data.nodes) {
     const tag = clusterOf.get(n.id);
     if (!tag) continue;
@@ -202,7 +211,7 @@ function buildLayout(data: GraphData, hueCount: number): Layout {
     links.push({ source: n.id, target: hub, kind: "tag", status: null, hue: hueOf.get(tag) });
   }
 
-  return { links, clusterOf, hueOf, count, hubOf, hubSize };
+  return { links, clusterOf, hueOf, count, hubOf, hubSize, readingPaths };
 }
 
 /** 节点半径（画布单位）。源节点按成员数变大，普通节点按正文体积变大，电路节点再加一点。 */
@@ -246,6 +255,8 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
   const layout = useMemo(() => buildLayout(data, PALETTES.light.hues.length), [data]);
   // 交给力学布局的数据：节点用原对象（坐标写回去，切换主题时不重排），线用新算的这一套
   const graphData = useMemo(() => ({ nodes: data.nodes, links: layout.links }), [data, layout]);
+  // 悬停画阅读路径时按 id 找节点；节点对象被布局原地改坐标，表建一次就一直有效
+  const nodeById = useMemo(() => new Map(data.nodes.map((n) => [n.id, n])), [data]);
   // 同一张图里，用户一旦开始操作视野，后续冷却或 resize 都不再自动适配。
   const viewInteractedRef = useRef(false);
   useEffect(() => {
@@ -354,6 +365,30 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
       ctx.setLineDash([]);
     },
     [palette],
+  );
+
+  // 悬停节点的阅读路径：画在线和点之前，压在点下面。平时不画（全画出来满屏灰网）
+  const onRenderFramePre = useCallback(
+    (ctx: CanvasRenderingContext2D, globalScale: number) => {
+      if (!hoveredNode || hoveredNode.x === undefined || hoveredNode.y === undefined) return;
+      const partners = layout.readingPaths.get(hoveredNode.id);
+      if (!partners) return;
+      const byId = nodeById;
+      ctx.save();
+      ctx.strokeStyle = palette.inkDim;
+      ctx.lineWidth = 1.3 / globalScale;
+      ctx.setLineDash([2 / globalScale, 4 / globalScale]);
+      ctx.beginPath();
+      for (const id of partners) {
+        const p = byId.get(id);
+        if (p?.x === undefined || p.y === undefined) continue;
+        ctx.moveTo(hoveredNode.x, hoveredNode.y);
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+      ctx.restore();
+    },
+    [hoveredNode, layout, nodeById, palette],
   );
 
   // ── 点 ───────────────────────────────────────────────────
@@ -663,6 +698,7 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         graphData={graphData as any}
         nodeId="id"
         nodeCanvasObject={nodeCanvasObject as any}
+        onRenderFramePre={onRenderFramePre as any}
         onRenderFramePost={onRenderFramePost as any}
         nodePointerAreaPaint={((node: any, color: string, ctx: CanvasRenderingContext2D) => {
           const r = nodeRadius(node as GraphNode, layout.hubSize.get((node as GraphNode).id) ?? 0);
@@ -712,6 +748,10 @@ export default function GalaxyView({ data, onNodeClick, onNodeHover }: Props) {
         <span className="legend-sep" aria-hidden="true" />
         <span className="legend-item">
           <strong>{tagTotal}</strong> tags
+        </span>
+        <span className="legend-item" title="Hover a memory to see what is usually read before or after it">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M1 6h10" fill="none" stroke="currentColor" strokeDasharray="2 2" /></svg>
+          reading paths on hover
         </span>
         <span className={`legend-item legend-lit ${counts.lit > 0 ? "is-on" : ""}`}>
           <svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="3.6" className="lg-lamp" /></svg>

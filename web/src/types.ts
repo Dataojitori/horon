@@ -24,7 +24,7 @@ export interface GraphLink {
   target: number | GraphNode;
   relation_id: number;
   status: string | null;
-  kind: "directed" | "undirected" | "or" | "inhibition";
+  kind: "directed" | "undirected" | "or" | "inhibition" | "association";
 }
 
 export interface GraphData {
@@ -37,6 +37,8 @@ export interface ComposeMemberDetail {
   name: string;
   order_index: number;
   when_to_read: string | null;
+  role: Role;
+  is_active: number;
 }
 
 export interface SensorHookDetail {
@@ -71,6 +73,9 @@ export interface TransitionSuggestion {
   concept_name: string;
   weight: number;
   when_to_read?: string | null;
+  /** 解剖视图的邻域接口会带上；其它接口没有 */
+  role?: Role;
+  is_active?: number;
 }
 
 export interface ConceptDetail {
@@ -102,6 +107,8 @@ export interface NeighborNode {
   when_to_read: string | null;
   degree: number;
   byte_size?: number;
+  role: Role;
+  is_active: number;
 }
 
 /**
@@ -109,6 +116,12 @@ export interface NeighborNode {
  * 这里按整段正文的 UTF-8 字节算，audit 只算非空行，所以网页会比 audit 略早一点亮警告。
  */
 export const OVERSIZE_BYTES = 8192;
+
+/** 电路节点的状态字：守卫通电是放行，其它通电是亮着 */
+export function stateLabel(role: Role | undefined, isActive: number | undefined): string {
+  if (role === "guard") return isActive ? "Pass" : "Blocked";
+  return isActive ? "Lit" : "Off";
+}
 
 export function formatBytes(bytes?: number | null): string {
   if (bytes === undefined || bytes === null || bytes <= 0) return "0 B";

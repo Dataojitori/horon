@@ -11,7 +11,7 @@ import {
   type SimulationLinkDatum,
 } from "d3-force";
 import { api } from "../api";
-import { formatBytes, OVERSIZE_BYTES, type NeighborhoodData, type ConceptDetail } from "../types";
+import { formatBytes, OVERSIZE_BYTES, stateLabel, type NeighborhoodData, type ConceptDetail, type Role } from "../types";
 import "./DissectionView.css";
 
 // 背景点阵的间距（px，缩放为 1 时）
@@ -34,6 +34,8 @@ interface Props {
   onNavigate: (id: number) => void;
   onInspect: (id: number) => void;
   onBack: () => void;
+  /** 右边被侧栏挡住的宽度（px）。图整体左移一半，居中在侧栏左边露出来的那块 */
+  rightInset?: number;
 }
 
 interface SimNode extends SimulationNodeDatum {
@@ -42,6 +44,8 @@ interface SimNode extends SimulationNodeDatum {
   when_to_read: string | null;
   isFocal: boolean;
   isInternal: boolean;
+  role?: Role;
+  is_active?: number;
   /** 联想节点（来自转移权重）：in 画在左边（读完它常来读焦点），out 画在右边（读完焦点常去读它） */
   isAssoc?: boolean;
   side?: "in" | "out";
@@ -62,7 +66,7 @@ interface SimLink extends SimulationLinkDatum<SimNode> {
 
 // Helper to extract unique internal members of a focal concept
 const getInternalMembers = (focalConcept: ConceptDetail) => {
-  const map = new Map<number, { id: number; name: string; when_to_read: string | null }>();
+  const map = new Map<number, { id: number; name: string; when_to_read: string | null; role: Role; is_active: number }>();
   if (focalConcept.members) {
     focalConcept.members.forEach((m) => {
       if (m.concept_id !== focalConcept.id) {
@@ -70,6 +74,8 @@ const getInternalMembers = (focalConcept: ConceptDetail) => {
           id: m.concept_id,
           name: m.name,
           when_to_read: m.when_to_read,
+          role: m.role,
+          is_active: m.is_active,
         });
       }
     });
@@ -96,8 +102,13 @@ export default function DissectionView({
   onNavigate,
   onInspect,
   onBack,
+  rightInset = 0,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // 仿真结束时的自动缩放要按可见宽度算，回调里读这个 ref 拿最新值
+  const rightInsetRef = useRef(rightInset);
+  rightInsetRef.current = rightInset;
+  const viewShift = -rightInset / 2;
   const svgRef = useRef<SVGSVGElement>(null);
   const nodesRef = useRef<Map<number, HTMLDivElement>>(new Map());
   const simRef = useRef<ReturnType<typeof forceSimulation<SimNode>> | null>(
@@ -187,6 +198,7 @@ export default function DissectionView({
   const hasMembers = data ? getInternalMembers(data.focal).length > 0 : false;
   // 卡片模式下，量到的卡片尺寸。量到之前先用估计值。
   const focalCardRef = useRef<HTMLDivElement>(null);
+  const geofenceHeaderRef = useRef<HTMLDivElement>(null);
   const [focalBox, setFocalBox] = useState({ w: FOCAL_CARD_W, h: 120 });
   const focalBoxRef = useRef(focalBox);
   focalBoxRef.current = focalBox;
@@ -258,6 +270,8 @@ export default function DissectionView({
           id: m.id,
           name: m.name,
           when_to_read: m.when_to_read,
+          role: m.role,
+          is_active: m.is_active,
           isFocal: false,
           isInternal: true,
           x: cx,
@@ -273,6 +287,8 @@ export default function DissectionView({
           id: m.id,
           name: m.name,
           when_to_read: m.when_to_read,
+          role: m.role,
+          is_active: m.is_active,
           isFocal: false,
           isInternal: true,
           x: cx + Math.cos(internalAngle * i - Math.PI / 2) * internalR,
@@ -305,6 +321,8 @@ export default function DissectionView({
           id: n.id,
           name: n.name,
           when_to_read: n.when_to_read,
+          role: n.role,
+          is_active: n.is_active,
           isFocal: false,
           isInternal: false,
           degree: n.degree,
@@ -344,6 +362,8 @@ export default function DissectionView({
           id: t.concept_id,
           name: t.concept_name,
           when_to_read: t.when_to_read ?? null,
+          role: t.role,
+          is_active: t.is_active,
           isFocal: false,
           isInternal: false,
           isAssoc: true,
@@ -423,6 +443,7 @@ export default function DissectionView({
     // 节点 DOM 尺寸在仿真期间不变；测到一次就缓存，避免每个 tick 在
     // O(n^2) 循环里反复读 offsetWidth 触发同步重排（layout thrashing）。
     const dimCache = new Map<number, { w: number; h: number }>();
+    let headerBox: { w: number; h: number; top: number } | null = null;
     const getNodeDimensions = (node: SimNode) => {
       if (node.isFocal) {
         return { w: CONTAINER_RADIUS * 2, h: CONTAINER_RADIUS * 2 };
@@ -555,6 +576,34 @@ export default function DissectionView({
             }
           }
         });
+
+        // 1b. 圆形容器的标题框挂在圆上沿外面，上面的圆形围栏管不到它；外圈卡片碰到它就推开
+        //     标题框尺寸在仿真期间不变，量一次就缓存，免得每个 tick 强制重排
+        if (!headerBox) {
+          const el = geofenceHeaderRef.current;
+          if (el && el.offsetWidth > 0) {
+            headerBox = { w: el.offsetWidth, h: el.offsetHeight, top: el.offsetTop };
+          }
+        }
+        if (headerBox) {
+          const hw = headerBox.w / 2 + 16;
+          const hh = headerBox.h / 2 + 12;
+          const hcx = cx;
+          const hcy = cy - CONTAINER_RADIUS + headerBox.top + headerBox.h / 2;
+          nodes.forEach((node) => {
+            if (node.isFocal || node.isInternal) return;
+            const { w, h } = getNodeDimensions(node);
+            const dx = (node.x ?? hcx) - hcx;
+            const dy = (node.y ?? hcy) - hcy;
+            const overlapX = hw + w / 2 - Math.abs(dx);
+            const overlapY = hh + h / 2 - Math.abs(dy);
+            if (overlapX <= 0 || overlapY <= 0) return;
+            // 标题框下面是圆，往下推会被圆形围栏再推回来，来回打架。
+            // 所以卡片在标题框中线以上、且上下重叠更少时，整张推到框的上面；其余都往旁边推出框外
+            if (dy < 0 && overlapY < overlapX) node.y = hcy - (hh + h / 2);
+            else node.x = hcx + (dx >= 0 ? 1 : -1) * (hw + w / 2);
+          });
+        }
 
         // 2. Resolve rectangular collisions to prevent overlapping
         const boxes = nodes
@@ -833,7 +882,8 @@ export default function DissectionView({
         };
       });
       const margin = 28;
-      const fit = Math.min((width / 2 - margin) / ext.x, (height / 2 - margin) / ext.y);
+      const visibleWidth = Math.max(240, width - rightInsetRef.current);
+      const fit = Math.min((visibleWidth / 2 - margin) / ext.x, (height / 2 - margin) / ext.y);
       setPan({ x: 0, y: 0 });
       // 只缩小不放大；最小 0.8，再小字就读不清了，宁可让最外圈的几张出屏、靠拖动去看
       setZoom(Math.max(0.8, Math.min(1, fit)));
@@ -1013,6 +1063,7 @@ export default function DissectionView({
       className="dissection-container"
       // 点阵底跟着平移/缩放走，画布才像一整张可以推拉的桌面
       style={{
+        // 侧栏开合时的整体左移不带上点阵：点阵均匀，挪不挪看不出，跟着跳反而和滑动的图对不上
         backgroundPosition: `${pan.x + dimensions.width / 2}px ${pan.y + dimensions.height / 2}px`,
         backgroundSize: `${GRID_SIZE * zoom}px ${GRID_SIZE * zoom}px`,
       }}
@@ -1030,7 +1081,7 @@ export default function DissectionView({
       </button>
 
       {simNodes.some((n) => n.isAssoc) && (
-        <div className="reading-flow-hint" aria-hidden="true">
+        <div className="reading-flow-hint" aria-hidden="true" style={{ right: rightInset }}>
           <span>Often read before it</span>
           <svg viewBox="0 0 72 12" width="72" height="12">
             <path d="M2 6h22M19 2.5 24 6l-5 3.5M48 6h22M65 2.5 70 6l-5 3.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
@@ -1040,6 +1091,12 @@ export default function DissectionView({
         </div>
       )}
 
+      {/* 侧栏开着时整张图左移，单独一层做，平移/拖动的 transform 不用带过渡 */}
+      <div
+        className="dissection-shift"
+        // 不挪时写 none，不留一个变换图层（留着文字会按位图渲染、发虚）
+        style={{ transform: viewShift ? `translateX(${Math.round(viewShift * dpr) / dpr}px)` : "none" }}
+      >
       <div
         className="dissection-canvas"
         style={{
@@ -1207,6 +1264,7 @@ export default function DissectionView({
             }}
           >
             <div
+              ref={geofenceHeaderRef}
               className="geofence-header"
               onClick={(e) => {
                 e.stopPropagation();
@@ -1248,7 +1306,7 @@ export default function DissectionView({
             <div
               key={node.id}
               ref={handleNodeRef(node.id)}
-              className={`dissection-node ${node.isInternal ? "internal" : node.isAssoc ? `assoc side-${node.side}` : "neighbor"}`}
+              className={`dissection-node ${node.isInternal ? "internal" : node.isAssoc ? `assoc side-${node.side}` : "neighbor"} ${node.is_active ? "is-lit" : ""}`}
               onClick={(e) => {
                 e.stopPropagation();
               }}
@@ -1259,8 +1317,18 @@ export default function DissectionView({
               {node.when_to_read && (
                 <span className="node-when-to-read">{node.when_to_read}</span>
               )}
+              {node.role && node.role !== "plain" && (
+                <span className="node-circuit-meta">
+                  <span>{ROLE_NAME[node.role]}</span>
+                  <span className={`focal-state ${node.is_active ? "is-lit" : ""}`}>
+                    <span className="focal-lamp" aria-hidden="true" />
+                    {stateLabel(node.role, node.is_active)}
+                  </span>
+                </span>
+              )}
             </div>
           ))}
+      </div>
       </div>
     </div>
   );
@@ -1291,7 +1359,7 @@ function FocalMeta({ focal, memberCount }: { focal: ConceptDetail; memberCount: 
       {isCircuit && (
         <span className={`focal-state ${focal.is_active ? "is-lit" : ""}`}>
           <span className="focal-lamp" aria-hidden="true" />
-          {focal.is_active ? "Lit" : "Off"}
+          {stateLabel(focal.role, focal.is_active)}
         </span>
       )}
       {focal.byte_size !== undefined && focal.byte_size > 0 && (

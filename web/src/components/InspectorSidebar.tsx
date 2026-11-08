@@ -1,8 +1,8 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
-import { formatBytes, OVERSIZE_BYTES, type ConceptDetail } from "../types";
+import { formatBytes, OVERSIZE_BYTES, stateLabel, type ConceptDetail } from "../types";
 import "./InspectorSidebar.css";
 
 interface Props {
@@ -10,6 +10,8 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onNavigate: (id: number) => void;
+  /** 侧栏宽度变了（拖动或首次载入）时告诉外面，解剖视图据此把图挪到侧栏左边的可见区域 */
+  onWidthChange?: (width: number) => void;
 }
 
 // 侧栏宽度可拖：默认 380px，记 localStorage，下次打开还在。
@@ -40,10 +42,13 @@ function loadInspectorWidth(): number {
   return INSPECTOR_DEFAULT_W;
 }
 
-export default function InspectorSidebar({ concept, open, onClose, onNavigate }: Props) {
+export default function InspectorSidebar({ concept, open, onClose, onNavigate, onWidthChange }: Props) {
   const [width, setWidth] = useState(loadInspectorWidth);
   const widthRef = useRef(width);
   const draggingRef = useRef(false);
+  useEffect(() => {
+    onWidthChange?.(width);
+  }, [width, onWidthChange]);
 
   const onDragMove = useCallback((e: MouseEvent) => {
     if (!draggingRef.current) return;
@@ -115,7 +120,7 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
             {isCircuit && (
               <span className={`meta-state ${concept.is_active ? "is-lit" : ""}`}>
                 <span className="meta-lamp" aria-hidden="true" />
-                {concept.is_active ? "Lit" : "Off"}
+                {stateLabel(concept.role, concept.is_active)}
               </span>
             )}
             {concept.lifespan && <span>{LIFESPAN_TEXT[concept.lifespan]}</span>}
@@ -196,7 +201,7 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
                     <div key={m.concept_id} className="member-flow-wrapper">
                       <button
                         type="button"
-                        className="member-flow-card"
+                        className={`member-flow-card ${m.is_active ? "is-lit" : ""}`}
                         title={m.when_to_read || undefined}
                         onClick={() => onNavigate(m.concept_id)}
                       >
@@ -204,6 +209,12 @@ export default function InspectorSidebar({ concept, open, onClose, onNavigate }:
                         <div className="member-info">
                           <span className="member-name">{m.name}</span>
                           {m.when_to_read && <span className="member-when-to-read-hint">{m.when_to_read}</span>}
+                          {m.role !== "plain" && (
+                            <span className={`meta-state ${m.is_active ? "is-lit" : ""}`}>
+                              <span className="meta-lamp" aria-hidden="true" />
+                              {stateLabel(m.role, m.is_active)}
+                            </span>
+                          )}
                         </div>
                       </button>
 

@@ -84,7 +84,7 @@ def get_graph(db: HoronDB = Depends(get_db)):
     """Full graph for Galaxy View.
 
     Returns nodes (concepts) with degree centrality,
-    and links (compose_member and inhibition relationships).
+    and links (circuit relationships and strongest reading paths).
     节点和连线的激活状态按 session_id 这个会话显示。
     """
     concepts = db.get_all_concepts()
@@ -141,7 +141,32 @@ def get_graph(db: HoronDB = Depends(get_db)):
         degree[src] += 1
         degree[tgt] += 1
 
-    # 3. 概念 tags
+    # 3. 每个节点最强的两条阅读路径。全景合并双向边，避免同一对节点重复画线。
+    reading_rows = db.conn.execute(
+        "SELECT from_concept_id, to_concept_id FROM ("
+        "SELECT ct.from_concept_id, ct.to_concept_id, "
+        "ROW_NUMBER() OVER (PARTITION BY ct.from_concept_id "
+        "ORDER BY ct.weight DESC, ct.to_concept_id) AS rank "
+        "FROM concept_transitions ct "
+        "JOIN concepts a ON a.id = ct.from_concept_id "
+        "JOIN concepts b ON b.id = ct.to_concept_id "
+        "WHERE ct.from_concept_id != ct.to_concept_id AND ct.weight > 0"
+        ") WHERE rank <= 2"
+    ).fetchall()
+    connected = {tuple(sorted((link["source"], link["target"]))) for link in links}
+    for row in reading_rows:
+        source, target = row["from_concept_id"], row["to_concept_id"]
+        pair = tuple(sorted((source, target)))
+        if pair in connected:
+            continue
+        connected.add(pair)
+        links.append({
+            "source": source, "target": target, "relation_id": source,
+            "status": None, "kind": "association",
+        })
+        # 阅读路径不算进 degree：degree 决定点的大小，只该反映电路连接
+
+    # 4. 概念 tags
     tag_rows = db.conn.execute(
         "SELECT concept_id, tag FROM concept_tags ORDER BY concept_id, tag"
     ).fetchall()
@@ -239,7 +264,7 @@ def get_neighborhood(concept_id: int, db: HoronDB = Depends(get_db)):
     if neighbor_ids:
         placeholders = ",".join("?" * len(neighbor_ids))
         rows = db.conn.execute(
-            f"SELECT c.id, c.name, c.when_to_read, c.content, "
+            f"SELECT c.id, c.name, c.when_to_read, c.content, c.role, "
             f"       (SELECT COUNT(*) FROM compose_members cm "
             f"        WHERE cm.member_concept_id = c.id) AS degree "
             f"FROM concepts c WHERE c.id IN ({placeholders})",
@@ -253,6 +278,8 @@ def get_neighborhood(concept_id: int, db: HoronDB = Depends(get_db)):
                 "when_to_read": row["when_to_read"],
                 "degree": row["degree"],
                 "byte_size": len(c_str.encode("utf-8")) if c_str else 0,
+                "role": row["role"],
+                "is_active": states[row["id"]],
             })
 
     internal_links = []
@@ -305,8 +332,24 @@ def get_neighborhood(concept_id: int, db: HoronDB = Depends(get_db)):
         ).fetchall()
     ]
 
+    # 联想节点（进边和出边）也带上角色和亮灯状态，和电路邻居卡显示一致
+    focal_dict = focal.model_dump()
+    assoc_items = incoming + focal_dict.get("suggested_next", [])
+    assoc_ids = {t["concept_id"] for t in assoc_items}
+    if assoc_ids:
+        placeholders = ",".join("?" * len(assoc_ids))
+        roles = {
+            r["id"]: r["role"]
+            for r in db.conn.execute(
+                f"SELECT id, role FROM concepts WHERE id IN ({placeholders})", tuple(assoc_ids)
+            ).fetchall()
+        }
+        for t in assoc_items:
+            t["role"] = roles.get(t["concept_id"], "plain")
+            t["is_active"] = states.get(t["concept_id"], 0)
+
     return {
-        "focal": focal.model_dump(),
+        "focal": focal_dict,
         "neighbors": neighbors,
         "internal_links": internal_links,
         "incoming": incoming,

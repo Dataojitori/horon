@@ -32,6 +32,13 @@
   cursor: grabbing;
 }
 
+/* 侧栏开合时整张图跟着左右挪，和侧栏滑入用同一个节奏 */
+.dissection-shift {
+  position: absolute;
+  inset: 0;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+
 .dissection-canvas {
   position: absolute;
   top: 0;
@@ -385,6 +392,15 @@
   border-color: rgb(var(--c-accent) / 0.7);
 }
 
+.node-circuit-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 .dissection-node.internal .node-name {
   font-size: 13px;
   font-weight: 600;
@@ -438,6 +454,13 @@
   color: var(--text-primary);
 }
 
+.dissection-node.is-lit,
+.dissection-node.is-lit:hover {
+  background: color-mix(in srgb, rgb(var(--c-lamp)) 45%, var(--bg-elevated));
+  border-color: rgb(var(--c-lamp));
+  box-shadow: 0 0 0 2px rgb(var(--c-lamp) / 0.22), 0 0 24px rgb(var(--c-lamp) / 0.3);
+}
+
 .assoc-line {
   stroke: var(--text-dim);
   stroke-opacity: 0.55;
@@ -461,6 +484,7 @@
   font-size: 12.5px;
   color: var(--text-dim);
   pointer-events: none;
+  transition: right var(--dur-slow) var(--ease-out);
 }
 
 .reading-flow-hint span {

@@ -96,6 +96,7 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
   const [inspectedConcept, setInspectedConcept] =
     useState<ConceptDetail | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [inspectorWidth, setInspectorWidth] = useState(0);
   const [pendingReviewCount, setPendingReviewCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -325,6 +326,8 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
             onNavigate={handleNodeClick}
             onInspect={handleInspect}
             onBack={handleBackToGalaxy}
+            // 侧栏浮在右边（right: 10px），挡住的宽度再留 10px 缝
+            rightInset={sidebarOpen && inspectedConcept ? inspectorWidth + 20 : 0}
           />
         )}
         {mode === "review" && (
@@ -340,6 +343,7 @@ function Workspace({ initialSessions }: { initialSessions: SessionInfo[] }) {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onNavigate={handleNodeClick}
+        onWidthChange={setInspectorWidth}
       />
     </div>
   );

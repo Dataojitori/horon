@@ -370,6 +370,16 @@
   border-color: rgb(var(--c-accent) / 0.55);
 }
 
+.member-flow-card.is-lit {
+  background: color-mix(in srgb, rgb(var(--c-lamp)) 32%, var(--bg-elevated));
+  border-color: rgb(var(--c-lamp));
+}
+
+.member-flow-card .meta-state {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
 .member-order {
   display: grid;
   place-items: center;
