@@ -5,13 +5,24 @@
 
 **Executable memory for personal AI agents.**
 
-把你的 AI 记忆从单一平台里解绑出来：不管你在网页上用 ChatGPT、Claude，还是在电脑上用 Claude Code、Codex，它们读写的都是同一份属于你的记忆。装在电脑上，还能让 AI 把吃过的亏搭成会自动提醒、自动拦住自己的规则。
+> **让 AI 把吃过的亏，搭成会拦住自己的红石电路。**
+
+<table>
+<tr>
+<td width="50%"><img src="docs/pv/snail/readme/gif1_note.webp" alt="蜗牛写下纸条贴在壳上，一阵风就把纸条吹走了" width="400"></td>
+<td width="50%"><img src="docs/pv/snail/readme/gif2_chain.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="400"></td>
+</tr>
+<tr>
+<td>AI 记下了教训，下次照样犯。</td>
+<td>给 AI 一套红石：让它自己学会拼装记忆、思路和刹车。</td>
+</tr>
+</table>
 
 ## 云端版还是本地版？
 
 Horon 有两种使用方式：
 - **[云端版（AISoulKeeper）](#云端版aisoulkeeper)**：免安装，只管跨软件共享记忆，在网页端或客户端里直接接入。
-- **[本地版（Horon）](#本地版horon)**：安装在你自己的电脑上，除了记忆之外，还能盯住 AI 的每一步操作，提供自动提醒与工具拦截（记忆可存本机，也可连云端）。
+- **[本地版（Horon）](#本地版horon)**：安装在你自己的电脑上，除了记忆之外，还能盯住 AI 的每一步操作，让它把规矩搭成自动提醒与工具拦截电路（记忆可存本机，也可连云端）。
 
 | 你遇到的问题 | [云端版 AISoulKeeper](#云端版aisoulkeeper)<br>（免安装） | [本地版 Horon](#本地版horon)<br>（装电脑上） |
 | :--- | :---: | :---: |
@@ -39,17 +50,6 @@ Horon 有两种使用方式：
 ---
 
 ## 本地版：Horon
-
-<table>
-<tr>
-<td width="50%"><img src="docs/pv/snail/readme/gif1_note.webp" alt="蜗牛写下纸条贴在壳上，一阵风就把纸条吹走了" width="400"></td>
-<td width="50%"><img src="docs/pv/snail/readme/gif2_chain.webp" alt="蜗牛又从叶子上踩空，却触发了自己搭的弹簧、纸杯和纸轨道，一路被送上向日葵看日出" width="400"></td>
-</tr>
-<tr>
-<td>AI 记下了教训，下次照样犯。</td>
-<td>给 AI 一套红石：让它自己把吃过的亏，搭成会拦住自己的电路。</td>
-</tr>
-</table>
 
 网页端 AI 只能读写记忆，没法在你的电脑上盯住 AI 的每一步操作。如果你在电脑上用 **Claude Code**、**Codex**、**Antigravity**、**OpenCode**、**DeepSeek Harness** 干活，装上本地版 Horon，就能让 AI 把规矩接成自动生效的电路。
 
