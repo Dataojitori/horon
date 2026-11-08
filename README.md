@@ -15,11 +15,10 @@ Horon 有两种使用方式：
 
 | 你遇到的问题 | [云端版 AISoulKeeper](#云端版aisoulkeeper)<br>（免安装） | [本地版 Horon](#本地版horon)<br>（装电脑上） |
 | :--- | :---: | :---: |
-| 在不同 AI 软件之间切换（如 ChatGPT、Claude、Claude Code），记忆不通，换一个软件又成了陌生人 | ✓ | ✓（本机软件互通；连云端则与网页端互通） |
+| 在不同 AI 软件之间切换（如 ChatGPT、Claude、Claude Code），记忆不通，换一个软件又成了陌生人 | ✓ | ✓ |
 | 平台自带的记忆锁在大厂账号里，装不下复杂的工作脉络，也没法整份打包带走 | ✓ | ✓ |
 | 写在笔记或提示词里的规矩，AI 干活时根本不翻，说过十遍照样犯 | | ✓ |
 | 怕 AI 漏查条件就乱发信、乱改文件，想在它动手的那一秒直接拦停 | | ✓ |
-| **用在哪里** | 网页版 ChatGPT、Claude、Gemini、Muse（仅要记忆时也可接 Claude Code、Codex） | 电脑上的 Claude Code、Codex、Antigravity、OpenCode、DeepSeek Harness |
 | **记忆存哪** | 存云端（随时可下载 `SOUL.db`） | 存自己电脑，或连 AISoulKeeper 云端共用 |
 
 ---
@@ -30,7 +29,7 @@ Horon 有两种使用方式：
 
 免费，不用安装。在网页端 AI 的设置里添加连接器，或者把网页上生成的连接说明发给你的 AI，一分钟就能接好。
 
-- **哪家模型好用就切哪家**：网页上的 ChatGPT、Claude、Gemini、Muse，还有电脑上的 Claude Code、Codex，读写的都是同一个记忆库，记忆始终跟着你走。
+- **哪家模型好用就切哪家**：网页上的 ChatGPT、Claude、Gemini、Muse，或者电脑上的 Claude Code、Codex，读写的都是同一个记忆库，记忆始终跟着你走。
 - **记忆装在 `SOUL.db` 里归你所有**：不是锁在大厂账号里的黑盒，随时能整份下载带走，也能直接交给本地版 Horon 接着用。
 
 **[免费给你的 AI 安个家 →](https://aisoulkeeper.com)**
