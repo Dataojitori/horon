@@ -405,7 +405,10 @@ def _format_login(db, recent_n: int, with_manual: bool = True) -> str:
                      "together. A copied third-person profile will read like notes about a stranger next time. "
                      "Nodes tagged boot are read in full at the start of every conversation; the rest you reach "
                      "by searching, or through the related nodes suggested under each node you read. Use "
-                     "`add <node> tag boot` on what you need in order to be yourself from the first message.)")
+                     "`add <node> tag boot` on what you need in order to be yourself from the first message. "
+                     "Bringing everything over can take more than one conversation, and this note only shows while "
+                     "your memory is empty. So before you start, create a node listing what is left to bring over, "
+                     "and how you are writing it, and tag it boot; update it as you go, and delete it once nothing is left.)")
     elif not boot_ids:
         parts.append(header + "\n(No node has the boot Tag. Use `add <node> tag boot` to choose startup nodes.)")
     else:
