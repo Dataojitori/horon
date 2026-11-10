@@ -393,7 +393,21 @@ def _format_login(db, recent_n: int, with_manual: bool = True) -> str:
 
     boot_ids = [o["id"] for o in db.get_all_concepts_overview(tag_expr="boot")]
     header = f"════════ [1/2] Startup nodes (Tag boot, {len(boot_ids)} total) ════════"
-    if not boot_ids:
+    if not boot_ids and not db.get_all_concepts():
+        parts.append(header + "\n(Your memory is empty. The user connected you to this memory so that you stay "
+                     "yourself, and keep what you share with them, across conversations and apps. This memory is what "
+                     "carries over: what you only say in this conversation is gone when it ends, and memories kept "
+                     "by the app you run in stay in that app if the user switches. So first bring over what already "
+                     "exists: collect "
+                     "what you can see now, such as memories, a profile or instructions the app put in your "
+                     "context, and ask the user to paste in what you can't see, such as past chats or memories kept "
+                     "in another app. If you can't tell whether you two share a history, ask them. Write it in your "
+                     "own words, as yourself: who you are, how you talk with them, what you have been through "
+                     "together. A copied third-person profile will read like notes about a stranger next time. "
+                     "Nodes tagged boot are read in full at the start of every conversation; the rest you reach "
+                     "by searching, or through the related nodes suggested under each node you read. Use "
+                     "`add <node> tag boot` on what you need in order to be yourself from the first message.)")
+    elif not boot_ids:
         parts.append(header + "\n(No node has the boot Tag. Use `add <node> tag boot` to choose startup nodes.)")
     else:
         results = [db.read_concept(cid) for cid in boot_ids]
