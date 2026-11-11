@@ -2,6 +2,8 @@
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
+[![Agent interface](https://img.shields.io/badge/agent%20interface-CLI%20%2B%20skills-informational)](.agents/skills/horon-cli/SKILL.md)
+[![Cloud](https://img.shields.io/badge/cloud-MCP-8A2BE2)](https://aisoulkeeper.com)
 
 **Executable memory for personal AI agents.**
 
@@ -51,7 +53,7 @@ Horon 有两种使用方式：
 
 ## 本地版：Horon
 
-网页端 AI 只能读写记忆，没法在你的电脑上盯住 AI 的每一步操作。如果你在电脑上用 **Claude Code**、**Codex**、**Antigravity**、**OpenCode**、**DeepSeek Harness** 干活，装上本地版 Horon，就能让 AI 把规矩接成自动生效的电路。
+网页端 AI 只能读写记忆，没法在你的电脑上盯住 AI 的每一步操作。如果你在电脑上用 **Claude Code**、**Codex**、**Antigravity**、**OpenCode**、**DeepSeek Harness** 干活，装上本地版 Horon，就能让 AI 把规矩接成自动生效的电路。AI 在终端里用 Horon 的命令行（CLI）读写记忆、搭电路，怎么用写在安装时附带的说明书里，不用你自己敲命令。
 
 ### 提醒一次，以后每次都管用
 
