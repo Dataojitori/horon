@@ -44,7 +44,10 @@ def _check_content_growth(label: str, old_content: str | None, new_content: str 
         raise ValueError(
             f"Refused: this update would grow the content of {label} from {old_size} B to "
             f"{new_size} B, over the {CONTENT_HARD_LIMIT_BYTES} B limit (UTF-8, non-empty lines). "
-            "Nothing was written. Over the limit, content may only shrink or stay the same size.")
+            "Nothing was written.\n"
+            "Keeping your memory tidy is your own job. Don't drop the new content; tidy this node first, "
+            "then write it: if the node holds two things, split it into two nodes; if it holds one thing, read all of it, "
+            "decide whether to change your view and how you act, then delete what is repeated or no longer useful.")
 
 
 class ConcurrentUpdateError(ValueError):

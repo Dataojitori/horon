@@ -67,11 +67,11 @@ OVERSIZE_BYTES = 8192
 # Like PROMPT, swap these together with the language.
 OVERSIZE_ROW = "[{id}] {name} {size} B（读 {reads} 次）"
 OVERSIZE_TEXT = "[超长节点] {count} 个节点正文满 {limit} B（UTF-8，只算非空行），最大的在前：{rows}\n{advice}"
-OVERSIZE_ADVICE = ("超长：正文满 {limit} B，压到线下才不再报。办法是想清楚这个节点要改变哪个时刻的做法，"
-                   "再去重、删掉不再改变做法的内容、拆开装了两件事的节点；"
-                   "把正文挪进别的节点或档案好让报警消失，不算压下去。")
+OVERSIZE_ADVICE = ("超长：正文满 {limit} B，压到线下才不再报。整理记忆是你自己的事："
+                   "装了两件事就拆成两个节点；只有一件事就读完全部内容，"
+                   "决定要不要改变你的观点和做法，再删掉重复和不再有用的内容。")
 # One line in the read_concept header when the node being read is 超长.
-OVERSIZE_READ_NOTE = "Size: {size} B，超过 {limit} B 的膨胀线。有时间时维护这个节点。"
+OVERSIZE_READ_NOTE = "Size: {size} B，超过 {limit} B 的膨胀线。整理记忆是你自己的事，做完手上的事就整理它。"
 
 
 def load_name_embeddings(db) -> tuple[list[int], list[str], np.ndarray]:
