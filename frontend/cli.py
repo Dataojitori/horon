@@ -26,6 +26,7 @@ from backend import remote_client
 from backend._db_mutations import ConcurrentUpdateError
 from backend.evaluator import parse_on_fire_action
 from backend.harness.core import sync_session
+from backend.hook_hits import hit_summary, never_hit_report
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
     MAX_SPANS,
@@ -947,7 +948,8 @@ def _dispatch(args, db):
             return RawOutput(format_report(audit_concepts(db, args.concept)))
         parts = [db.audit_clusters_report(args.tag),
                  refresh_audit_coverage(db, tag_expr=args.tag),
-                 oversize_warning(db, tag_expr=args.tag)]
+                 oversize_warning(db, tag_expr=args.tag),
+                 None if args.tag else never_hit_report(db.conn)]
         return RawOutput("\n\n".join(filter(None, parts)))
 
     elif args.command == "search_keyword":
@@ -1038,6 +1040,7 @@ def _dispatch(args, db):
                 args_flag = f" --args-pattern {shlex.quote(tg.args_pattern)}" if tg.args_pattern else ""
                 adapter_flag = f" --adapter {tg.adapter}" if tg.adapter else ""
                 hook_lines.append(f"  Tool Guard: {tg.tool}{args_flag}{adapter_flag}")
+                hook_lines.append(f"    {hit_summary(db.conn, r.id, tg.created_at, 'tool_guard')}")
             for sh in r.sensor_hooks:
                 tool_flag = f" --tool {shlex.quote(sh.tool)}" if sh.tool else ""
                 adapter_flag = f" --adapter {sh.adapter}" if sh.adapter else ""
@@ -1047,6 +1050,7 @@ def _dispatch(args, db):
                          f"{shlex.quote(sh.match_pattern)}{adapter_flag}{thr_flag}"]
                 parts += [f"    --jev {shlex.quote(q)}" for q in sh.jev_questions]
                 hook_lines.append(" \\\n".join(parts))
+                hook_lines.append(f"    {hit_summary(db.conn, r.id, sh.created_at, 'sensor_jev' if sh.jev_questions else 'sensor')}")
             if r.on_fire:
                 # 提醒全文按真换行展开（库里存的是 JSON，\n 转义读不了）；改它用 set <节点> on_fire '<JSON>'。
                 for kind, text in _on_fire_actions(r.on_fire):

@@ -7,6 +7,8 @@ Horon 远程执行引擎：把「一条 CLI 命令」安全地跑在指定的库
     result = run_remote_cli(db_path, ["read_concept", "951"])
     result = run_remote_cli(db_path, ["batch"], batch_text="read_concept 951\nrecent 5")
 
+  import_audit_rows  本地 Horon 远程模式随请求送来的审计行（钩子的 Jev 判断与命中，见 backend/hook_hits.py）
+                   写进库，返回写进了几行；先于命令执行调用，命令就能看到它们。
   create_database  在 db_path 建一个空库（建表、迁移记录、系统 Tag）。路径上已有库就抛
                    FileExistsError；父目录不存在会先建。定义在 backend/db.py，这里转出。
   delete_database  删掉 db_path 这个库和 Horon 为它留下的所有文件。
@@ -51,6 +53,7 @@ from typing import Any
 from .llm import CostMeter
 from .db import HoronDB, create_database  # noqa: F401  create_database 是给调用方的建库入口
 from .integrity import backfill_lock_path, check_at_session_start
+from .hook_hits import GUARD_HIT, JEV_CHECK, SENSOR_HIT, SENSOR_MATCH
 from frontend import cli as _cli
 
 logger = logging.getLogger("horon.remote_cli")
@@ -189,6 +192,53 @@ def _validate_batch(parser, batch_text: str) -> None:
         except _Rejected as r:
             raise _Rejected(f"batch_text line {start_line} was refused: {r}") from None
 
+
+
+# ── 本地钩子记的审计行 ──────────────────────────────────────────────────────
+
+# 远程模式下只在本机记、要送上来的审计行：钩子的 Jev 判断和命中，以及只在本机跑的 compile / reset。
+AUDIT_ROW_COMMANDS = frozenset({JEV_CHECK, SENSOR_MATCH, SENSOR_HIT, GUARD_HIT, "compile", "reset"})
+AUDIT_ROW_COLUMNS = ("session_id", "timestamp", "command", "concept_id", "concept_name", "sub_action", "success")
+MAX_AUDIT_ROWS = 5000
+
+
+def _valid_audit_row(row: Any) -> bool:
+    if not isinstance(row, (list, tuple)) or len(row) != len(AUDIT_ROW_COLUMNS):
+        return False
+    session_id, timestamp, command, concept_id, concept_name, sub_action, success = row
+    return (isinstance(session_id, str) and 0 < len(session_id) <= 200
+            and isinstance(timestamp, str) and len(timestamp) == len("2026-11-03T06:55:01+00:00")
+            and command in AUDIT_ROW_COMMANDS
+            and (concept_id is None or (isinstance(concept_id, int) and not isinstance(concept_id, bool)))
+            and (concept_name is None or (isinstance(concept_name, str) and len(concept_name) <= 1000))
+            and (sub_action is None or (isinstance(sub_action, str) and len(sub_action) <= 1000))
+            and success in (0, 1))
+
+
+def import_audit_rows(db_path: str | Path, rows: list) -> int:
+    """把本地 Horon 远程模式送来的审计行写进 db_path 的 cli_audit_log，返回写进了几行。
+
+    每行按 AUDIT_ROW_COLUMNS 的顺序。命令不在 AUDIT_ROW_COMMANDS 里、格式不对的行跳过；
+    和库里已有的行完全相同的也跳过——本地没收到上次的确认时会重送，重送不会多出行来。
+    库不存在时抛 FileNotFoundError。
+    """
+    rows = [list(r) for r in rows[:MAX_AUDIT_ROWS] if _valid_audit_row(r)]
+    if not rows:
+        return 0
+    db = HoronDB(db_path=Path(db_path).resolve(), session_id=REMOTE_SESSION_ID, plugins_enabled=False)
+    try:
+        saved = 0
+        with db.conn:
+            for r in rows:
+                saved += db.conn.execute(
+                    "INSERT INTO cli_audit_log (session_id, timestamp, command, concept_id, concept_name, "
+                    "sub_action, success) SELECT ?, ?, ?, ?, ?, ?, ? WHERE NOT EXISTS ("
+                    "SELECT 1 FROM cli_audit_log WHERE session_id = ? AND timestamp = ? AND command = ? "
+                    "AND concept_id IS ? AND sub_action IS ?)",
+                    (*r, r[0], r[1], r[2], r[3], r[5])).rowcount
+        return saved
+    finally:
+        db.close()
 
 
 def delete_database(db_path: str | Path) -> None:

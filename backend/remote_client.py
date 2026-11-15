@@ -5,7 +5,8 @@ Horon 的远程模式：记忆库在服务器上，本机只放一个给钩子�
     - CLI 命令发给服务器的 POST /v1/cli 执行，一条命令一次请求；
     - 钩子照常在本机跑，读规则库，不走网络；
     - 每条命令的响应带服务器的规则版本，和规则库记的不同就拉一次 GET /v1/rules，写进规则库
-      （backend/rule_sync.py）。
+      （backend/rule_sync.py）；
+    - 钩子记在规则库里的审计行（Jev 判断、命中）跟着每条命令送上去，服务器确认后从规则库删掉。
 
 规则库在 .horon-local/remote/ 下，每个服务器地址和 key 一个文件，旁边的 .version 记着同步到的版本。
 远程模式下 HORON_DB 不读也不写。
@@ -15,8 +16,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 import urllib.error
 import urllib.request
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -102,13 +105,65 @@ def _request(settings: RemoteSettings, path: str, body: dict | None = None) -> d
 
 
 def run_command(settings: RemoteSettings, args: list[str], batch_text: str | None, session_id: str) -> RemoteResponse:
-    """在服务器上执行一条命令。session_id 让审计和共读记录归到本地这个会话。"""
+    """在服务器上执行一条命令。session_id 让审计和共读记录归到本地这个会话。
+
+    钩子在本机规则库里记的审计行（Jev 判断、命中，见 backend/hook_hits.py）随这次请求一起送上去，
+    服务器回了收到几行，就把送出的那些从规则库删掉；没回就留着，下次再送（服务器会跳过重复的）。
+    """
     body: dict[str, Any] = {"args": args, "session_id": session_id, "include_rules_version": True}
     if batch_text is not None:
         body["batch_text"] = batch_text
+    last_id, rows = _pending_audit_rows(settings)
+    if rows:
+        body["audit_rows"] = rows
     data = _request(settings, "/v1/cli", body)
+    if rows and not data.get("ok") and "audit_rows" in str(data.get("error")):
+        # 服务器还不认这个字段（旧版本）：不带审计行重发，行留在规则库里等服务器更新
+        del body["audit_rows"]
+        rows = []
+        data = _request(settings, "/v1/cli", body)
+    if rows and isinstance(data.get("audit_rows_saved"), int):
+        _drop_sent_audit_rows(settings, last_id)
     return RemoteResponse(bool(data.get("ok")), data.get("output") or "", data.get("error") or "",
                           data.get("rules_version"))
+
+
+# 一次请求最多带这么多字节的审计行，给命令本身留出余量（服务器收的请求体上限是 1 MB）
+AUDIT_ROWS_MAX_BYTES = 300_000
+
+
+def _pending_audit_rows(settings: RemoteSettings) -> tuple[int, list[list[Any]]]:
+    """从规则库按先后取还没送出的审计行，取到 AUDIT_ROWS_MAX_BYTES 为止。返回 (取到的最后一行 id, 行)。
+    规则库还没有或读不了就当没有：送不上去不该挡住命令本身。"""
+    path = settings.rules_db
+    if not database_exists(path):
+        return 0, []
+    rows: list[list[Any]] = []
+    last_id, size = 0, 0
+    try:
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)) as conn:
+            for row in conn.execute(
+                    "SELECT id, session_id, timestamp, command, concept_id, concept_name, sub_action, success "
+                    "FROM cli_audit_log ORDER BY id"):
+                values = list(row[1:])
+                size += len(json.dumps(values, ensure_ascii=False).encode("utf-8")) + 1
+                if size > AUDIT_ROWS_MAX_BYTES:
+                    break
+                rows.append(values)
+                last_id = row[0]
+    except sqlite3.Error:
+        return 0, []
+    return last_id, rows
+
+
+def _drop_sent_audit_rows(settings: RemoteSettings, last_id: int) -> None:
+    """服务器确认收到后，删掉规则库里 id 不超过 last_id 的审计行（送出之后钩子新记的 id 更大，不受影响）。"""
+    try:
+        with closing(sqlite3.connect(str(settings.rules_db), timeout=5)) as conn:
+            with conn:
+                conn.execute("DELETE FROM cli_audit_log WHERE id <= ?", (last_id,))
+    except sqlite3.Error:
+        pass  # 删不掉下次重送，服务器会跳过重复的
 
 
 def local_version(settings: RemoteSettings) -> str | None:

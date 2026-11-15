@@ -19,6 +19,7 @@ from backend.llm import DECISIONS_ENDPOINT, JEV_MODEL, openrouter_post
 from backend._db_common import parse_jev_questions
 from backend.evaluator import load_active_states
 from backend.integrity import check_at_session_start
+from backend.hook_hits import GUARD_HIT, JEV_CHECK, SENSOR_HIT, SENSOR_MATCH
 
 HARNESS_PREFIX = "【Horon Harness】"
 
@@ -161,6 +162,8 @@ def sense(
     行为：
       1. 正则初筛：钩子的 tool 规则对工具名做 re.fullmatch（整串匹配、区分大小写，跨宿主写成 Bash|bash），
          match_pattern 对 text 做 re.search（忽略大小写）。写坏的正则跳过这条钩子，由开局完整性检查报告。
+         挂了 Jev 的钩子匹配上时在 cli_audit_log 记一行 sensor_match（之后问不问 Jev 都记）；
+         没挂 Jev 的匹配上就点火，只记 sensor_hit。
       2. 命中且没挂 Jev 题的钩子，直接点火。
       3. 命中且挂了 Jev 题（jev_question 列，可多道，见 parse_jev_questions）、本会话里还没亮的钩子，
          把所有钩子的所有题合成一次请求问 Jev（state 按 JEV_STATE 写成“谁对谁说：「text」”；用户消息和
@@ -205,6 +208,8 @@ def sense(
                "threshold": r["jev_threshold"] if r["jev_threshold"] is not None else 0.5}
               for i, q in enumerate(parse_jev_questions(r["jev_question"]))]
         if qs:
+            db.log_action(command=SENSOR_MATCH, concept_id=r["sensor_concept_id"], concept_name=r["name"],
+                          sub_action=event_type)
             to_ask.append((r, qs))
         else:
             activated.append(r["sensor_concept_id"])
@@ -249,13 +254,17 @@ def sense(
                 for q in qs:
                     p_yes = yes[key(r, q)]
                     # One jev_check row per question; sub_action reads e.g. "q0 jev=0.08".
-                    db.log_action(command="jev_check", concept_id=r["sensor_concept_id"],
+                    db.log_action(command=JEV_CHECK, concept_id=r["sensor_concept_id"],
                                   concept_name=r["name"], sub_action=f"q{q['position']} jev={p_yes:.2f}")
                     if p_yes >= q["threshold"]:
                         hits.append(f"Jev yes {p_yes:.2f} ≥ threshold {q['threshold']}: {q['question']}")
                 if hits:
                     activated.append(r["sensor_concept_id"])
                     jev_hits[r["sensor_concept_id"]] = hits
+
+    names = {r["sensor_concept_id"]: r["name"] for r in rows}
+    for cid in activated:
+        db.log_action(command=SENSOR_HIT, concept_id=cid, concept_name=names.get(cid), sub_action=event_type)
 
     if activated:
         eval_res = db.evaluate(activated_sensors=activated)
@@ -415,7 +424,10 @@ def guard(
                 continue
             return False, broken, fired_msgs
 
-        if states[g["guard_concept_id"]] == 0:
+        blocked = states[g["guard_concept_id"]] == 0
+        db.log_action(command=GUARD_HIT, concept_id=g["guard_concept_id"], concept_name=g["name"],
+                      sub_action="blocked" if blocked else "pass")
+        if blocked:
             try:
                 reason = _deny_reason(db, g["guard_concept_id"], g["name"], states)
             except Exception as e:
