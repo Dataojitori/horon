@@ -73,7 +73,7 @@ CREATE TABLE IF NOT EXISTS tool_guards (
     guard_concept_id  INTEGER NOT NULL UNIQUE REFERENCES concepts(id) ON DELETE CASCADE, -- 1:1 物理锁死
     tool              TEXT    NOT NULL,             -- 工具名，如 "run_command" 或 "replace_file_content"
     adapter           TEXT,                         -- NULL: all hosts; otherwise exact session adapter
-    args_pattern      TEXT,                         -- 参数正则 JSON，如 '{"CommandLine": "^git\\s+push"}'
+    args_pattern      TEXT,                         -- 对序列化后的参数 JSON 做 re.search 的正则，如 '"command":\s*"git\s+push'；参数键名随宿主不同
     created_at        TEXT    NOT NULL
 );
 

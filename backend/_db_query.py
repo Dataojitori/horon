@@ -103,6 +103,7 @@ class QueryMixin:
         self, query: str, tag_expr: str | None = None, limit: int | None = 50,
     ) -> list[ConceptSearchResult]:
         """按 alias、when_to_read 或 content 模糊搜索 concept，可選按 tag 過濾。
+        query 按空格切成几个词，每个词都要在这个 concept 里出现（字段不限）才算命中。
 
         返回 ConceptSearchResult（concept 身份 + 命中字段明細）。
         query 為必需的非空字符串；可選 limit 限制返回数量（默认 50）。
@@ -121,11 +122,16 @@ class QueryMixin:
             tag_join = f"JOIN ({subq}) ct_filter ON c.id = ct_filter.concept_id"
             tag_params = params
 
-        # ── Single-pass SQL UNION ALL search for match attribution ──
-        escaped = (query.replace("\\", "\\\\")
-                   .replace("%", "\\%").replace("_", "\\_"))
-        like = f"%{escaped}%"
+        # 空格隔开的几个词都要在这个节点里出现（名字、别名、书腰、正文哪里都行，不要求同一处）。
+        # SQL 先取出含任一个词的字段，下面再按节点筛掉缺词的。
+        terms = list(dict.fromkeys(query.split()))
+        likes = ["%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+                 for t in terms]
 
+        def any_term(col: str) -> str:
+            return "(" + " OR ".join(f"{col} LIKE ? ESCAPE '\\'" for _ in terms) + ")"
+
+        # ── Single-pass SQL UNION ALL search for match attribution ──
         sql = f"""
         WITH target_concepts AS (
             SELECT DISTINCT c.id, c.name, c.when_to_read, c.content FROM concepts c
@@ -133,36 +139,41 @@ class QueryMixin:
         )
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'name' AS field, NULL AS target_id, tc.name AS text
         FROM target_concepts tc
-        WHERE tc.name LIKE ? ESCAPE '\\'
+        WHERE {any_term("tc.name")}
 
         UNION ALL
 
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'alias' AS field, NULL AS target_id, a.alias AS text
         FROM target_concepts tc
         JOIN aliases a ON tc.id = a.concept_id
-        WHERE a.alias LIKE ? ESCAPE '\\' AND a.alias != tc.name
+        WHERE {any_term("a.alias")} AND a.alias != tc.name
 
         UNION ALL
 
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'when_to_read' AS field, NULL AS target_id, tc.when_to_read AS text
         FROM target_concepts tc
-        WHERE tc.when_to_read LIKE ? ESCAPE '\\' AND tc.when_to_read IS NOT NULL
+        WHERE {any_term("tc.when_to_read")} AND tc.when_to_read IS NOT NULL
 
         UNION ALL
 
         SELECT tc.id AS concept_id, tc.name AS concept_name, 'content' AS field, NULL AS target_id, tc.content AS text
         FROM target_concepts tc
-        WHERE tc.content LIKE ? ESCAPE '\\' AND tc.content IS NOT NULL
+        WHERE {any_term("tc.content")} AND tc.content IS NOT NULL
 
         ORDER BY concept_id
         """
 
-        rows = self.conn.execute(
-            sql, tag_params + [like, like, like, like]).fetchall()
+        rows = self.conn.execute(sql, tag_params + likes * 4).fetchall()
+
+        terms_lower = [t.lower() for t in terms]
+        found: dict[int, str] = {}
+        for r in rows:
+            found[r["concept_id"]] = found.get(r["concept_id"], "") + "\n" + r["text"].lower()
+        rows = [r for r in rows if all(t in found[r["concept_id"]] for t in terms_lower)]
 
         # Rank each concept by its best-matching field, then cut to limit.
         # Lower is better: name/alias equal < starts with < contains
-        # < when_to_read < content. Ties: more total occurrences of the query
+        # < when_to_read < content. Ties: more total occurrences of the terms
         # (case-insensitive, across all matched fields) first, then id.
         q_lower = query.lower()
 
@@ -179,7 +190,7 @@ class QueryMixin:
             cid = r["concept_id"]
             if rank < best.get(cid, 99):
                 best[cid] = rank
-            hits[cid] = hits.get(cid, 0) + r["text"].lower().count(q_lower)
+            hits[cid] = hits.get(cid, 0) + sum(r["text"].lower().count(t) for t in terms_lower)
         order = sorted(best, key=lambda cid: (best[cid], -hits[cid], cid))
         if limit is not None and limit > 0:
             order = order[:limit]
@@ -200,7 +211,9 @@ class QueryMixin:
                     concept_id=cid, concept_name=cname, matches=[]
                 )
 
-            snippet = text if field in ("name", "alias") else self._make_snippet(text, query)
+            # 片段围着这个字段里出现的第一个词截
+            first = next((t for t in terms if t.lower() in text.lower()), query)
+            snippet = text if field in ("name", "alias") else self._make_snippet(text, first)
             results_by_cid[cid].matches.append(
                 SearchMatch(
                     field=field,

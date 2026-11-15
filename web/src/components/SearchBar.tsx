@@ -44,11 +44,20 @@ function focusSnippet(
   totalChars = 50
 ): string {
   const cleaned = cleanSnippet(snippet);
-  const q = query.trim().toLowerCase();
-  if (!q) return cleaned;
+  const terms = searchTerms(query).map((t) => t.toLowerCase());
+  if (!terms.length) return cleaned;
 
+  // 搜索词用空格隔开时各自出现在哪都算命中，片段围着最先出现的那个词截
   const lower = cleaned.toLowerCase();
-  const pos = lower.indexOf(q);
+  let pos = -1;
+  let q = "";
+  for (const t of terms) {
+    const p = lower.indexOf(t);
+    if (p !== -1 && (pos === -1 || p < pos)) {
+      pos = p;
+      q = t;
+    }
+  }
 
   if (pos === -1) {
     return cleaned.length > totalChars
@@ -71,19 +80,28 @@ function focusSnippet(
   return res;
 }
 
+function searchTerms(query: string): string[] {
+  return query.trim().split(/\s+/).filter(Boolean);
+}
+
 function HighlightText({ text, query }: { text: string; query: string }) {
-  if (!query || !query.trim()) {
+  const terms = searchTerms(query);
+  if (!terms.length) {
     return <>{text}</>;
   }
 
-  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const regex = new RegExp(`(${escaped})`, "gi");
+  // 每个搜索词都高亮。长词放前面，免得被它包含的短词先吃掉
+  const escaped = [...terms]
+    .sort((a, b) => b.length - a.length)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
   const parts = text.split(regex);
 
+  // split 带捕获组时，奇数位就是匹配到的词
   return (
     <>
       {parts.map((part, index) =>
-        regex.test(part) ? (
+        index % 2 === 1 ? (
           <mark key={index} className="search-highlight">
             {part}
           </mark>

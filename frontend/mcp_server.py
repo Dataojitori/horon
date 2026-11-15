@@ -63,7 +63,8 @@ def read_concept(concepts: list[str], ctx: Context) -> str:
 
 @mcp.tool()
 def search_keyword(query: str, ctx: Context, tag: str | None = None, limit: int = 50) -> str:
-    """关键词搜索节点名称、别名、书腰与正文。tag 为可选的 Tag 表达式（A & B / A | B）。"""
+    """关键词搜索节点名称、别名、书腰与正文。多个词用空格隔开，节点里每个词都出现（字段不限）才算命中。
+    tag 为可选的 Tag 表达式（A & B / A | B）。"""
     args = ["search_keyword", query, "--limit", str(limit)]
     if tag:
         args += ["--tag", tag]

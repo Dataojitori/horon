@@ -718,7 +718,8 @@ def _build_parser():
 
     # search_keyword
     p = add_command("search_keyword", "Find concepts by keyword in names, aliases, when_to_read and content.")
-    p.add_argument("query", help="Keyword query to search in concepts, aliases, when_to_read, and content")
+    p.add_argument("query", help="Keywords to find in names, aliases, when_to_read and content. Several words "
+                                 "separated by spaces must all appear in the concept, in any of these fields")
     p.add_argument("--tag", default=None,
                    help='Tag filter expression: "A & B" (AND), "A | B" (OR)')
     p.add_argument("--limit", type=int, default=50,

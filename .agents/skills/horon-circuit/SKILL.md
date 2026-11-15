@@ -197,7 +197,7 @@ create_concept <守卫名> --role guard --activation-rule "<前置状态名>" --
 set <守卫名> tool_guard <实际工具名> [--args-pattern "参数匹配正则"] [--adapter claude-code|codex|antigravity|opencode|dsh]
 ```
 
-工具名是正则，整串匹配、区分大小写（同上文 `--tool`）；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。注意跨平台与 JSON 转义：Windows 路径在 JSON 里为双反斜杠 `\\`，正则建议用通用通配（如 `path.*target`）以规避斜杠差异，同时注意各宿主参数名区别（如 `"file_path"` 与 `"filePath"`）。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
+工具名是正则，整串匹配、区分大小写（同上文 `--tool`）；`--args-pattern` 传入正则表达式，底层按 `re.search(..., re.IGNORECASE)` 匹配序列化后的参数 JSON（省略时匹配该工具全部调用）。注意跨平台与 JSON 转义：Windows 路径在 JSON 里为双反斜杠 `\\`，正则建议用通用通配（如 `path.*target`）以规避斜杠差异，同时注意各宿主参数名区别（如 `"file_path"` 与 `"filePath"`）。正则匹配的是整串 JSON，不是命令本身：Claude Code 跑 `git push origin main` 时，被匹配的是 `{"command": "git push origin main", "description": "..."}`。所以 `^git push` 永远匹配不上（这串的开头是 `{`）；只要命令里出现就拦，写 `git push`；要求命令以 git 开头，写 `"command":\s*"git`。前置状态为 0 时，匹配调用被阻止；前置成立且没有活跃抑制时放行。多个前置可按实际关系组合，守卫电位不能手动设置。
 
 工具名和正则按要管的那个宿主自己的叫法写（各宿主的叫法见第 3 节 `--tool` 下的宿主对照表），一条守卫只管一个宿主的工具。`--adapter` 只在该宿主的会话里匹配；不加则所有宿主都匹配，宿主未知的会话（如终端手敲）只匹配不加的。重新绑定时省略 `--adapter` 会恢复为所有宿主。
 
