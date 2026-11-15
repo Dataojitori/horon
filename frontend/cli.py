@@ -26,7 +26,7 @@ from backend import remote_client
 from backend._db_mutations import ConcurrentUpdateError
 from backend.evaluator import parse_on_fire_action
 from backend.harness.core import sync_session
-from backend.hook_hits import hit_summary, never_hit_report
+from backend.hook_hits import hit_summary, quiet_sensor_report
 from backend.models import CompileResult, MutationResult, ReadResult
 from backend.text_patch import (
     MAX_SPANS,
@@ -949,7 +949,7 @@ def _dispatch(args, db):
         parts = [db.audit_clusters_report(args.tag),
                  refresh_audit_coverage(db, tag_expr=args.tag),
                  oversize_warning(db, tag_expr=args.tag),
-                 None if args.tag else never_hit_report(db.conn)]
+                 None if args.tag else quiet_sensor_report(db.conn)]
         return RawOutput("\n\n".join(filter(None, parts)))
 
     elif args.command == "search_keyword":

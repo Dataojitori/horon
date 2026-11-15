@@ -24,7 +24,8 @@ SENSOR_MATCH = "sensor_match"
 SENSOR_HIT = "sensor_hit"
 GUARD_HIT = "guard_hit"
 HIT_WINDOW_DAYS = 7        # read_hook 只数最近这么多天的命中
-NEVER_HIT_AFTER_DAYS = 7   # 规则建了这么久还一次没命中，audit 列出来
+QUIET_DAYS = 30            # 点过火的传感器这么多天没再点，audit 列出来
+NEVER_FIRED_DAYS = 7       # 传感器设下这么多天一次没点过火，audit 列出来
 
 
 def _days_ago(days: int) -> str:
@@ -70,32 +71,44 @@ def hit_summary(conn: sqlite3.Connection, concept_id: int, since: str, kind: str
             f"Jev said yes {count(SENSOR_HIT)}{last(SENSOR_HIT)}")
 
 
-def never_hit_report(conn: sqlite3.Connection) -> str | None:
-    """列出一次都没命中过的 sensor_hook / tool_guard。没有就返回 None。
-    从规则设下、和这个库开始记命中（最早一行命中记录）两者中较晚的那天算起，满 NEVER_HIT_AFTER_DAYS 天才列：
-    刚升级、还没开始记的时候，老规则不会全被当成没命中。
-    传感器只要正则匹配上过就不算没命中：Jev 一直答“不是”是题的问题，不是规则写错。"""
-    hit_commands = (SENSOR_MATCH, SENSOR_HIT, GUARD_HIT)
-    last_hit = dict(conn.execute(
-        "SELECT concept_id, MAX(timestamp) FROM cli_audit_log WHERE command IN (?, ?, ?) GROUP BY concept_id",
-        hit_commands).fetchall())
-    (logging_start,) = conn.execute(
-        "SELECT MIN(timestamp) FROM cli_audit_log WHERE command IN (?, ?, ?)", hit_commands).fetchone()
-    if logging_start is None:
+def quiet_sensor_report(conn: sqlite3.Connection) -> str | None:
+    """列出没在点火的传感器，分两组：以前点过火、最近 QUIET_DAYS 天没点的；设下满 NEVER_FIRED_DAYS 天一次都没点过的。
+    没有就返回 None。
+
+    只看传感器的点火（sensor_hit），不看守卫：守卫管的多是少见的危险操作，长时间不命中是常态。
+    规则重新绑定后只算之后的点火。“一次都没点过”只列满 NEVER_FIRED_DAYS 天的：从规则设下和这个库开始记命中
+    （最早一行 sensor_match / sensor_hit / guard_hit）两者中较晚的那天算起，刚升级还没开始记的时候，
+    老传感器不会全被列出来。
+    """
+    # 一次扫描：每个节点最早的命中（取全库最小值当开始记录的时间）和最后一次点火
+    per_concept = conn.execute(
+        "SELECT concept_id, MIN(timestamp), MAX(CASE WHEN command = ? THEN timestamp END) FROM cli_audit_log "
+        "WHERE command IN (?, ?, ?) GROUP BY concept_id",
+        (SENSOR_HIT, SENSOR_MATCH, SENSOR_HIT, GUARD_HIT)).fetchall()
+    if not per_concept:
         return None
-    cutoff = _days_ago(NEVER_HIT_AFTER_DAYS)
-    rules = conn.execute(
-        "SELECT c.id, c.name, r.kind, r.created_at FROM ("
-        "  SELECT sensor_concept_id AS cid, 'sensor_hook' AS kind, created_at FROM sensor_hooks"
-        "  UNION ALL SELECT guard_concept_id, 'tool_guard', created_at FROM tool_guards"
-        ") r JOIN concepts c ON c.id = r.cid ORDER BY r.created_at").fetchall()
-    rows = [(cid, name, kind, created) for cid, name, kind, created in rules
-            if max(created, logging_start) < cutoff and (last_hit.get(cid) or "") < created]
-    if not rows:
-        return None
-    lines = [f"[Rules that have never hit] {len(rows)} sensor_hook / tool_guard rules have not matched once in "
-             f"the {NEVER_HIT_AFTER_DAYS}+ days since they were set. Either the event has not happened, "
-             "or the rule is written wrong (a tool name in the wrong case, an args_pattern key the host "
-             "does not send, a ^ that anchors at the opening { of the argument JSON). Check each with read_hook."]
-    lines += [f"  [{cid}] {name} ({kind}, set {created[:10]})" for cid, name, kind, created in rows]
-    return "\n".join(lines)
+    logging_start = min(first for _, first, _ in per_concept)
+    last_fired = {cid: last for cid, _, last in per_concept if last}
+    quiet_cutoff, never_cutoff = _days_ago(QUIET_DAYS), _days_ago(NEVER_FIRED_DAYS)
+    sensors = conn.execute(
+        "SELECT c.id, c.name, sh.created_at FROM sensor_hooks sh JOIN concepts c ON c.id = sh.sensor_concept_id "
+        "ORDER BY sh.created_at").fetchall()
+    quiet, never = [], []
+    for cid, name, created in sensors:
+        last = last_fired.get(cid)
+        if last and last >= created:
+            if last < quiet_cutoff:
+                quiet.append(f"  [{cid}] {name} (last fired {last[:10]})")
+        elif max(created, logging_start) < never_cutoff:
+            never.append(f"  [{cid}] {name} (set {created[:10]})")
+    parts = []
+    if quiet:
+        parts.append("\n".join([
+            f"[Sensors quiet for {QUIET_DAYS}+ days] {len(quiet)} sensors fired before but not in the last "
+            f"{QUIET_DAYS} days. The situation may have stopped coming up; if it has not, check the rule "
+            "with read_hook.", *quiet]))
+    if never:
+        parts.append("\n".join([
+            f"[Sensors that have never fired] {len(never)} sensors have never fired. "
+            "Either the situation has not come up, or the rule is written wrong.", *never]))
+    return "\n\n".join(parts) or None
