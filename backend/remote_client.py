@@ -117,11 +117,6 @@ def run_command(settings: RemoteSettings, args: list[str], batch_text: str | Non
     if rows:
         body["audit_rows"] = rows
     data = _request(settings, "/v1/cli", body)
-    if rows and not data.get("ok") and "audit_rows" in str(data.get("error")):
-        # 服务器还不认这个字段（旧版本）：不带审计行重发，行留在规则库里等服务器更新
-        del body["audit_rows"]
-        rows = []
-        data = _request(settings, "/v1/cli", body)
     if rows and isinstance(data.get("audit_rows_saved"), int):
         _drop_sent_audit_rows(settings, last_id)
     return RemoteResponse(bool(data.get("ok")), data.get("output") or "", data.get("error") or "",
