@@ -374,7 +374,8 @@ def _login_manual_parts() -> tuple[str | None, str | None]:
     manual_file = os.environ.get("HORON_MANUAL_FILE", "").strip()
     if manual_file:
         return None, "════════ Manual ════════\n" + Path(manual_file).read_text(encoding="utf-8")
-    manual_note = "The Horon manual (how to read and write memories) is not part of the login output. If you have not read it this session, read it before doing anything else: "
+    manual_note = ("The Horon manual (how to read and write memories) is not part of the login output. If you have not read it this session, read it before doing anything else, "
+                   "all of it: do not cut it short with head, tail or a byte limit. The later sections (when to write, turning repeated mistakes into circuits) are the ones that change how you work: ")
     if _SKILL_PATH.exists():
         return f"{manual_note}{_SKILL_PATH.resolve()} (hosts with the horon-cli skill installed can invoke it directly)", None
     return f"(Horon manual not found: {_SKILL_PATH})", None
