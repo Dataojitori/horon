@@ -3,7 +3,7 @@
 // page's own ui-primitives; nothing is installed for it. Structure follows the official
 // @deepseek-ai/dsh-client-ui-settings-web-search page.
 window.__ModuleLoader__.load({
-  id: 'horon',
+  id: 'horon-harness',
   factory(require) {
     const React = require('react');
     const primitives = require('@deepseek-ai/dsh-client-ui-primitives');
@@ -11,7 +11,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
 
     const NS = 'settings.horon';
-    const ROW_KEY = 'horon#horon'; // <package name>#<row id>
+    const ROW_KEY = 'horon-harness#horon'; // <package name>#<row id>
     const CONFIG_NS = 'horon'; // the plugin's `name`, which names its settings section
 
     const OPENROUTER = { field: 'openrouterKey', refField: 'openrouterKeyEnv', fallback: 'HORON_OPENROUTER_API_KEY' };

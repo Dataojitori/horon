@@ -32,7 +32,7 @@
 //                          only exists when the bundle was installed from a checkout directory.
 //   python (HORON_PYTHON)  the Python that has Horon's requirements. When set, it is used as is.
 //                          When not, the plugin prepares its own under HORON_HOME/runtime with uv
-//                          (see "Managed Python" below), so `dsh plugin add horon` is all it takes.
+//                          (see "Managed Python" below), so `dsh plugin add horon-harness` is all it takes.
 //   hooks  (HORON_HOOKS)   false / off keeps only the tool.
 // Volatile settings (edited on the settings page, no restart): dataDir, startupReminder, subagents
 // and the two credential reference names. They are read with .get() at each spawn.

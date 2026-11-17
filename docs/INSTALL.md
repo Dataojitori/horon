@@ -13,7 +13,7 @@
 
 Horon 作为 dsh 插件发布在 npm 上，插件自己准备 Python 环境。dsh 用户不用下载代码、不用装 Python、不用改配置文件，第 0 节剩下的三个问题也不用问。（用户说他已经下载了 Horon 仓库、想用自己的 Python 的话，按第 1 节末尾的「dsh 用户用自己的仓库」做，不做本节。）
 
-1. 装插件：用你的 `plugin_manager` 工具的 `install_bundle` 安装包名 `horon`，装进你当前所在的 profile。标准模式里有这个工具；你没有它的话（比如在极简模式），请用户在 dsh 的「插件」页点「添加插件」，输入 `horon`，装完点「立即启用」（直接关掉对话框的话插件装上了但是关着的）。不要在终端里跑 `npm`、`pnpm` 或 `dsh plugin`：你的终端被沙箱限制在工作目录里。
+1. 装插件：用你的 `plugin_manager` 工具的 `install_bundle` 安装包名 `horon-harness`，装进你当前所在的 profile。标准模式里有这个工具；你没有它的话（比如在极简模式），请用户在 dsh 的「插件」页点「添加插件」，输入 `horon-harness`，装完点「立即启用」（直接关掉对话框的话插件装上了但是关着的）。不要在终端里跑 `npm`、`pnpm` 或 `dsh plugin`：你的终端被沙箱限制在工作目录里。
 2. 安装报找不到 pnpm 时（用 npm 装的 dsh 命令行版和网页版需要 pnpm，桌面版自带）：请用户在他自己电脑的终端里运行 `npm i -g pnpm`，再重启 dsh，回到这个会话让你重做第 1 步。
 3. 装好后，用一条消息把剩下的事一次交代给用户，因为他重启以后可能不会回到这个会话：
    - 重启 dsh。第一次启动时，插件会在后台下载 uv、Python 3.12 和依赖，放在 `~/.horon/runtime`，需要联网，通常半分钟以内。记忆库默认是 `~/.horon/horon.db`。
@@ -45,7 +45,7 @@ cp .env.example .env    # 有 key 就填进 OPENROUTER_API_KEY
 
 能打印出说明书路径和「启动节点」一段就说明装好了。第一次运行会自动建空库 `horon.db`。
 
-**dsh 用户用自己的仓库**：做完上面的步骤后，请用户在他自己的终端里运行 `dsh plugin --profile <profile> add <HORON_DIR>`（`<profile>` 是他平时用的 profile，一般是 `web`，都在 `~/.dsh/profiles/` 下；已经装过 npm 版 `horon` 的，先在「插件」页卸载它），并把用户级环境变量 `HORON_PYTHON` 设成 `<PYTHON>`，然后重启 dsh。这样插件直接用这份仓库和这个 Python，`git pull` 后重启 dsh 生效。第 2、3 节不用做，验证照「DeepSeek Harness（dsh）」一节第 3 步。
+**dsh 用户用自己的仓库**：做完上面的步骤后，请用户在他自己的终端里运行 `dsh plugin --profile <profile> add <HORON_DIR>`（`<profile>` 是他平时用的 profile，一般是 `web`，都在 `~/.dsh/profiles/` 下；已经装过 npm 版 `horon-harness` 的，先在「插件」页卸载它），并把用户级环境变量 `HORON_PYTHON` 设成 `<PYTHON>`，然后重启 dsh。这样插件直接用这份仓库和这个 Python，`git pull` 后重启 dsh 生效。第 2、3 节不用做，验证照「DeepSeek Harness（dsh）」一节第 3 步。
 
 ## 2. 接上钩子
 

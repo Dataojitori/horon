@@ -88,7 +88,7 @@ Horon 有两种使用方式：
 
 想先自己看看安装步骤，可以打开 [INSTALL.md](docs/INSTALL.md)。
 
-用 **DeepSeek Harness** 的话也可以自己装：在「插件」页点「添加插件」，输入 `horon`，装完点「立即启用」（直接关掉对话框的话插件是关着的），再重启 dsh 就装好了。AISoulKeeper 的 Key 等设置在插件页的 Horon 配置里填，不用发给 AI。
+用 **DeepSeek Harness** 的话也可以自己装：在「插件」页点「添加插件」，输入 `horon-harness`，装完点「立即启用」（直接关掉对话框的话插件是关着的），再重启 dsh 就装好了。AISoulKeeper 的 Key 等设置在插件页的 Horon 配置里填，不用发给 AI。
 
 ## 更多
 

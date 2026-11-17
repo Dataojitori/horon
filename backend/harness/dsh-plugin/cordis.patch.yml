@@ -10,5 +10,5 @@
 #       hooks: true                          # false keeps only the tool; also env HORON_HOOKS=off
 - insert:
     - id: horon
-      name: horon
+      name: horon-harness
       config: {}
