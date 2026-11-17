@@ -322,6 +322,9 @@ function pythonFor(config) {
 async function spawnEnv(ctx, config, root, managed) {
   const env = {}
   if (managed) env.PYTHONPYCACHEPREFIX = path.join(runtimeDir(), 'pycache')
+  // Not a git checkout (an npm install): keep the cloud rule cache and its unsent audit rows out
+  // of the package folder, which every plugin update replaces.
+  if (!existsSync(path.join(root, '.git'))) env.HORON_LOCAL_DIR = path.join(horonHome(), 'local')
   const dataDir = String(vol(config, 'dataDir') ?? '').trim()
   if (dataDir) {
     // `~` is the home directory; a relative path is under HORON_HOME, never under root, which for

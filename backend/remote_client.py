@@ -8,7 +8,7 @@ Horon 的远程模式：记忆库在服务器上，本机只放一个给钩子�
       （backend/rule_sync.py）；
     - 钩子记在规则库里的审计行（Jev 判断、命中）跟着每条命令送上去，服务器确认后从规则库删掉。
 
-规则库在 .horon-local/remote/ 下，每个服务器地址和 key 一个文件，旁边的 .version 记着同步到的版本。
+规则库在 .horon-local/remote/ 下（设了 HORON_LOCAL_DIR 就在它下面的 remote/），每个服务器地址和 key 一个文件，旁边的 .version 记着同步到的版本。
 远程模式下 HORON_DB 不读也不写。
 """
 from __future__ import annotations
@@ -32,7 +32,9 @@ REQUEST_TIMEOUT_SECONDS = 180
 DEFAULT_URL = "https://aisoulkeeper.com"
 # Cloudflare 会挡 urllib 默认的 User-Agent（error 1010）
 _USER_AGENT = "Horon-CLI"
-RULES_DIR = Path(__file__).resolve().parent.parent / ".horon-local" / "remote"
+# HORON_LOCAL_DIR replaces the repository's .horon-local/: the dsh plugin installed from npm sets it,
+# because its package folder is replaced on every update and would take unsent audit rows with it.
+RULES_DIR = Path(os.environ.get("HORON_LOCAL_DIR") or Path(__file__).resolve().parent.parent / ".horon-local") / "remote"
 
 
 class RemoteError(Exception):
