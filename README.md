@@ -1,4 +1,4 @@
-<h1 align="center"><img src="docs/pv/banner/horon-banner.svg" alt="Horon: self-improving harness" width="75%"></h1>
+<h1 align="center"><img src="docs/pv/banner/horon-banner.svg" alt="Horon: self-improving harness" width="100%"></h1>
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
@@ -24,7 +24,7 @@
 
 Horon 有两种使用方式：
 - **[云端版（AISoulKeeper）](#云端版aisoulkeeper)**：免安装，只管跨软件共享记忆，在网页端或客户端里直接接入。
-- **[本地版（Horon）](#本地版horon)**：安装在你自己的电脑上，除了记忆之外，还能盯住 AI 的每一步操作，让它把规矩搭成自动提醒与工具拦截电路（记忆可存本机，也可连云端）。
+- **[本地版（Horon）](#本地版horon)**：装进你的 Claude Code、Codex、Antigravity、OpenCode、DeepSeek Harness 等客户端，除了记忆之外，还能盯住 AI 的每一步操作，让它把规矩搭成自动提醒与工具拦截电路（记忆可存本机，也可连云端）。
 
 | 你遇到的问题 | [云端版 AISoulKeeper](#云端版aisoulkeeper)<br>（免安装） | [本地版 Horon](#本地版horon)<br>（装电脑上） |
 | :--- | :---: | :---: |
@@ -80,11 +80,15 @@ Horon 有两种使用方式：
 
 ### 安装
 
-打开你电脑上的 Claude Code、Codex（或上面列出的其他客户端），直接把下面这句话发给里面的 AI，它会照着说明自己装好（想连 AISoulKeeper 的云端记忆，把你在 AISoulKeeper 的 Key 一并发给它就行）：
+打开你电脑上的 Claude Code、Codex（或上面列出的其他客户端），直接把下面这句话发给里面的 AI，它会照着说明自己装好（想连 AISoulKeeper 的云端记忆，把你在 AISoulKeeper 的 Key 一并发给它就行；DeepSeek Harness 用户的 Key 在插件页填，不用发）：
 
 ```text
-请帮我安装 Horon：阅读 https://github.com/Dataojitori/horon/blob/master/docs/INSTALL.md 并照做。
+请帮我安装 Horon：阅读 https://raw.githubusercontent.com/Dataojitori/horon/master/docs/INSTALL.md 并照做。
 ```
+
+想先自己看看安装步骤，可以打开 [INSTALL.md](docs/INSTALL.md)。
+
+用 **DeepSeek Harness** 的话也可以自己装：在「插件」页点「添加插件」，输入 `horon`，装完点「立即启用」（直接关掉对话框的话插件是关着的），再重启 dsh 就装好了。AISoulKeeper 的 Key 等设置在插件页的 Horon 配置里填，不用发给 AI。
 
 ## 更多
 

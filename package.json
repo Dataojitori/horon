@@ -1,0 +1,82 @@
+{
+  "name": "horon",
+  "version": "0.1.0",
+  "description": "Self-improving harness with memory that automates your job. Nobody has to know you're not at your desk during work hours.",
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "harness",
+    "agent",
+    "ai-agent",
+    "agent-memory",
+    "long-term-memory",
+    "self-improving",
+    "hooks"
+  ],
+  "homepage": "https://github.com/Dataojitori/horon#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dataojitori/horon.git"
+  },
+  "bugs": "https://github.com/Dataojitori/horon/issues",
+  "license": "SEE LICENSE IN LICENSE",
+  "type": "module",
+  "exports": {
+    ".": "./backend/harness/dsh-plugin/index.js",
+    "./client": "./backend/harness/dsh-plugin/client.js",
+    "./locale/*.json": "./backend/harness/dsh-plugin/locale/*.json",
+    "./icon": "./backend/harness/dsh-plugin/icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "backend/harness/dsh-plugin/index.js",
+    "backend/harness/dsh-plugin/client.js",
+    "backend/harness/dsh-plugin/cordis.patch.yml",
+    "backend/harness/dsh-plugin/locale/*.json",
+    "backend/harness/dsh-plugin/icon.svg",
+    "backend/*.py",
+    "!backend/server.py",
+    "!backend/web_api.py",
+    "!backend/remote_cli.py",
+    "backend/schema.sql",
+    "backend/migrations/*.sql",
+    "backend/tag_plugins/__init__.py",
+    "backend/tag_plugins/exit.py",
+    "backend/audit/*.py",
+    "backend/harness/__init__.py",
+    "backend/harness/core.py",
+    "backend/harness/config_templates.py",
+    "backend/harness/adapters/*.py",
+    "frontend/cli.py",
+    "/run_gateway.py",
+    ".agents/skills/horon-cli/",
+    ".agents/skills/horon-circuit/",
+    ".agents/skills/horon-plugin/",
+    "requirements.txt",
+    "requirements.lock.txt",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./backend/harness/dsh-plugin/cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-plugin-manager",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  }
+}

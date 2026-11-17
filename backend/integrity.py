@@ -135,7 +135,9 @@ def check_at_session_start(db, start_repair: bool = True) -> str | None:
     or None when there are none. The embedding repair is not announced; failures land in the repair process's log.
     """
     if start_repair and stale_embeddings(db) and claim_backfill(db.db_path):
-        flags = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0
+        # CREATE_NO_WINDOW alone: the child gets its own hidden console. DETACHED_PROCESS would leave it
+        # with none, and a venv's python.exe is a launcher whose real interpreter then opens a visible one.
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
             subprocess.Popen([sys.executable, "-m", "backend.integrity", "--db", str(db.db_path)],
                              cwd=_PROJECT_ROOT,

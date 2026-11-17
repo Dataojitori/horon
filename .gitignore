@@ -28,3 +28,5 @@ backend/tag_plugins/*
 
 # Machine-local audit ledgers.
 .horon-local/
+
+node_modules/

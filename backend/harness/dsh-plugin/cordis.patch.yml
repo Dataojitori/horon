@@ -1,0 +1,14 @@
+# Horon for DeepSeek Harness: the `horon` tool and the Horon Harness hooks.
+# Mounted at the profile root, so every agent preset inherits the tool.
+#
+# Settings live in your own profile patch, not here. Override this row there,
+# restating every field you keep (a patch replaces the whole `config`):
+#   - id: horon
+#     config:
+#       root: /absolute/path/to/horon        # your Horon checkout; also env HORON_ROOT
+#       python: /absolute/path/to/python     # Python with Horon's requirements; also env HORON_PYTHON
+#       hooks: true                          # false keeps only the tool; also env HORON_HOOKS=off
+- insert:
+    - id: horon
+      name: horon
+      config: {}
