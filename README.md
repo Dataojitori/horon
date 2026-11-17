@@ -4,6 +4,8 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0%20%2B%20attribution-blue)](LICENSE)
 [![Agent interface](https://img.shields.io/badge/agent%20interface-CLI%20%2B%20skills-informational)](.agents/skills/horon-cli/SKILL.md)
 [![Cloud](https://img.shields.io/badge/cloud-MCP-8A2BE2)](https://aisoulkeeper.com)
+[![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Antigravity%20%C2%B7%20OpenCode%20%C2%B7%20dsh-black)](docs/INSTALL.md)
+[![dsh plugin](https://img.shields.io/npm/v/horon-harness?label=dsh%20plugin&logo=npm)](https://www.npmjs.com/package/horon-harness)
 
 **Executable memory for personal AI agents.**
 
